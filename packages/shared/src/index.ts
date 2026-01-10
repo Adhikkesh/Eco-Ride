@@ -1,7 +1,7 @@
 export const RIDE_STATUS = {
-  SEARCHING: "SEARCHING",
+  COMPLETED: "COMPLETED",
   MATCHED: "MATCHED",
-  COMPLETED: "COMPLETED"
+  SEARCHING: "SEARCHING",
 } as const;
 
 export interface User {
