@@ -6,8 +6,7 @@
   "main": "./src/index.ts",
   "name": "@repo/shared",
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch"
+    "build": "tsc"
   },
   "types": "./src/index.ts",
   "version": "0.0.0"
