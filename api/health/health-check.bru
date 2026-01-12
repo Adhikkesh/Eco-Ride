@@ -1,0 +1,20 @@
+meta {
+  name: Health Check
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/v1/health
+  body: none
+  auth: none
+}
+
+docs {
+  ## Health Check Endpoint
+
+  A simple endpoint to verify the server is running and responding.
+
+  ### Response
+  Returns a JSON object with a message confirming the server is healthy.
+}
