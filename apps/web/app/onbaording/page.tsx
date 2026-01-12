@@ -3,6 +3,9 @@ import { useRouter } from "next/navigation";
 import { auth } from "@/lib/firebase";
 import { backendUrl } from "../../config";
 
+// Prevent static generation - this page requires Firebase auth
+export const dynamic = "force-dynamic";
+
 export default function Onboarding() {
   const router = useRouter();
 

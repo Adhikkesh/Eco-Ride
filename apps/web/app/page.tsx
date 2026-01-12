@@ -23,6 +23,9 @@ import {
 import { auth, googleProvider } from "@/lib/firebase";
 import { backendUrl } from "../config";
 
+// Prevent static generation - this page requires Firebase auth
+export const dynamic = "force-dynamic";
+
 export default function Home(): React.ReactNode {
   const router = useRouter();
   const [email, setEmail] = useState("");

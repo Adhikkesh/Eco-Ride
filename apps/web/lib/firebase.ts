@@ -14,10 +14,17 @@ const firebaseConfig = {
   storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
 };
 
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+// Only initialize Firebase on the client side
+const app =
+  typeof window !== "undefined"
+    ? !getApps().length
+      ? initializeApp(firebaseConfig)
+      : getApp()
+    : null;
 
-export const auth = getAuth(app);
-export const db = getFirestore(app);
-export const storage = getStorage(app);
+// These will be null on server-side, but that's fine for "use client" components
+export const auth = app ? getAuth(app) : (null as unknown as ReturnType<typeof getAuth>);
+export const db = app ? getFirestore(app) : (null as unknown as ReturnType<typeof getFirestore>);
+export const storage = app ? getStorage(app) : (null as unknown as ReturnType<typeof getStorage>);
 
 export default app;

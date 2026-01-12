@@ -8,6 +8,9 @@ import { FaCar, FaLeaf, FaMapMarkerAlt, FaSignOutAlt, FaUser } from "react-icons
 import { Button } from "@/components/ui/button";
 import { auth } from "@/lib/firebase";
 
+// Prevent static generation - this page requires Firebase auth
+export const dynamic = "force-dynamic";
+
 export default function Dashboard(): React.ReactNode {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
