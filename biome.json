@@ -9,6 +9,15 @@
     },
     "enabled": true
   },
+  "css": {
+    "linter": {
+      "enabled": false
+    },
+    "parser": {
+      "cssModules": true,
+      "tailwindDirectives": true
+    }
+  },
   "files": {
     "ignoreUnknown": true
   },
