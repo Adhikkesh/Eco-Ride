@@ -16,7 +16,7 @@
   "packageManager": "pnpm@9.0.0",
   "private": true,
   "scripts": {
-    "build": "turbo run build",
+    "build": "biome check . && turbo run build",
     "check": "biome check .",
     "check-types": "turbo run check-types",
     "check:fix": "biome check --write .",
