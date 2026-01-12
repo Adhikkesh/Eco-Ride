@@ -1,0 +1,27 @@
+meta {
+  name: Verify Token
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/v1/auth/verify
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  ## Verify Token Endpoint
+
+  Validates the Firebase ID token and returns user information.
+  Used by the frontend to check if a user has a valid session.
+
+  ### Response
+  Returns a JSON object with:
+  - `valid`: Boolean indicating if the token is valid
+  - `user`: User information if valid
+}
