@@ -8,7 +8,7 @@ import {
   signInWithPopup,
 } from "firebase/auth";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   FaDollarSign,
   FaEnvelope,
@@ -39,9 +39,18 @@ export default function Home(): React.ReactNode {
   const [passwordFocus, setPasswordFocus] = useState(false);
   const [submitHover, setSubmitHover] = useState(false);
 
-  // Check if user is already authenticated on page load
+  // Ref to track if we're in the middle of a signup flow
+  const isSigningUp = useRef(false);
+
+  // Check if user is already authenticated AND exists in backend on page load
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      // Skip auto-redirect if we're in the middle of signing up
+      if (isSigningUp.current) {
+        setIsCheckingAuth(false);
+        return;
+      }
+
       if (user) {
         try {
           const token = await user.getIdToken();
@@ -52,9 +61,15 @@ export default function Home(): React.ReactNode {
             method: "GET",
           });
 
+          // Only redirect to dashboard if user exists in backend (verified)
+          // If response is not ok (e.g., 404 for new users), stay on page
           if (response.ok) {
-            router.push("/dashboard");
-            return;
+            const data = await response.json();
+            // Check if user actually exists in backend database
+            if (data && data.user) {
+              router.push("/dashboard");
+              return;
+            }
           }
         } catch {
           // Token verification failed, user needs to login again
@@ -69,32 +84,26 @@ export default function Home(): React.ReactNode {
   const handleGoogleLogin = async () => {
     setIsLoading(true);
     setError("");
+
+    // Set flag to prevent onAuthStateChanged from redirecting during signup
+    isSigningUp.current = true;
+
     try {
       const result = await signInWithPopup(auth, googleProvider);
       const details = getAdditionalUserInfo(result);
-      if (details?.isNewUser) {
-        router.push("/register");
-      } else {
-        const user = result.user;
-        if (!user) return;
-        const token = await user.getIdToken();
-        const response = await fetch(`${backendUrl}/api/v1/user`, {
-          body: JSON.stringify({
-            name: user.displayName,
-            role: "driver",
-          }),
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          method: "POST",
-        });
+      const user = result.user;
+      if (!user) return;
 
-        if (response.ok) {
-          router.push("/dashboard");
-        }
+      if (details?.isNewUser) {
+        // New user - redirect to onboarding
+        router.push("/onbaording");
+      } else {
+        // Existing user - redirect to dashboard
+        isSigningUp.current = false;
+        router.push("/dashboard");
       }
     } catch (err: unknown) {
+      isSigningUp.current = false;
       setError(err instanceof Error ? err.message : "Google sign-in failed");
     } finally {
       setIsLoading(false);
@@ -107,11 +116,17 @@ export default function Home(): React.ReactNode {
     setError("");
     try {
       if (isSignUp) {
+        // Set flag to prevent onAuthStateChanged from redirecting during signup
+        isSigningUp.current = true;
+
+        // New user signup - redirect to onboarding
         await createUserWithEmailAndPassword(auth, email, password);
+        router.push("/onbaording");
       } else {
+        // Existing user sign in - redirect to dashboard
         await signInWithEmailAndPassword(auth, email, password);
+        router.push("/dashboard");
       }
-      router.push("/dashboard");
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Authentication failed";
       if (message.includes("user-not-found")) {

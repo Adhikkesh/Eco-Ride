@@ -1,13 +1,36 @@
 import type { RequestHandler } from "express";
+import { FieldValue } from "firebase-admin/firestore";
 import status from "http-status";
+import { db } from "../config/firebase.js";
 
 interface CreateUserBody {
   name: string;
+  phone_number: string;
   role: "driver" | "rider";
+  // Driver-specific fields
+  kyc_url?: string;
+  license_url?: string;
+  plate_number?: string;
+  model?: string;
+  is_ev?: boolean;
+  pollution_expiry?: string; // ISO date string
 }
 
-export const CreateUserController: RequestHandler<object, object, CreateUserBody> = (req, res) => {
-  const { name, role } = req.body;
+export const CreateUserController: RequestHandler<object, object, CreateUserBody> = async (
+  req,
+  res,
+) => {
+  const {
+    name,
+    phone_number,
+    role,
+    kyc_url,
+    license_url,
+    plate_number,
+    model,
+    is_ev,
+    pollution_expiry,
+  } = req.body;
   const firebaseUser = req.user;
 
   if (!firebaseUser) {
@@ -16,24 +39,91 @@ export const CreateUserController: RequestHandler<object, object, CreateUserBody
       .json({ message: "Unauthorized: User not authenticated" });
   }
 
-  if (!name || !role) {
+  if (!name || !role || !phone_number) {
     return res
       .status(status.BAD_REQUEST)
-      .json({ message: "Bad Request: name and role are required" });
+      .json({ message: "Bad Request: name, phone_number, and role are required" });
   }
 
-  // TODO: Save user to database
-  // For now, return the user data that would be saved
-  const userData = {
-    createdAt: new Date().toISOString(),
-    email: firebaseUser.email,
-    name,
-    role,
-    uid: firebaseUser.uid,
-  };
+  // Validate driver-specific fields
+  if (role === "driver") {
+    if (!license_url || !plate_number || !model || pollution_expiry === undefined) {
+      return res.status(status.BAD_REQUEST).json({
+        message:
+          "Bad Request: Driver requires license_url, plate_number, model, and pollution_expiry",
+      });
+    }
+  }
 
-  res.status(status.CREATED).json({
-    data: userData,
-    message: "User created successfully",
-  });
+  try {
+    const batch = db.batch();
+    const uid = firebaseUser.uid;
+    const now = FieldValue.serverTimestamp();
+
+    // 1. Create USERS document
+    const userRef = db.collection("users").doc(uid);
+    batch.set(userRef, {
+      created_at: now,
+      fcm_token: null,
+      green_points: 0,
+      name,
+      role,
+      saved_locations: null,
+      trust_score: 0.0,
+      uid,
+    });
+
+    // 2. Create FIREBASE_AUTH document
+    const authRef = db.collection("firebase_auth").doc(uid);
+    batch.set(authRef, {
+      email: firebaseUser.email || null,
+      last_login: now,
+      phone_number,
+      uid,
+    });
+
+    // 3. If driver, create DRIVER_PROFILE and VEHICLE documents
+    if (role === "driver") {
+      // Create DRIVER_PROFILE
+      const driverProfileRef = db.collection("driver_profile").doc(uid);
+      batch.set(driverProfileRef, {
+        current_location: null,
+        driver_uid: uid,
+        is_online: false,
+        kyc_url: kyc_url || null,
+        kyc_verified: false,
+        license_url: license_url || null,
+        wallet_balance: 0.0,
+      });
+
+      // Create VEHICLE
+      const vehicleRef = db.collection("vehicle").doc(plate_number!);
+      batch.set(vehicleRef, {
+        driver_uid: uid,
+        is_ev: is_ev || false,
+        model,
+        plate_number,
+        pollution_expiry: pollution_expiry ? new Date(pollution_expiry) : null,
+      });
+    }
+
+    // Commit all writes as a batch
+    await batch.commit();
+
+    res.status(status.CREATED).json({
+      data: {
+        email: firebaseUser.email,
+        name,
+        role,
+        uid,
+      },
+      message: "User created successfully",
+    });
+  } catch (error) {
+    console.error("Error creating user:", error);
+    res.status(status.INTERNAL_SERVER_ERROR).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+      message: "Failed to create user",
+    });
+  }
 };
