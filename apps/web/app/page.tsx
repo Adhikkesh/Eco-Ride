@@ -66,7 +66,7 @@ export default function Home(): React.ReactNode {
           if (response.ok) {
             const data = await response.json();
             // Check if user actually exists in backend database
-            if (data && data.user) {
+            if (data?.user) {
               router.push("/dashboard");
               return;
             }
