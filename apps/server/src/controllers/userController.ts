@@ -60,29 +60,23 @@ export const CreateUserController: RequestHandler<object, object, CreateUserBody
     const uid = firebaseUser.uid;
     const now = FieldValue.serverTimestamp();
 
-    // 1. Create USERS document
+    // 1. Create USERS document (includes auth info directly)
     const userRef = db.collection("users").doc(uid);
     batch.set(userRef, {
       created_at: now,
+      email: firebaseUser.email || null,
       fcm_token: null,
       green_points: 0,
+      last_login: now,
       name,
+      phone_number,
       role,
       saved_locations: null,
       trust_score: 0.0,
       uid,
     });
 
-    // 2. Create FIREBASE_AUTH document
-    const authRef = db.collection("firebase_auth").doc(uid);
-    batch.set(authRef, {
-      email: firebaseUser.email || null,
-      last_login: now,
-      phone_number,
-      uid,
-    });
-
-    // 3. If driver, create DRIVER_PROFILE and VEHICLE documents
+    // 2. If driver, create DRIVER_PROFILE and VEHICLE documents
     if (role === "driver") {
       // Create DRIVER_PROFILE
       const driverProfileRef = db.collection("driver_profile").doc(uid);
