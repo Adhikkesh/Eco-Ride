@@ -1,4 +1,8 @@
 import express, { type Router } from "express";
+import {
+  GetUnverifiedDriversController,
+  VerifyDriverController,
+} from "../controllers/adminController.js";
 import { VerifyTokenController } from "../controllers/authController.js";
 import { GetMeController, HealthCheckController } from "../controllers/index.js";
 import { CreateUserController } from "../controllers/userController.js";
@@ -10,3 +14,7 @@ router.get("/health", HealthCheckController);
 router.get("/auth/verify", verifyToken, VerifyTokenController);
 router.get("/getme", verifyToken, GetMeController);
 router.post("/user", verifyToken, CreateUserController);
+
+// Admin routes
+router.get("/admin/drivers/unverified", verifyToken, GetUnverifiedDriversController);
+router.post("/admin/drivers/verify", verifyToken, VerifyDriverController);

@@ -776,6 +776,26 @@ export default function Home(): React.ReactNode {
 
               <p
                 style={{
+                  color: "#888",
+                  fontSize: "13px",
+                  marginTop: "12px",
+                  textAlign: "center",
+                }}
+              >
+                <a
+                  href="/Admin/verification"
+                  style={{
+                    color: "#666",
+                    cursor: "pointer",
+                    textDecoration: "underline",
+                  }}
+                >
+                  Login as Admin
+                </a>
+              </p>
+
+              <p
+                style={{
                   color: "#999",
                   fontSize: "12px",
                   lineHeight: "1.6",
