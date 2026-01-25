@@ -136,7 +136,11 @@ const mapContainerStyle = {
 
 const defaultCenter = { lat: 11.0168, lng: 76.9558 };
 
-export default function DriverLiveMap(): React.ReactNode {
+interface DriverLiveMapProps {
+  embedded?: boolean;
+}
+
+export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps): React.ReactNode {
   const { isLoaded } = useJsApiLoader({
     googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
     id: "google-map-script",
@@ -310,30 +314,36 @@ export default function DriverLiveMap(): React.ReactNode {
     );
   }
 
+  const pageStyle = embedded ? { padding: "24px" } : styles.page;
+
   return (
-    <div style={styles.page}>
-      {/* Header */}
-      <header style={{ margin: "0 auto 32px", maxWidth: "1024px" }}>
-        <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
-          <div style={{ alignItems: "center", display: "flex", gap: "16px" }}>
-            <div style={styles.headerIcon}>
-              <FaCar style={{ color: "white", fontSize: "24px" }} />
+    <div style={pageStyle}>
+      {/* Header - only show when not embedded */}
+      {!embedded && (
+        <header style={{ margin: "0 auto 32px", maxWidth: "1024px" }}>
+          <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
+            <div style={{ alignItems: "center", display: "flex", gap: "16px" }}>
+              <div style={styles.headerIcon}>
+                <FaCar style={{ color: "white", fontSize: "24px" }} />
+              </div>
+              <div>
+                <h1 style={{ color: "white", fontSize: "28px", fontWeight: 700, margin: 0 }}>
+                  Driver Dashboard
+                </h1>
+                <p style={{ color: "#94a3b8", fontSize: "14px", margin: 0 }}>
+                  EcoRide Live Tracking
+                </p>
+              </div>
             </div>
-            <div>
-              <h1 style={{ color: "white", fontSize: "28px", fontWeight: 700, margin: 0 }}>
-                Driver Dashboard
-              </h1>
-              <p style={{ color: "#94a3b8", fontSize: "14px", margin: 0 }}>EcoRide Live Tracking</p>
+            <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
+              <FaLeaf style={{ color: "#22c55e" }} />
+              <span style={{ color: "#e2e8f0", fontSize: "14px", fontWeight: 500 }}>
+                Eco Mode Active
+              </span>
             </div>
           </div>
-          <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
-            <FaLeaf style={{ color: "#22c55e" }} />
-            <span style={{ color: "#e2e8f0", fontSize: "14px", fontWeight: 500 }}>
-              Eco Mode Active
-            </span>
-          </div>
-        </div>
-      </header>
+        </header>
+      )}
 
       {/* Main Content */}
       <main style={{ margin: "0 auto", maxWidth: "1024px" }}>

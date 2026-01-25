@@ -1,12 +1,15 @@
 "use client";
 
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { FaCar, FaLeaf, FaMapMarkerAlt, FaSignOutAlt, FaUser } from "react-icons/fa";
+import { FaSignOutAlt, FaUser } from "react-icons/fa";
+import DriverLiveMap from "@/components/maps/DriverLiveMap";
+import RiderMap from "@/components/maps/RiderMap";
 import { Button } from "@/components/ui/button";
-import { auth } from "@/lib/firebase";
+import { auth, db } from "@/lib/firebase";
 
 // Prevent static generation - this page requires Firebase auth
 export const dynamic = "force-dynamic";
@@ -15,14 +18,36 @@ export default function Dashboard(): React.ReactNode {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [userRole, setUserRole] = useState<"rider" | "driver" | null>(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (!currentUser) {
         router.push("/");
-      } else {
-        setUser(currentUser);
+        return;
       }
+
+      setUser(currentUser);
+
+      // Fetch user role from Firestore
+      try {
+        if (db) {
+          const userDoc = await getDoc(doc(db, "users", currentUser.uid));
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            setUserRole(userData?.role || "rider");
+          } else {
+            // User not in Firestore, redirect to onboarding
+            router.push("/onboarding");
+            return;
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching user role:", error);
+        // Default to rider on error
+        setUserRole("rider");
+      }
+
       setLoading(false);
     });
 
@@ -65,7 +90,7 @@ export default function Dashboard(): React.ReactNode {
       <div
         style={{
           alignItems: "center",
-          background: "linear-gradient(135deg, #c8e6c9 0%, #a5d6a7 100%)",
+          background: "linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)",
           display: "flex",
           justifyContent: "center",
           minHeight: "100vh",
@@ -73,14 +98,30 @@ export default function Dashboard(): React.ReactNode {
       >
         <div
           style={{
-            background: "white",
-            borderRadius: "16px",
-            boxShadow: "0 4px 20px rgba(0,0,0,0.1)",
-            padding: "40px",
+            alignItems: "center",
+            color: "white",
+            display: "flex",
+            flexDirection: "column",
+            gap: "16px",
           }}
         >
-          <p style={{ color: "#666", fontSize: "18px" }}>Loading...</p>
+          <div
+            style={{
+              animation: "spin 1s linear infinite",
+              border: "3px solid rgba(34, 197, 94, 0.3)",
+              borderRadius: "50%",
+              borderTopColor: "#22c55e",
+              height: "48px",
+              width: "48px",
+            }}
+          />
+          <p style={{ color: "#94a3b8", fontSize: "16px" }}>Loading your dashboard...</p>
         </div>
+        <style>{`
+          @keyframes spin {
+            to { transform: rotate(360deg); }
+          }
+        `}</style>
       </div>
     );
   }
@@ -88,16 +129,21 @@ export default function Dashboard(): React.ReactNode {
   return (
     <div
       style={{
-        background: "linear-gradient(135deg, #c8e6c9 0%, #a5d6a7 100%)",
+        background: "linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)",
         minHeight: "100vh",
       }}
     >
-      {/* Header */}
+      {/* Header/Navbar */}
       <header
         style={{
-          background: "white",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
-          padding: "16px 32px",
+          backdropFilter: "blur(12px)",
+          background: "rgba(30, 41, 59, 0.95)",
+          borderBottom: "1px solid rgba(71, 85, 105, 0.5)",
+          boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
+          padding: "12px 24px",
+          position: "sticky",
+          top: 0,
+          zIndex: 100,
         }}
       >
         <div
@@ -109,33 +155,72 @@ export default function Dashboard(): React.ReactNode {
             maxWidth: "1400px",
           }}
         >
+          {/* Logo */}
           <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
             <div
               style={{
                 alignItems: "center",
-                background: "#2e7d32",
-                borderRadius: "50%",
+                background: "linear-gradient(135deg, #22c55e, #10b981)",
+                borderRadius: "12px",
+                boxShadow: "0 4px 12px rgba(34, 197, 94, 0.3)",
                 display: "flex",
-                fontSize: "24px",
-                height: "48px",
+                fontSize: "20px",
+                height: "44px",
                 justifyContent: "center",
-                width: "48px",
+                width: "44px",
               }}
             >
               🚗
             </div>
-            <span style={{ color: "#333", fontSize: "24px", fontWeight: "bold" }}>EcoRide</span>
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              <span style={{ color: "white", fontSize: "20px", fontWeight: "bold" }}>EcoRide</span>
+              <span style={{ color: "#94a3b8", fontSize: "12px" }}>
+                {userRole === "driver" ? "Driver Dashboard" : "Rider Dashboard"}
+              </span>
+            </div>
           </div>
 
-          <div style={{ alignItems: "center", display: "flex", gap: "20px" }}>
-            <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
+          {/* User Info & Logout */}
+          <div style={{ alignItems: "center", display: "flex", gap: "16px" }}>
+            {/* Role Badge */}
+            <div
+              style={{
+                background:
+                  userRole === "driver" ? "rgba(34, 197, 94, 0.2)" : "rgba(59, 130, 246, 0.2)",
+                border:
+                  userRole === "driver"
+                    ? "1px solid rgba(34, 197, 94, 0.3)"
+                    : "1px solid rgba(59, 130, 246, 0.3)",
+                borderRadius: "20px",
+                color: userRole === "driver" ? "#4ade80" : "#60a5fa",
+                fontSize: "13px",
+                fontWeight: "600",
+                padding: "6px 14px",
+                textTransform: "capitalize",
+              }}
+            >
+              {userRole === "driver" ? "🚗 Driver" : "🚶 Rider"}
+            </div>
+
+            {/* Profile */}
+            <div
+              style={{
+                alignItems: "center",
+                background: "rgba(15, 23, 42, 0.5)",
+                borderRadius: "12px",
+                display: "flex",
+                gap: "12px",
+                padding: "8px 16px",
+              }}
+            >
               {user?.photoURL ? (
                 <Image
                   src={user.photoURL}
                   alt="Profile"
-                  width={40}
-                  height={40}
+                  width={36}
+                  height={36}
                   style={{
+                    border: "2px solid #22c55e",
                     borderRadius: "50%",
                     objectFit: "cover",
                   }}
@@ -144,31 +229,48 @@ export default function Dashboard(): React.ReactNode {
                 <div
                   style={{
                     alignItems: "center",
-                    background: "#4caf50",
+                    background: "linear-gradient(135deg, #22c55e, #10b981)",
                     borderRadius: "50%",
                     color: "white",
                     display: "flex",
-                    height: "40px",
+                    height: "36px",
                     justifyContent: "center",
-                    width: "40px",
+                    width: "36px",
                   }}
                 >
-                  <FaUser />
+                  <FaUser style={{ fontSize: "14px" }} />
                 </div>
               )}
-              <span style={{ color: "#333", fontWeight: "500" }}>
-                {user?.displayName || user?.email?.split("@")[0] || "User"}
-              </span>
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                <span style={{ color: "white", fontSize: "14px", fontWeight: "500" }}>
+                  {user?.displayName || user?.email?.split("@")[0] || "User"}
+                </span>
+                <span style={{ color: "#94a3b8", fontSize: "11px" }}>{user?.email}</span>
+              </div>
             </div>
+
+            {/* Logout Button */}
             <Button
               onClick={handleLogout}
               variant="outline"
               style={{
                 alignItems: "center",
+                background: "transparent",
+                border: "1px solid rgba(239, 68, 68, 0.3)",
                 borderRadius: "10px",
+                color: "#f87171",
                 display: "flex",
                 gap: "8px",
-                padding: "10px 20px",
+                padding: "10px 16px",
+                transition: "all 0.2s ease",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(239, 68, 68, 0.1)";
+                e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.5)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.3)";
               }}
             >
               <FaSignOutAlt />
@@ -178,210 +280,9 @@ export default function Dashboard(): React.ReactNode {
         </div>
       </header>
 
-      {/* Main Content */}
-      <main
-        style={{
-          margin: "0 auto",
-          maxWidth: "1400px",
-          padding: "40px 32px",
-        }}
-      >
-        <h1
-          style={{
-            color: "#2d2d2d",
-            fontSize: "36px",
-            fontWeight: "bold",
-            marginBottom: "8px",
-          }}
-        >
-          Welcome back, {user?.displayName?.split(" ")[0] || "Rider"}! 👋
-        </h1>
-        <p style={{ color: "#666", fontSize: "18px", marginBottom: "40px" }}>
-          Ready for your next green journey?
-        </p>
-
-        {/* Quick Actions */}
-        <div
-          style={{
-            display: "grid",
-            gap: "24px",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            marginBottom: "40px",
-          }}
-        >
-          <div
-            style={{
-              background: "white",
-              borderRadius: "20px",
-              boxShadow: "0 4px 20px rgba(0,0,0,0.08)",
-              cursor: "pointer",
-              padding: "32px",
-              transition: "transform 0.2s, box-shadow 0.2s",
-            }}
-          >
-            <div
-              style={{
-                alignItems: "center",
-                background: "#e8f5e9",
-                borderRadius: "16px",
-                display: "flex",
-                height: "60px",
-                justifyContent: "center",
-                marginBottom: "20px",
-                width: "60px",
-              }}
-            >
-              <FaCar style={{ color: "#4caf50", fontSize: "28px" }} />
-            </div>
-            <h3 style={{ color: "#333", fontSize: "20px", fontWeight: "600", marginBottom: "8px" }}>
-              Find a Ride
-            </h3>
-            <p style={{ color: "#777", fontSize: "15px" }}>
-              Search for available carpools near you
-            </p>
-          </div>
-
-          <div
-            style={{
-              background: "white",
-              borderRadius: "20px",
-              boxShadow: "0 4px 20px rgba(0,0,0,0.08)",
-              cursor: "pointer",
-              padding: "32px",
-              transition: "transform 0.2s, box-shadow 0.2s",
-            }}
-          >
-            <div
-              style={{
-                alignItems: "center",
-                background: "#e8f5e9",
-                borderRadius: "16px",
-                display: "flex",
-                height: "60px",
-                justifyContent: "center",
-                marginBottom: "20px",
-                width: "60px",
-              }}
-            >
-              <FaMapMarkerAlt style={{ color: "#4caf50", fontSize: "28px" }} />
-            </div>
-            <h3 style={{ color: "#333", fontSize: "20px", fontWeight: "600", marginBottom: "8px" }}>
-              Offer a Ride
-            </h3>
-            <p style={{ color: "#777", fontSize: "15px" }}>Share your ride and earn rewards</p>
-          </div>
-
-          <div
-            style={{
-              background: "white",
-              borderRadius: "20px",
-              boxShadow: "0 4px 20px rgba(0,0,0,0.08)",
-              cursor: "pointer",
-              padding: "32px",
-              transition: "transform 0.2s, box-shadow 0.2s",
-            }}
-          >
-            <div
-              style={{
-                alignItems: "center",
-                background: "#e8f5e9",
-                borderRadius: "16px",
-                display: "flex",
-                height: "60px",
-                justifyContent: "center",
-                marginBottom: "20px",
-                width: "60px",
-              }}
-            >
-              <FaLeaf style={{ color: "#4caf50", fontSize: "28px" }} />
-            </div>
-            <h3 style={{ color: "#333", fontSize: "20px", fontWeight: "600", marginBottom: "8px" }}>
-              Green Rewards
-            </h3>
-            <p style={{ color: "#777", fontSize: "15px" }}>Check your eco-points and redeem</p>
-          </div>
-        </div>
-
-        {/* Stats Cards */}
-        <div
-          style={{
-            background: "white",
-            borderRadius: "20px",
-            boxShadow: "0 4px 20px rgba(0,0,0,0.08)",
-            padding: "32px",
-          }}
-        >
-          <h2
-            style={{
-              color: "#333",
-              fontSize: "24px",
-              fontWeight: "600",
-              marginBottom: "24px",
-            }}
-          >
-            Your Impact 🌍
-          </h2>
-          <div
-            style={{
-              display: "grid",
-              gap: "24px",
-              gridTemplateColumns: "repeat(4, 1fr)",
-            }}
-          >
-            <div style={{ textAlign: "center" }}>
-              <p
-                style={{
-                  color: "#4caf50",
-                  fontSize: "36px",
-                  fontWeight: "bold",
-                  marginBottom: "8px",
-                }}
-              >
-                0
-              </p>
-              <p style={{ color: "#777", fontSize: "14px" }}>Rides Taken</p>
-            </div>
-            <div style={{ textAlign: "center" }}>
-              <p
-                style={{
-                  color: "#4caf50",
-                  fontSize: "36px",
-                  fontWeight: "bold",
-                  marginBottom: "8px",
-                }}
-              >
-                0 kg
-              </p>
-              <p style={{ color: "#777", fontSize: "14px" }}>CO₂ Saved</p>
-            </div>
-            <div style={{ textAlign: "center" }}>
-              <p
-                style={{
-                  color: "#4caf50",
-                  fontSize: "36px",
-                  fontWeight: "bold",
-                  marginBottom: "8px",
-                }}
-              >
-                0
-              </p>
-              <p style={{ color: "#777", fontSize: "14px" }}>Green Points</p>
-            </div>
-            <div style={{ textAlign: "center" }}>
-              <p
-                style={{
-                  color: "#4caf50",
-                  fontSize: "36px",
-                  fontWeight: "bold",
-                  marginBottom: "8px",
-                }}
-              >
-                $0
-              </p>
-              <p style={{ color: "#777", fontSize: "14px" }}>Money Saved</p>
-            </div>
-          </div>
-        </div>
+      {/* Main Content - Render based on role */}
+      <main style={{ paddingTop: "0" }}>
+        {userRole === "driver" ? <DriverLiveMap embedded /> : <RiderMap embedded />}
       </main>
     </div>
   );

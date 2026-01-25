@@ -1,10 +1,20 @@
 "use client";
 
-import { GoogleMap, Marker, useJsApiLoader } from "@react-google-maps/api";
+import { Autocomplete, GoogleMap, Marker, useJsApiLoader } from "@react-google-maps/api";
 import { onValue, ref } from "firebase/database";
+import { doc, getDoc } from "firebase/firestore";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FaCar, FaLeaf, FaMapMarkerAlt, FaSync, FaUsers } from "react-icons/fa";
-import { rtdb } from "@/lib/firebase";
+import {
+  FaCar,
+  FaGift,
+  FaLeaf,
+  FaMapMarkerAlt,
+  FaRoute,
+  FaSearch,
+  FaSync,
+  FaUsers,
+} from "react-icons/fa";
+import { auth, db, rtdb } from "@/lib/firebase";
 import { darkMapStyles } from "@/lib/mapStyles";
 
 // ---------------------------------------------------------
@@ -25,68 +35,80 @@ interface DriverMarker extends DriverLocation {
   animatedLng?: number;
 }
 
+interface UserStats {
+  ridesTaken: number;
+  co2Saved: number;
+  greenPoints: number;
+  moneySaved: number;
+}
+
+interface UserData {
+  rides_taken?: number;
+  co2_saved?: number;
+  green_points?: number;
+  money_saved?: number;
+}
+
+type Libraries = "places"[];
+const libraries: Libraries = ["places"];
+
 // ---------------------------------------------------------
 // Styles
 // ---------------------------------------------------------
 const styles = {
-  availableCard: {
-    background: "rgba(34, 197, 94, 0.1)",
-    border: "1px solid rgba(34, 197, 94, 0.2)",
-    borderRadius: "12px",
-    padding: "12px",
-    textAlign: "center",
+  actionButton: {
+    alignItems: "center",
+    background: "linear-gradient(135deg, #22c55e, #10b981)",
+    border: "none",
+    borderRadius: "16px",
+    boxShadow: "0 8px 24px rgba(34, 197, 94, 0.3)",
+    color: "white",
+    cursor: "pointer",
+    display: "flex",
+    fontSize: "16px",
+    fontWeight: 600,
+    gap: "12px",
+    justifyContent: "center",
+    padding: "16px 24px",
+    transition: "all 0.3s ease",
+    width: "100%",
   } as React.CSSProperties,
-  busyCard: {
-    background: "rgba(234, 179, 8, 0.1)",
-    border: "1px solid rgba(234, 179, 8, 0.2)",
-    borderRadius: "12px",
-    padding: "12px",
-    textAlign: "center",
+  actionCard: {
+    background: "rgba(30, 41, 59, 0.9)",
+    border: "1px solid rgba(71, 85, 105, 0.5)",
+    borderRadius: "20px",
+    boxShadow: "0 4px 16px rgba(0, 0, 0, 0.2)",
+    cursor: "pointer",
+    padding: "20px",
+    transition: "all 0.3s ease",
   } as React.CSSProperties,
   card: {
     backdropFilter: "blur(12px)",
-    background: "rgba(30, 41, 59, 0.8)",
+    background: "rgba(30, 41, 59, 0.9)",
     border: "1px solid rgba(71, 85, 105, 0.5)",
     borderRadius: "24px",
     boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
     padding: "24px",
   } as React.CSSProperties,
-  driverItem: {
-    alignItems: "center",
-    background: "rgba(15, 23, 42, 0.5)",
-    borderRadius: "12px",
-    display: "flex",
-    gap: "12px",
-    padding: "12px",
-  } as React.CSSProperties,
   headerIcon: {
     alignItems: "center",
-    background: "linear-gradient(135deg, #3b82f6, #6366f1)",
+    background: "linear-gradient(135deg, #22c55e, #10b981)",
     borderRadius: "16px",
-    boxShadow: "0 10px 25px -5px rgba(59, 130, 246, 0.3)",
+    boxShadow: "0 10px 25px -5px rgba(34, 197, 94, 0.3)",
     display: "flex",
     height: "56px",
     justifyContent: "center",
     width: "56px",
   } as React.CSSProperties,
-  legendIcon: (color: string) =>
-    ({
-      alignItems: "center",
-      background: `${color}20`,
-      borderRadius: "8px",
-      display: "flex",
-      height: "32px",
-      justifyContent: "center",
-      width: "32px",
-    }) as React.CSSProperties,
-  legendItem: {
-    alignItems: "center",
-    display: "flex",
-    gap: "12px",
+  impactCard: {
+    background: "rgba(15, 23, 42, 0.6)",
+    borderRadius: "16px",
+    padding: "16px",
+    textAlign: "center",
   } as React.CSSProperties,
   mapCard: {
     backdropFilter: "blur(12px)",
-    background: "rgba(30, 41, 59, 0.8)",
+    background: "rgba(30, 41, 59, 0.9)",
     border: "1px solid rgba(71, 85, 105, 0.5)",
     borderRadius: "24px",
     boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
@@ -97,20 +119,17 @@ const styles = {
     minHeight: "100vh",
     padding: "24px",
   } as React.CSSProperties,
-  statCard: {
-    background: "rgba(15, 23, 42, 0.5)",
-    borderRadius: "16px",
-    padding: "16px",
-    textAlign: "center",
+  searchInput: {
+    background: "rgba(15, 23, 42, 0.8)",
+    border: "2px solid rgba(34, 197, 94, 0.3)",
+    borderRadius: "12px",
+    color: "white",
+    fontSize: "15px",
+    outline: "none",
+    padding: "14px 16px 14px 48px",
+    transition: "all 0.2s ease",
+    width: "100%",
   } as React.CSSProperties,
-  statusBadge: (status: "AVAILABLE" | "BUSY") =>
-    ({
-      background: status === "AVAILABLE" ? "rgba(34, 197, 94, 0.2)" : "rgba(234, 179, 8, 0.2)",
-      borderRadius: "8px",
-      color: status === "AVAILABLE" ? "#4ade80" : "#facc15",
-      fontSize: "12px",
-      padding: "4px 8px",
-    }) as React.CSSProperties,
   statusDot: (connected: boolean) =>
     ({
       animation: connected ? "pulse 2s infinite" : "none",
@@ -135,19 +154,100 @@ const defaultCenter = {
 // ---------------------------------------------------------
 // Component
 // ---------------------------------------------------------
-export default function RiderMap(): React.ReactNode {
+interface RiderMapProps {
+  embedded?: boolean;
+}
+
+export default function RiderMap({ embedded = false }: RiderMapProps): React.ReactNode {
   const { isLoaded } = useJsApiLoader({
     googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
     id: "google-map-script",
+    libraries,
   });
 
   const [drivers, setDrivers] = useState<Map<string, DriverMarker>>(new Map());
   const [isConnected, setIsConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [searchDestination, setSearchDestination] = useState("");
+  const [selectedDestination, setSelectedDestination] = useState<{
+    lat: number;
+    lng: number;
+    name: string;
+  } | null>(null);
+  const [userStats, setUserStats] = useState<UserStats>({
+    co2Saved: 0,
+    greenPoints: 0,
+    moneySaved: 0,
+    ridesTaken: 0,
+  });
 
   const mapRef = useRef<google.maps.Map | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
 
+  // Get current location
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setCurrentLocation({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+          });
+        },
+        (error) => {
+          console.error("Error getting location:", error);
+        },
+        { enableHighAccuracy: true },
+      );
+
+      // Watch for location changes
+      const watchId = navigator.geolocation.watchPosition(
+        (position) => {
+          setCurrentLocation({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+          });
+        },
+        (error) => {
+          console.error("Error watching location:", error);
+        },
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 },
+      );
+
+      return () => {
+        navigator.geolocation.clearWatch(watchId);
+      };
+    }
+  }, []);
+
+  // Fetch user stats from Firestore
+  useEffect(() => {
+    const fetchUserStats = async () => {
+      const user = auth.currentUser;
+      if (user && db) {
+        try {
+          const userDoc = await getDoc(doc(db, "users", user.uid));
+          if (userDoc.exists()) {
+            const data = userDoc.data() as UserData;
+            setUserStats({
+              co2Saved: data.co2_saved || 0,
+              greenPoints: data.green_points || 0,
+              moneySaved: data.money_saved || 0,
+              ridesTaken: data.rides_taken || 0,
+            });
+          }
+        } catch (error) {
+          console.error("Error fetching user stats:", error);
+        }
+      }
+    };
+
+    fetchUserStats();
+  }, []);
+
+  // Listen to online drivers
   useEffect(() => {
     if (!rtdb) return;
 
@@ -195,6 +295,7 @@ export default function RiderMap(): React.ReactNode {
     };
   }, []);
 
+  // Animate driver markers
   useEffect(() => {
     const animate = () => {
       setDrivers((prevDrivers) => {
@@ -243,6 +344,41 @@ export default function RiderMap(): React.ReactNode {
     mapRef.current = null;
   }, []);
 
+  const onAutocompleteLoad = useCallback((autocomplete: google.maps.places.Autocomplete) => {
+    autocompleteRef.current = autocomplete;
+  }, []);
+
+  const onPlaceChanged = useCallback(() => {
+    if (autocompleteRef.current) {
+      const place = autocompleteRef.current.getPlace();
+      if (place.geometry?.location) {
+        const location = {
+          lat: place.geometry.location.lat(),
+          lng: place.geometry.location.lng(),
+          name: place.name || place.formatted_address || "Selected Location",
+        };
+        setSelectedDestination(location);
+        setSearchDestination(location.name);
+
+        // Pan map to selected location
+        if (mapRef.current) {
+          mapRef.current.panTo({ lat: location.lat, lng: location.lng });
+          mapRef.current.setZoom(15);
+        }
+      }
+    }
+  }, []);
+
+  const handleFindRide = () => {
+    // TODO: Implement ride finding logic
+    alert("Finding rides near you...");
+  };
+
+  const handleViewRewards = () => {
+    // TODO: Navigate to rewards page
+    alert("Viewing your green rewards...");
+  };
+
   if (!isLoaded) {
     return (
       <div
@@ -260,7 +396,7 @@ export default function RiderMap(): React.ReactNode {
           <div
             style={{
               animation: "spin 1s linear infinite",
-              border: "2px solid #3b82f6",
+              border: "2px solid #22c55e",
               borderRadius: "50%",
               borderTopColor: "transparent",
               height: "24px",
@@ -277,193 +413,380 @@ export default function RiderMap(): React.ReactNode {
   const availableCount = driverArray.filter((d) => d.status === "AVAILABLE").length;
   const busyCount = driverArray.filter((d) => d.status === "BUSY").length;
 
+  const pageStyle = embedded ? { padding: "24px" } : styles.page;
+
   return (
-    <div style={styles.page}>
-      {/* Header */}
-      <header style={{ margin: "0 auto 32px", maxWidth: "1200px" }}>
-        <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
-          <div style={{ alignItems: "center", display: "flex", gap: "16px" }}>
-            <div style={styles.headerIcon}>
-              <FaMapMarkerAlt style={{ color: "white", fontSize: "24px" }} />
+    <div style={pageStyle}>
+      {/* Header - only show when not embedded */}
+      {!embedded && (
+        <header style={{ margin: "0 auto 24px", maxWidth: "1400px" }}>
+          <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
+            <div style={{ alignItems: "center", display: "flex", gap: "16px" }}>
+              <div style={styles.headerIcon}>
+                <FaMapMarkerAlt style={{ color: "white", fontSize: "24px" }} />
+              </div>
+              <div>
+                <h1 style={{ color: "white", fontSize: "28px", fontWeight: 700, margin: 0 }}>
+                  Find Your Ride
+                </h1>
+                <p style={{ color: "#94a3b8", fontSize: "14px", margin: 0 }}>
+                  Eco-friendly carpooling near you
+                </p>
+              </div>
             </div>
-            <div>
-              <h1 style={{ color: "white", fontSize: "28px", fontWeight: 700, margin: 0 }}>
-                Live Map
-              </h1>
-              <p style={{ color: "#94a3b8", fontSize: "14px", margin: 0 }}>
-                Real-time Driver Tracking
-              </p>
+            <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
+              <div style={styles.statusDot(isConnected)} />
+              <span style={{ color: "#e2e8f0", fontSize: "14px", fontWeight: 500 }}>
+                {isConnected ? "Live" : "Disconnected"}
+              </span>
+              {currentLocation && (
+                <span style={{ color: "#94a3b8", fontSize: "12px", marginLeft: "16px" }}>
+                  <FaMapMarkerAlt style={{ marginRight: "4px" }} />
+                  {currentLocation.lat.toFixed(4)}, {currentLocation.lng.toFixed(4)}
+                </span>
+              )}
             </div>
           </div>
-          <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
-            <div style={styles.statusDot(isConnected)} />
-            <span style={{ color: "#e2e8f0", fontSize: "14px", fontWeight: 500 }}>
-              {isConnected ? "Live" : "Disconnected"}
-            </span>
-          </div>
-        </div>
-      </header>
+        </header>
+      )}
 
       {/* Main Content */}
-      <main style={{ margin: "0 auto", maxWidth: "1200px" }}>
-        <div style={{ display: "grid", gap: "24px", gridTemplateColumns: "3fr 1fr" }}>
-          {/* Map Card */}
-          <div style={styles.mapCard}>
-            <div style={{ borderRadius: "16px", height: "550px", overflow: "hidden" }}>
-              <GoogleMap
-                mapContainerStyle={mapContainerStyle}
-                center={defaultCenter}
-                zoom={13}
-                onLoad={onLoad}
-                onUnmount={onUnmount}
-                options={{
-                  disableDefaultUI: true,
-                  styles: darkMapStyles,
-                  zoomControl: true,
+      <main style={{ margin: "0 auto", maxWidth: "1400px" }}>
+        <div style={{ display: "grid", gap: "24px", gridTemplateColumns: "1fr 380px" }}>
+          {/* Left Column - Map and Search */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+            {/* Search Card */}
+            <div style={styles.card}>
+              <div style={{ marginBottom: "16px" }}>
+                <h2
+                  style={{ color: "white", fontSize: "18px", fontWeight: 600, margin: "0 0 16px" }}
+                >
+                  <FaSearch style={{ marginRight: "8px" }} />
+                  Search Destination
+                </h2>
+                <div style={{ position: "relative" }}>
+                  <FaSearch
+                    style={{
+                      color: "#22c55e",
+                      fontSize: "18px",
+                      left: "16px",
+                      position: "absolute",
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                    }}
+                  />
+                  <Autocomplete onLoad={onAutocompleteLoad} onPlaceChanged={onPlaceChanged}>
+                    <input
+                      type="text"
+                      placeholder="Where do you want to go?"
+                      value={searchDestination}
+                      onChange={(e) => setSearchDestination(e.target.value)}
+                      style={styles.searchInput}
+                    />
+                  </Autocomplete>
+                </div>
+                {selectedDestination && (
+                  <div
+                    style={{
+                      alignItems: "center",
+                      background: "rgba(34, 197, 94, 0.1)",
+                      border: "1px solid rgba(34, 197, 94, 0.3)",
+                      borderRadius: "12px",
+                      color: "#4ade80",
+                      display: "flex",
+                      fontSize: "14px",
+                      gap: "8px",
+                      marginTop: "12px",
+                      padding: "12px 16px",
+                    }}
+                  >
+                    <FaRoute />
+                    <span>Destination: {selectedDestination.name}</span>
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={handleFindRide}
+                style={styles.actionButton}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = "translateY(-2px)";
+                  e.currentTarget.style.boxShadow = "0 12px 28px rgba(34, 197, 94, 0.4)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = "translateY(0)";
+                  e.currentTarget.style.boxShadow = "0 8px 24px rgba(34, 197, 94, 0.3)";
                 }}
               >
-                {driverArray.map((driver) => (
-                  <Marker
-                    key={driver.id}
-                    position={{
-                      lat: driver.animatedLat ?? driver.lat,
-                      lng: driver.animatedLng ?? driver.lng,
-                    }}
-                    icon={{
-                      anchor: new google.maps.Point(22, 22),
-                      scaledSize: new google.maps.Size(45, 45),
-                      url: "/car-icon.svg",
-                    }}
-                    title={`${driver.id.slice(0, 8)}... (${driver.status})`}
-                  />
-                ))}
-              </GoogleMap>
+                <FaCar style={{ fontSize: "20px" }} />
+                Find a Ride
+              </button>
+            </div>
+
+            {/* Map Card */}
+            <div style={styles.mapCard}>
+              <div style={{ borderRadius: "16px", height: "450px", overflow: "hidden" }}>
+                <GoogleMap
+                  mapContainerStyle={mapContainerStyle}
+                  center={currentLocation || defaultCenter}
+                  zoom={14}
+                  onLoad={onLoad}
+                  onUnmount={onUnmount}
+                  options={{
+                    disableDefaultUI: true,
+                    styles: darkMapStyles,
+                    zoomControl: true,
+                  }}
+                >
+                  {/* Current Location Marker */}
+                  {currentLocation && (
+                    <Marker
+                      position={currentLocation}
+                      icon={{
+                        anchor: new google.maps.Point(12, 12),
+                        fillColor: "#22c55e",
+                        fillOpacity: 1,
+                        path: google.maps.SymbolPath.CIRCLE,
+                        scale: 12,
+                        strokeColor: "#ffffff",
+                        strokeWeight: 3,
+                      }}
+                      title="Your Location"
+                    />
+                  )}
+
+                  {/* Destination Marker */}
+                  {selectedDestination && (
+                    <Marker
+                      position={{ lat: selectedDestination.lat, lng: selectedDestination.lng }}
+                      icon={{
+                        anchor: new google.maps.Point(20, 40),
+                        scaledSize: new google.maps.Size(40, 40),
+                        url:
+                          "data:image/svg+xml;charset=UTF-8," +
+                          encodeURIComponent(`
+                          <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24">
+                            <path fill="#ef4444" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 0 1 0-5 2.5 2.5 0 0 1 0 5z"/>
+                          </svg>
+                        `),
+                      }}
+                      title={selectedDestination.name}
+                    />
+                  )}
+
+                  {/* Driver Markers */}
+                  {driverArray.map((driver) => (
+                    <Marker
+                      key={driver.id}
+                      position={{
+                        lat: driver.animatedLat ?? driver.lat,
+                        lng: driver.animatedLng ?? driver.lng,
+                      }}
+                      icon={{
+                        anchor: new google.maps.Point(22, 22),
+                        scaledSize: new google.maps.Size(45, 45),
+                        url: "/car-icon.svg",
+                      }}
+                      title={`Driver (${driver.status})`}
+                    />
+                  ))}
+                </GoogleMap>
+              </div>
             </div>
           </div>
 
-          {/* Side Panel */}
+          {/* Right Column - Actions and Stats */}
           <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-            {/* Stats Card */}
+            {/* Quick Actions */}
+            <div style={styles.card}>
+              <h2 style={{ color: "white", fontSize: "18px", fontWeight: 600, margin: "0 0 20px" }}>
+                Quick Actions
+              </h2>
+              <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                <button
+                  type="button"
+                  style={styles.actionCard}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = "translateY(-4px)";
+                    e.currentTarget.style.borderColor = "rgba(34, 197, 94, 0.5)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = "translateY(0)";
+                    e.currentTarget.style.borderColor = "rgba(71, 85, 105, 0.5)";
+                  }}
+                  onClick={handleFindRide}
+                >
+                  <div style={{ alignItems: "center", display: "flex", gap: "16px" }}>
+                    <div
+                      style={{
+                        alignItems: "center",
+                        background: "rgba(34, 197, 94, 0.2)",
+                        borderRadius: "12px",
+                        display: "flex",
+                        height: "48px",
+                        justifyContent: "center",
+                        width: "48px",
+                      }}
+                    >
+                      <FaCar style={{ color: "#4ade80", fontSize: "20px" }} />
+                    </div>
+                    <div>
+                      <h3 style={{ color: "white", fontSize: "16px", fontWeight: 600, margin: 0 }}>
+                        Find a Ride
+                      </h3>
+                      <p style={{ color: "#94a3b8", fontSize: "13px", margin: "4px 0 0" }}>
+                        Search for available carpools near you
+                      </p>
+                    </div>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  style={styles.actionCard}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = "translateY(-4px)";
+                    e.currentTarget.style.borderColor = "rgba(34, 197, 94, 0.5)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = "translateY(0)";
+                    e.currentTarget.style.borderColor = "rgba(71, 85, 105, 0.5)";
+                  }}
+                  onClick={handleViewRewards}
+                >
+                  <div style={{ alignItems: "center", display: "flex", gap: "16px" }}>
+                    <div
+                      style={{
+                        alignItems: "center",
+                        background: "rgba(34, 197, 94, 0.2)",
+                        borderRadius: "12px",
+                        display: "flex",
+                        height: "48px",
+                        justifyContent: "center",
+                        width: "48px",
+                      }}
+                    >
+                      <FaGift style={{ color: "#4ade80", fontSize: "20px" }} />
+                    </div>
+                    <div>
+                      <h3 style={{ color: "white", fontSize: "16px", fontWeight: 600, margin: 0 }}>
+                        Green Rewards
+                      </h3>
+                      <p style={{ color: "#94a3b8", fontSize: "13px", margin: "4px 0 0" }}>
+                        Check your eco-points and redeem
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            {/* Your Impact */}
             <div style={styles.card}>
               <div
-                style={{ alignItems: "center", display: "flex", gap: "12px", marginBottom: "24px" }}
+                style={{ alignItems: "center", display: "flex", gap: "12px", marginBottom: "20px" }}
               >
-                <FaUsers style={{ color: "#3b82f6", fontSize: "20px" }} />
+                <FaLeaf style={{ color: "#22c55e", fontSize: "20px" }} />
                 <h2 style={{ color: "white", fontSize: "18px", fontWeight: 600, margin: 0 }}>
-                  Drivers
+                  Your Impact 🌍
                 </h2>
               </div>
 
-              <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                <div style={styles.statCard as React.CSSProperties}>
-                  <p style={{ color: "white", fontSize: "36px", fontWeight: 700, margin: 0 }}>
-                    {driverArray.length}
+              <div style={{ display: "grid", gap: "12px", gridTemplateColumns: "1fr 1fr" }}>
+                <div style={styles.impactCard as React.CSSProperties}>
+                  <p style={{ color: "#4ade80", fontSize: "28px", fontWeight: 700, margin: 0 }}>
+                    {userStats.ridesTaken}
                   </p>
-                  <p style={{ color: "#94a3b8", fontSize: "14px", margin: 0 }}>Total Online</p>
+                  <p style={{ color: "#94a3b8", fontSize: "12px", margin: "4px 0 0" }}>
+                    Rides Taken
+                  </p>
                 </div>
-
-                <div style={{ display: "grid", gap: "12px", gridTemplateColumns: "1fr 1fr" }}>
-                  <div style={styles.availableCard as React.CSSProperties}>
-                    <p style={{ color: "#4ade80", fontSize: "24px", fontWeight: 700, margin: 0 }}>
-                      {availableCount}
-                    </p>
-                    <p style={{ color: "#94a3b8", fontSize: "12px", margin: 0 }}>Available</p>
-                  </div>
-                  <div style={styles.busyCard as React.CSSProperties}>
-                    <p style={{ color: "#facc15", fontSize: "24px", fontWeight: 700, margin: 0 }}>
-                      {busyCount}
-                    </p>
-                    <p style={{ color: "#94a3b8", fontSize: "12px", margin: 0 }}>Busy</p>
-                  </div>
+                <div style={styles.impactCard as React.CSSProperties}>
+                  <p style={{ color: "#4ade80", fontSize: "28px", fontWeight: 700, margin: 0 }}>
+                    {userStats.co2Saved} kg
+                  </p>
+                  <p style={{ color: "#94a3b8", fontSize: "12px", margin: "4px 0 0" }}>CO₂ Saved</p>
+                </div>
+                <div style={styles.impactCard as React.CSSProperties}>
+                  <p style={{ color: "#4ade80", fontSize: "28px", fontWeight: 700, margin: 0 }}>
+                    {userStats.greenPoints}
+                  </p>
+                  <p style={{ color: "#94a3b8", fontSize: "12px", margin: "4px 0 0" }}>
+                    Green Points
+                  </p>
+                </div>
+                <div style={styles.impactCard as React.CSSProperties}>
+                  <p style={{ color: "#4ade80", fontSize: "28px", fontWeight: 700, margin: 0 }}>
+                    ${userStats.moneySaved}
+                  </p>
+                  <p style={{ color: "#94a3b8", fontSize: "12px", margin: "4px 0 0" }}>
+                    Money Saved
+                  </p>
                 </div>
               </div>
             </div>
 
-            {/* Last Update */}
+            {/* Nearby Drivers */}
             <div style={styles.card}>
               <div
                 style={{ alignItems: "center", display: "flex", gap: "12px", marginBottom: "16px" }}
               >
-                <FaSync style={{ color: "#3b82f6" }} />
+                <FaUsers style={{ color: "#22c55e", fontSize: "18px" }} />
                 <h2 style={{ color: "white", fontSize: "18px", fontWeight: 600, margin: 0 }}>
-                  Updates
+                  Nearby Drivers
                 </h2>
               </div>
+
+              <div style={{ display: "grid", gap: "12px", gridTemplateColumns: "1fr 1fr" }}>
+                <div
+                  style={{
+                    background: "rgba(34, 197, 94, 0.1)",
+                    border: "1px solid rgba(34, 197, 94, 0.2)",
+                    borderRadius: "12px",
+                    padding: "16px",
+                    textAlign: "center",
+                  }}
+                >
+                  <p style={{ color: "#4ade80", fontSize: "32px", fontWeight: 700, margin: 0 }}>
+                    {availableCount}
+                  </p>
+                  <p style={{ color: "#94a3b8", fontSize: "12px", margin: "4px 0 0" }}>Available</p>
+                </div>
+                <div
+                  style={{
+                    background: "rgba(234, 179, 8, 0.1)",
+                    border: "1px solid rgba(234, 179, 8, 0.2)",
+                    borderRadius: "12px",
+                    padding: "16px",
+                    textAlign: "center",
+                  }}
+                >
+                  <p style={{ color: "#facc15", fontSize: "32px", fontWeight: 700, margin: 0 }}>
+                    {busyCount}
+                  </p>
+                  <p style={{ color: "#94a3b8", fontSize: "12px", margin: "4px 0 0" }}>Busy</p>
+                </div>
+              </div>
+
               {lastUpdate && (
-                <p style={{ color: "#94a3b8", fontSize: "14px", margin: 0 }}>
-                  Last sync:{" "}
-                  <span style={{ color: "white" }}>{lastUpdate.toLocaleTimeString()}</span>
-                </p>
+                <div
+                  style={{
+                    alignItems: "center",
+                    background: "rgba(15, 23, 42, 0.5)",
+                    borderRadius: "8px",
+                    color: "#94a3b8",
+                    display: "flex",
+                    fontSize: "12px",
+                    gap: "8px",
+                    marginTop: "16px",
+                    padding: "8px 12px",
+                  }}
+                >
+                  <FaSync style={{ fontSize: "10px" }} />
+                  Last updated: {lastUpdate.toLocaleTimeString()}
+                </div>
               )}
             </div>
-
-            {/* Legend */}
-            <div style={styles.card}>
-              <h2 style={{ color: "white", fontSize: "18px", fontWeight: 600, margin: "0 0 16px" }}>
-                Legend
-              </h2>
-              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                <div style={styles.legendItem}>
-                  <div style={styles.legendIcon("#22c55e")}>
-                    <FaCar style={{ color: "#4ade80" }} />
-                  </div>
-                  <span style={{ color: "#cbd5e1", fontSize: "14px" }}>Available Driver</span>
-                </div>
-                <div style={styles.legendItem}>
-                  <div style={styles.legendIcon("#eab308")}>
-                    <FaCar style={{ color: "#facc15" }} />
-                  </div>
-                  <span style={{ color: "#cbd5e1", fontSize: "14px" }}>Busy Driver</span>
-                </div>
-                <div style={styles.legendItem}>
-                  <div style={styles.legendIcon("#3b82f6")}>
-                    <FaLeaf style={{ color: "#60a5fa" }} />
-                  </div>
-                  <span style={{ color: "#cbd5e1", fontSize: "14px" }}>EV Vehicle</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Active Drivers List */}
-            {driverArray.length > 0 && (
-              <div style={{ ...styles.card, maxHeight: "300px", overflowY: "auto" }}>
-                <h2
-                  style={{ color: "white", fontSize: "18px", fontWeight: 600, margin: "0 0 16px" }}
-                >
-                  Active Drivers
-                </h2>
-                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                  {driverArray.map((driver) => (
-                    <div key={driver.id} style={styles.driverItem}>
-                      <div
-                        style={{
-                          background: driver.status === "AVAILABLE" ? "#22c55e" : "#eab308",
-                          borderRadius: "50%",
-                          height: "8px",
-                          width: "8px",
-                        }}
-                      />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <p
-                          style={{
-                            color: "white",
-                            fontFamily: "monospace",
-                            fontSize: "14px",
-                            margin: 0,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {driver.id.slice(0, 14)}...
-                        </p>
-                      </div>
-                      <span style={styles.statusBadge(driver.status)}>{driver.status}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         </div>
       </main>
