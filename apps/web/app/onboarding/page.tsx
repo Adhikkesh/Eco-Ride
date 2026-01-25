@@ -9,7 +9,7 @@ import { backendUrl } from "../../config";
 // Prevent static generation - this page requires Firebase auth
 export const dynamic = "force-dynamic";
 
-export default function Onboarding() {
+export default function Onboarding(): React.ReactNode {
   const router = useRouter();
 
   // Form state
@@ -55,6 +55,12 @@ export default function Onboarding() {
       const user = auth.currentUser;
       if (!user) {
         setError("Not authenticated. Please sign in again.");
+        return;
+      }
+
+      // Validate driver-specific required fields
+      if (role === "driver" && !licenseFile) {
+        setError("Please upload your driver license document.");
         return;
       }
 
@@ -118,18 +124,31 @@ export default function Onboarding() {
     setter: (file: File | null) => void,
   ) => {
     const file = e.target.files?.[0];
+    console.log("File selected:", file);
+    console.log("File type:", file?.type);
+    console.log("File name:", file?.name);
+
     if (file) {
-      // Validate file type
+      // Validate file type - check both MIME type and extension (MIME can be unreliable on Windows)
       const validTypes = ["application/pdf", "image/jpeg", "image/jpg", "image/png"];
-      if (!validTypes.includes(file.type)) {
+      const validExtensions = [".pdf", ".jpg", ".jpeg", ".png"];
+      const fileExtension = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
+
+      console.log("File extension:", fileExtension);
+
+      const isValidType = validTypes.includes(file.type) || validExtensions.includes(fileExtension);
+      console.log("Is valid type:", isValidType);
+
+      if (!isValidType) {
         setError("Please upload a PDF or JPEG/PNG file");
         return;
       }
-      // Validate file size (max 5MB)
-      if (file.size > 5 * 1024 * 1024) {
-        setError("File size must be less than 5MB");
+      // Validate file size (max 10MB)
+      if (file.size > 10 * 1024 * 1024) {
+        setError("File size must be less than 10MB");
         return;
       }
+      console.log("Setting file to state");
       setter(file);
       setError("");
     }

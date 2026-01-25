@@ -96,7 +96,7 @@ export default function Home(): React.ReactNode {
 
       if (details?.isNewUser) {
         // New user - redirect to onboarding
-        router.push("/onbaording");
+        router.push("/onboarding");
       } else {
         // Existing user - redirect to dashboard
         isSigningUp.current = false;
@@ -121,7 +121,7 @@ export default function Home(): React.ReactNode {
 
         // New user signup - redirect to onboarding
         await createUserWithEmailAndPassword(auth, email, password);
-        router.push("/onbaording");
+        router.push("/onboarding");
       } else {
         // Existing user sign in - redirect to dashboard
         await signInWithEmailAndPassword(auth, email, password);
