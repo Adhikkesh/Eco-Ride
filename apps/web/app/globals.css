@@ -2,6 +2,9 @@
 
 @plugin "tailwindcss-animate";
 
+@source "../components";
+@source "../app";
+
 @custom-variant dark (&:is(.dark *));
 
 @tailwind base;
