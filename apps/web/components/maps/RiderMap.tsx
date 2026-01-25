@@ -37,16 +37,14 @@ interface DriverMarker extends DriverLocation {
 
 interface UserStats {
   ridesTaken: number;
-  co2Saved: number;
+  trustScore: number;
   greenPoints: number;
   moneySaved: number;
 }
 
 interface UserData {
-  rides_taken?: number;
-  co2_saved?: number;
   green_points?: number;
-  money_saved?: number;
+  trust_score?: number;
 }
 
 type Libraries = "places"[];
@@ -176,10 +174,10 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     name: string;
   } | null>(null);
   const [userStats, setUserStats] = useState<UserStats>({
-    co2Saved: 0,
     greenPoints: 0,
     moneySaved: 0,
     ridesTaken: 0,
+    trustScore: 0,
   });
 
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -222,29 +220,30 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     }
   }, []);
 
-  // Fetch user stats from Firestore
+  // Fetch user stats from Firestore when user is authenticated
   useEffect(() => {
-    const fetchUserStats = async () => {
-      const user = auth.currentUser;
+    // Import onAuthStateChanged dynamically
+    const { onAuthStateChanged } = require("firebase/auth");
+
+    const unsubscribe = onAuthStateChanged(auth, async (user: { uid: string } | null) => {
       if (user && db) {
         try {
           const userDoc = await getDoc(doc(db, "users", user.uid));
           if (userDoc.exists()) {
             const data = userDoc.data() as UserData;
-            setUserStats({
-              co2Saved: data.co2_saved || 0,
-              greenPoints: data.green_points || 0,
-              moneySaved: data.money_saved || 0,
-              ridesTaken: data.rides_taken || 0,
-            });
+            setUserStats((prev) => ({
+              ...prev,
+              greenPoints: data.green_points ?? 0,
+              trustScore: data.trust_score ?? 0,
+            }));
           }
         } catch (error) {
           console.error("Error fetching user stats:", error);
         }
       }
-    };
+    });
 
-    fetchUserStats();
+    return () => unsubscribe();
   }, []);
 
   // Listen to online drivers
@@ -703,9 +702,11 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                 </div>
                 <div style={styles.impactCard as React.CSSProperties}>
                   <p style={{ color: "#4ade80", fontSize: "28px", fontWeight: 700, margin: 0 }}>
-                    {userStats.co2Saved} kg
+                    {userStats.trustScore}%
                   </p>
-                  <p style={{ color: "#94a3b8", fontSize: "12px", margin: "4px 0 0" }}>CO₂ Saved</p>
+                  <p style={{ color: "#94a3b8", fontSize: "12px", margin: "4px 0 0" }}>
+                    Trust Score
+                  </p>
                 </div>
                 <div style={styles.impactCard as React.CSSProperties}>
                   <p style={{ color: "#4ade80", fontSize: "28px", fontWeight: 700, margin: 0 }}>
@@ -717,7 +718,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                 </div>
                 <div style={styles.impactCard as React.CSSProperties}>
                   <p style={{ color: "#4ade80", fontSize: "28px", fontWeight: 700, margin: 0 }}>
-                    ${userStats.moneySaved}
+                    ₹{userStats.moneySaved}
                   </p>
                   <p style={{ color: "#94a3b8", fontSize: "12px", margin: "4px 0 0" }}>
                     Money Saved
