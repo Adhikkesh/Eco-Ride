@@ -1,0 +1,27 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g filter="url(#filter0_d_1_2)">
+    <!-- Car Body -->
+    <path d="M32 8C24 8 18 14 18 22V42C18 50 24 56 32 56C40 56 46 50 46 42V22C46 14 40 8 32 8Z" fill="#22c55e"/>
+    <!-- Windshield -->
+    <path d="M22 22C22 22 24 18 32 18C40 18 42 22 42 22H22Z" fill="#14532d"/>
+    <!-- Rear Window -->
+    <path d="M22 42C22 42 24 46 32 46C40 46 42 42 42 42H22Z" fill="#14532d"/>
+    <!-- Roof -->
+    <path d="M21 24H43V40H21V24Z" fill="#4ade80"/>
+    <!-- Headlights -->
+    <circle cx="21" cy="12" r="2" fill="#facc15"/>
+    <circle cx="43" cy="12" r="2" fill="#facc15"/>
+  </g>
+  <defs>
+    <filter id="filter0_d_1_2" x="14" y="6" width="36" height="56" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="4"/>
+      <feGaussianBlur stdDeviation="2"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.25 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_2"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_2" result="shape"/>
+    </filter>
+  </defs>
+</svg>
