@@ -1,125 +1,183 @@
 // apps/server/src/controllers/rideController.ts
 import type { Request, Response } from "express";
-import { serverTimestamp } from "firebase/database";
+import { FieldValue } from "firebase-admin/firestore";
 import * as geofire from "geofire-common";
 import { db, rtdb } from "../config/firebase.js";
+
+interface DriverLocation {
+  lat: number;
+  lng: number;
+  heading: number;
+  status: "AVAILABLE" | "BUSY" | "RESERVED";
+  lastUpdated: number;
+  vehicleType?: string;
+  geohash?: string;
+}
+
+interface DriverMatch {
+  driverId: string;
+  lat: number;
+  lng: number;
+  distance: number;
+  status: string;
+}
 
 export const requestRide = async (req: Request, res: Response) => {
   try {
     const { riderId, pickupLat, pickupLng, dropLat, dropLng } = req.body;
-    const center: [number, number] = [pickupLat, pickupLng];
-    const radiusInM = 5000; // 5km search radius
 
-    // ---------------------------------------------------------
-    // STEP 1: CALCULATE GEOHASH BOUNDS
-    // ---------------------------------------------------------
-    // This gives us a set of [start, end] ranges to query efficiently
-    const bounds = geofire.geohashQueryBounds(center, radiusInM);
-
-    // ---------------------------------------------------------
-    // STEP 2: PARALLEL FIRESTORE QUERIES (INDEXED)
-    // ---------------------------------------------------------
-    const promises = bounds.map((b) => {
-      return db.collection("drivers-online").orderBy("geohash").startAt(b[0]).endAt(b[1]).get();
-    });
-
-    // Wait for all queries to finish
-    const snapshots = await Promise.all(promises);
-
-    // ---------------------------------------------------------
-    // STEP 3: FILTER & SORT (IN MEMORY)
-    // ---------------------------------------------------------
-    interface DriverMatch {
-      data: FirebaseFirestore.DocumentData;
-      distance: number;
-      driverId: string;
+    // Validate required fields
+    if (!riderId || !pickupLat || !pickupLng || !dropLat || !dropLng) {
+      return res.status(400).json({
+        message: "Missing required fields: riderId, pickupLat, pickupLng, dropLat, dropLng",
+        success: false,
+      });
     }
 
+    const center: [number, number] = [pickupLat, pickupLng];
+    const radiusInKm = 5; // 5km search radius
+
+    // ---------------------------------------------------------
+    // STEP 1: FETCH ALL ONLINE DRIVERS FROM RTDB
+    // ---------------------------------------------------------
+    const driversSnapshot = await rtdb.ref("drivers-online").once("value");
+    const driversData = driversSnapshot.val();
+
+    if (!driversData) {
+      return res.status(404).json({
+        message: "No drivers are currently online",
+        success: false,
+      });
+    }
+
+    // ---------------------------------------------------------
+    // STEP 2: FILTER BY DISTANCE AND STATUS
+    // ---------------------------------------------------------
     const matchingDrivers: DriverMatch[] = [];
 
-    for (const snap of snapshots) {
-      for (const doc of snap.docs) {
-        const d = doc.data();
+    console.log("=== RIDE REQUEST DEBUG ===");
+    console.log("Total drivers online:", Object.keys(driversData).length);
 
-        // precise distance calculation
-        const distanceInKm = geofire.distanceBetween([d.lat, d.lng], center);
-        const distanceInM = distanceInKm * 1000;
+    for (const [driverId, locationData] of Object.entries(driversData)) {
+      const driver = locationData as DriverLocation;
 
-        if (distanceInM <= radiusInM) {
-          matchingDrivers.push({
-            data: d,
-            distance: distanceInM,
-            driverId: doc.id,
-          });
-        }
+      console.log(
+        `Driver ${driverId}: status=${driver.status}, lat=${driver.lat}, lng=${driver.lng}`,
+      );
+
+      // Only consider AVAILABLE drivers
+      if (driver.status !== "AVAILABLE") {
+        console.log(`  -> Skipping: status is ${driver.status}, not AVAILABLE`);
+        continue;
+      }
+
+      // Calculate distance from pickup location
+      const distanceInKm = geofire.distanceBetween([driver.lat, driver.lng], center);
+      console.log(`  -> Distance: ${distanceInKm.toFixed(2)} km`);
+
+      if (distanceInKm <= radiusInKm) {
+        matchingDrivers.push({
+          distance: distanceInKm,
+          driverId,
+          lat: driver.lat,
+          lng: driver.lng,
+          status: driver.status,
+        });
+        console.log(`  -> ADDED to matching drivers`);
+      } else {
+        console.log(`  -> Skipping: outside ${radiusInKm}km radius`);
       }
     }
 
-    // Sort by Distance (Nearest First)
-    // In future: Add factors like Rating or Idle Time here
+    // Sort by distance (nearest first)
     matchingDrivers.sort((a, b) => a.distance - b.distance);
 
+    console.log("Matching drivers count:", matchingDrivers.length);
+
     if (matchingDrivers.length === 0) {
-      return res.status(404).json({ message: "No drivers found nearby" });
+      return res.status(404).json({
+        message: "No available drivers found within 5km of your location",
+        success: false,
+      });
     }
 
     // ---------------------------------------------------------
-    // STEP 4: ATOMIC LOCKING (CRITICAL)
+    // STEP 3: RESERVE THE NEAREST DRIVER (Direct Update)
     // ---------------------------------------------------------
-    // We try to lock the nearest driver. If they are busy, we try the next.
-
-    let assignedDriverId = null;
+    // Note: For production, consider using transactions for race condition handling
+    let assignedDriver: DriverMatch | null = null;
 
     for (const driver of matchingDrivers) {
-      const driverId = driver.driverId;
-      const statusRef = rtdb.ref(`drivers-status/${driverId}/status`);
+      console.log(`Attempting to reserve driver: ${driver.driverId}`);
+      const driverRef = rtdb.ref(`drivers-online/${driver.driverId}`);
 
-      // Attempt Transaction
-      const result = await statusRef.transaction((currentStatus) => {
-        if (currentStatus === "AVAILABLE") {
-          return "RESERVED"; // Lock them!
+      try {
+        // Re-check current status before updating
+        const snapshot = await driverRef.once("value");
+        const currentData = snapshot.val() as DriverLocation | null;
+
+        console.log(`Current data for ${driver.driverId}:`, currentData);
+
+        if (currentData && currentData.status === "AVAILABLE") {
+          // Update status to RESERVED
+          await driverRef.update({ status: "RESERVED" });
+          assignedDriver = driver;
+          console.log(`Successfully reserved driver: ${driver.driverId}`);
+          break;
+        } else {
+          console.log(`Driver ${driver.driverId} not available, status: ${currentData?.status}`);
         }
-        return; // Abort if already BUSY or RESERVED
-      });
-
-      if (result.committed) {
-        assignedDriverId = driverId;
-        break; // Stop looking, we found one!
+      } catch (err) {
+        console.error(`Error reserving driver ${driver.driverId}:`, err);
       }
-      // If not committed, loop continues to next nearest driver
     }
 
-    if (!assignedDriverId) {
-      return res.status(409).json({ message: "All nearby drivers are busy. Please try again." });
+    if (!assignedDriver) {
+      return res.status(409).json({
+        message: "All nearby drivers are currently busy. Please try again.",
+        success: false,
+      });
     }
 
     // ---------------------------------------------------------
-    // STEP 5: FINALIZE RIDE REQUEST
+    // STEP 4: CREATE RIDE DOCUMENT IN FIRESTORE
     // ---------------------------------------------------------
-
-    // Create Ride Doc
-    const rideRef = await db.collection("rides").add({
-      createdAt: serverTimestamp(),
-      driverId: assignedDriverId,
+    const rideData = {
+      createdAt: FieldValue.serverTimestamp(),
+      driverId: assignedDriver.driverId,
       drop: { lat: dropLat, lng: dropLng },
-      fare: 150, // Calculate this dynamically later
+      fare: null, // Will be calculated later
+      matchedAt: FieldValue.serverTimestamp(),
       pickup: { lat: pickupLat, lng: pickupLng },
       riderId,
       status: "MATCHED",
-    });
+    };
 
-    // Send Notification (Mock)
-    // await sendPushNotification(assignedDriverId, "New Ride Request!");
+    const rideRef = await db.collection("rides").add(rideData);
+
+    // ---------------------------------------------------------
+    // STEP 5: RETURN SUCCESS RESPONSE
+    // ---------------------------------------------------------
+    // Estimate ETA based on distance (rough estimate: 2 min per km)
+    const etaMinutes = Math.ceil(assignedDriver.distance * 2);
 
     return res.status(200).json({
-      driverId: assignedDriverId,
-      eta: "5 mins",
-      message: "Driver matched successfully",
+      distance: Math.round(assignedDriver.distance * 1000), // in meters
+      driverId: assignedDriver.driverId,
+      driverLocation: {
+        lat: assignedDriver.lat,
+        lng: assignedDriver.lng,
+      },
+      eta: `${etaMinutes} min`,
+      message: "Driver matched successfully!",
       rideId: rideRef.id,
       success: true,
     });
   } catch (error) {
     console.error("Ride Request Error:", error);
-    res.status(500).json({ error: "Internal Server Error" });
+    return res.status(500).json({
+      message: "Internal server error while processing ride request",
+      success: false,
+    });
   }
 };

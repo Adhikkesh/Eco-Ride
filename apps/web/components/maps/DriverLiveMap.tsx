@@ -1,7 +1,8 @@
 "use client";
 
-import { GoogleMap, Marker, useJsApiLoader } from "@react-google-maps/api";
+import { GoogleMap, type Libraries, Marker, useJsApiLoader } from "@react-google-maps/api";
 import { onDisconnect, ref, remove, set } from "firebase/database";
+import * as geofire from "geofire-common";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FaCar, FaClock, FaLeaf, FaMapMarkerAlt, FaPowerOff } from "react-icons/fa";
 import { auth, rtdb } from "@/lib/firebase";
@@ -14,6 +15,7 @@ interface DriverLocation {
   status: "AVAILABLE" | "BUSY";
   lastUpdated: number;
   vehicleType?: string;
+  geohash: string;
 }
 
 interface Position {
@@ -136,6 +138,9 @@ const mapContainerStyle = {
 
 const defaultCenter = { lat: 11.0168, lng: 76.9558 };
 
+// Use same libraries as RiderMap to avoid loader conflict
+const libraries: Libraries = ["places"];
+
 interface DriverLiveMapProps {
   embedded?: boolean;
 }
@@ -144,6 +149,7 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
   const { isLoaded } = useJsApiLoader({
     googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
     id: "google-map-script",
+    libraries,
   });
 
   const [isOnline, setIsOnline] = useState(false);
@@ -151,6 +157,7 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
   const [status, setStatus] = useState<"AVAILABLE" | "BUSY">("AVAILABLE");
   const [error, setError] = useState<string | null>(null);
   const [sessionTime, setSessionTime] = useState(0);
+  const [manualLocationMode, setManualLocationMode] = useState(false);
 
   const watchIdRef = useRef<number | null>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -171,6 +178,26 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
       if (sessionIntervalRef.current) clearInterval(sessionIntervalRef.current);
     };
   }, [isOnline]);
+
+  // Update Firebase immediately when status changes while online
+  useEffect(() => {
+    if (isOnline && position && rtdb) {
+      const driverRef = ref(rtdb, `drivers-online/${userId}`);
+      const hash = geofire.geohashForLocation([position.lat, position.lng]);
+      const locationData: DriverLocation = {
+        geohash: hash,
+        heading: position.heading,
+        lastUpdated: Date.now(),
+        lat: position.lat,
+        lng: position.lng,
+        status,
+        vehicleType: "CAR",
+      };
+      set(driverRef, locationData).catch((err) => {
+        console.error("Failed to update status:", err);
+      });
+    }
+  }, [status, isOnline, position, userId]);
 
   const formatTime = (seconds: number): string => {
     const hrs = Math.floor(seconds / 3600);
@@ -196,7 +223,10 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
     async (pos: Position) => {
       if (!rtdb) return;
       const driverRef = ref(rtdb, `drivers-online/${userId}`);
+      // Calculate geohash for efficient geo-queries
+      const hash = geofire.geohashForLocation([pos.lat, pos.lng]);
       const locationData: DriverLocation = {
+        geohash: hash,
         heading: pos.heading,
         lastUpdated: Date.now(),
         lat: pos.lat,
@@ -284,6 +314,27 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
     mapRef.current = null;
   }, []);
 
+  // Handle map click to set location manually
+  const onMapClick = useCallback(
+    async (e: google.maps.MapMouseEvent) => {
+      if (!manualLocationMode || !isOnline || !e.latLng) return;
+
+      const lat = e.latLng.lat();
+      const lng = e.latLng.lng();
+      const newPos: Position = { heading: position?.heading ?? 0, lat, lng };
+
+      setPosition(newPos);
+      prevPositionRef.current = { lat, lng };
+
+      // Write to Firebase
+      await writeLocationToFirebase(newPos);
+
+      // Exit manual mode after setting location
+      setManualLocationMode(false);
+    },
+    [manualLocationMode, isOnline, position, writeLocationToFirebase],
+  );
+
   if (!isLoaded) {
     return (
       <div
@@ -350,14 +401,50 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
         <div style={{ display: "grid", gap: "24px", gridTemplateColumns: "2fr 1fr" }}>
           {/* Map Card */}
           <div style={styles.mapCard}>
-            <div style={{ borderRadius: "16px", height: "450px", overflow: "hidden" }}>
+            <div
+              style={{
+                borderRadius: "16px",
+                height: "450px",
+                overflow: "hidden",
+                position: "relative",
+              }}
+            >
+              {/* Manual location mode indicator */}
+              {manualLocationMode && (
+                <div
+                  style={{
+                    alignItems: "center",
+                    background: "rgba(34, 197, 94, 0.9)",
+                    color: "white",
+                    display: "flex",
+                    fontSize: "14px",
+                    fontWeight: 600,
+                    gap: "8px",
+                    justifyContent: "center",
+                    left: 0,
+                    padding: "10px",
+                    position: "absolute",
+                    right: 0,
+                    top: 0,
+                    zIndex: 10,
+                  }}
+                >
+                  <FaMapMarkerAlt /> Click on the map to set your location
+                </div>
+              )}
               <GoogleMap
                 mapContainerStyle={mapContainerStyle}
                 center={position ? { lat: position.lat, lng: position.lng } : defaultCenter}
                 zoom={16}
                 onLoad={onLoad}
                 onUnmount={onUnmount}
-                options={{ disableDefaultUI: true, styles: darkMapStyles, zoomControl: true }}
+                onClick={onMapClick}
+                options={{
+                  disableDefaultUI: true,
+                  draggableCursor: manualLocationMode ? "crosshair" : undefined,
+                  styles: darkMapStyles,
+                  zoomControl: true,
+                }}
               >
                 {position && (
                   <Marker
@@ -477,6 +564,47 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
                       Busy
                     </button>
                   </div>
+                </div>
+              )}
+
+              {/* Manual Location Button - Show when online */}
+              {isOnline && (
+                <div style={{ marginBottom: "24px" }}>
+                  <button
+                    type="button"
+                    onClick={() => setManualLocationMode(!manualLocationMode)}
+                    style={{
+                      alignItems: "center",
+                      background: manualLocationMode
+                        ? "linear-gradient(135deg, #22c55e, #10b981)"
+                        : "rgba(30, 41, 59, 0.8)",
+                      border: manualLocationMode ? "none" : "2px solid rgba(71, 85, 105, 0.5)",
+                      borderRadius: "12px",
+                      color: manualLocationMode ? "white" : "#94a3b8",
+                      cursor: "pointer",
+                      display: "flex",
+                      fontSize: "14px",
+                      fontWeight: 600,
+                      gap: "10px",
+                      justifyContent: "center",
+                      padding: "14px 20px",
+                      transition: "all 0.3s ease",
+                      width: "100%",
+                    }}
+                  >
+                    <FaMapMarkerAlt />
+                    {manualLocationMode ? "Cancel Set Location" : "Set Location on Map"}
+                  </button>
+                  <p
+                    style={{
+                      color: "#64748b",
+                      fontSize: "12px",
+                      marginTop: "8px",
+                      textAlign: "center",
+                    }}
+                  >
+                    Click the button, then click on the map to set your location
+                  </p>
                 </div>
               )}
 

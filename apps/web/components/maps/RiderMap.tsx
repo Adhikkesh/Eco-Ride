@@ -1,19 +1,30 @@
 "use client";
 
-import { Autocomplete, GoogleMap, Marker, useJsApiLoader } from "@react-google-maps/api";
+import {
+  Autocomplete,
+  DirectionsRenderer,
+  GoogleMap,
+  type Libraries,
+  Marker,
+  useJsApiLoader,
+} from "@react-google-maps/api";
 import { onValue, ref } from "firebase/database";
 import { doc, getDoc } from "firebase/firestore";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FaCar,
+  FaCheckCircle,
   FaGift,
   FaLeaf,
   FaMapMarkerAlt,
   FaRoute,
   FaSearch,
+  FaSpinner,
   FaSync,
+  FaTimes,
   FaUsers,
 } from "react-icons/fa";
+import { backendUrl } from "@/config";
 import { auth, db, rtdb } from "@/lib/firebase";
 import { darkMapStyles } from "@/lib/mapStyles";
 
@@ -24,7 +35,7 @@ interface DriverLocation {
   lat: number;
   lng: number;
   heading: number;
-  status: "AVAILABLE" | "BUSY";
+  status: "AVAILABLE" | "BUSY" | "RESERVED";
   lastUpdated: number;
   vehicleType?: string;
 }
@@ -47,7 +58,18 @@ interface UserData {
   trust_score?: number;
 }
 
-type Libraries = "places"[];
+interface RideResponse {
+  success: boolean;
+  message: string;
+  rideId?: string;
+  driverId?: string;
+  driverLocation?: { lat: number; lng: number };
+  distance?: number;
+  eta?: string;
+}
+
+type RideStatus = "idle" | "searching" | "matched" | "on_trip" | "error";
+
 const libraries: Libraries = ["places"];
 
 // ---------------------------------------------------------
@@ -69,6 +91,21 @@ const styles = {
     justifyContent: "center",
     padding: "16px 24px",
     transition: "all 0.3s ease",
+    width: "100%",
+  } as React.CSSProperties,
+  actionButtonDisabled: {
+    alignItems: "center",
+    background: "rgba(71, 85, 105, 0.5)",
+    border: "none",
+    borderRadius: "16px",
+    color: "#94a3b8",
+    cursor: "not-allowed",
+    display: "flex",
+    fontSize: "16px",
+    fontWeight: 600,
+    gap: "12px",
+    justifyContent: "center",
+    padding: "16px 24px",
     width: "100%",
   } as React.CSSProperties,
   actionCard: {
@@ -111,6 +148,13 @@ const styles = {
     borderRadius: "24px",
     boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
     padding: "16px",
+  } as React.CSSProperties,
+  matchedCard: {
+    background: "linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(16, 185, 129, 0.2))",
+    border: "2px solid rgba(34, 197, 94, 0.5)",
+    borderRadius: "24px",
+    marginBottom: "24px",
+    padding: "24px",
   } as React.CSSProperties,
   page: {
     background: "linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)",
@@ -163,6 +207,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     libraries,
   });
 
+  // Existing state
   const [drivers, setDrivers] = useState<Map<string, DriverMarker>>(new Map());
   const [isConnected, setIsConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
@@ -180,9 +225,28 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     trustScore: 0,
   });
 
+  // New ride matching state
+  const [rideStatus, setRideStatus] = useState<RideStatus>("idle");
+  const [rideId, setRideId] = useState<string | null>(null);
+  const [assignedDriverId, setAssignedDriverId] = useState<string | null>(null);
+  const [assignedDriverLocation, setAssignedDriverLocation] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
+  const [eta, setEta] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
+
+  // Pickup location state
+  const [pickupLocation, setPickupLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [pickupSearchText, setPickupSearchText] = useState("");
+  const [manualPickupMode, setManualPickupMode] = useState(false);
+
   const mapRef = useRef<google.maps.Map | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
+  const pickupAutocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
+  const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
 
   // Get current location
   useEffect(() => {
@@ -294,6 +358,66 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     };
   }, []);
 
+  // Listen to assigned driver location updates
+  useEffect(() => {
+    if (!rtdb || !assignedDriverId || rideStatus !== "matched") return;
+
+    const driverRef = ref(rtdb, `drivers-online/${assignedDriverId}`);
+
+    const unsubscribe = onValue(driverRef, (snapshot) => {
+      const data = snapshot.val() as DriverLocation | null;
+      if (data) {
+        setAssignedDriverLocation({ lat: data.lat, lng: data.lng });
+      }
+    });
+
+    return () => unsubscribe();
+  }, [assignedDriverId, rideStatus]);
+
+  // Calculate and update route when driver location or destination changes
+  useEffect(() => {
+    if (
+      !isLoaded ||
+      rideStatus !== "matched" ||
+      !assignedDriverLocation ||
+      !currentLocation ||
+      !selectedDestination
+    ) {
+      return;
+    }
+
+    if (!directionsServiceRef.current) {
+      directionsServiceRef.current = new google.maps.DirectionsService();
+    }
+
+    // Calculate route: Driver -> Pickup (rider location) -> Drop
+    directionsServiceRef.current.route(
+      {
+        destination: { lat: selectedDestination.lat, lng: selectedDestination.lng },
+        origin: assignedDriverLocation,
+        travelMode: google.maps.TravelMode.DRIVING,
+        waypoints: [{ location: currentLocation, stopover: true }],
+      },
+      (result, status) => {
+        if (status === google.maps.DirectionsStatus.OK && result) {
+          setDirections(result);
+
+          // Extract ETA from the first leg (driver to pickup)
+          const legs = result.routes[0]?.legs;
+          if (legs && legs.length > 0) {
+            // First leg is driver to pickup - this is the ETA
+            const driverToPickup = legs[0];
+            if (driverToPickup?.duration?.text) {
+              setEta(driverToPickup.duration.text);
+            }
+          }
+        } else {
+          console.error("Directions request failed:", status);
+        }
+      },
+    );
+  }, [isLoaded, rideStatus, assignedDriverLocation, currentLocation, selectedDestination]);
+
   // Animate driver markers
   useEffect(() => {
     const animate = () => {
@@ -343,8 +467,39 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     mapRef.current = null;
   }, []);
 
+  // Handle map click to set pickup location manually
+  const onMapClick = useCallback(
+    (e: google.maps.MapMouseEvent) => {
+      if (!manualPickupMode || rideStatus !== "idle" || !e.latLng) return;
+
+      const lat = e.latLng.lat();
+      const lng = e.latLng.lng();
+
+      setPickupLocation({ lat, lng });
+
+      // Also update currentLocation for compatibility
+      setCurrentLocation({ lat, lng });
+
+      // Exit manual mode after setting location
+      setManualPickupMode(false);
+
+      // Pan map to the selected location
+      if (mapRef.current) {
+        mapRef.current.panTo({ lat, lng });
+      }
+
+      // Update search text to coordinates
+      setPickupSearchText(`${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+    },
+    [manualPickupMode, rideStatus],
+  );
+
   const onAutocompleteLoad = useCallback((autocomplete: google.maps.places.Autocomplete) => {
     autocompleteRef.current = autocomplete;
+  }, []);
+
+  const onPickupAutocompleteLoad = useCallback((autocomplete: google.maps.places.Autocomplete) => {
+    pickupAutocompleteRef.current = autocomplete;
   }, []);
 
   const onPlaceChanged = useCallback(() => {
@@ -368,9 +523,97 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     }
   }, []);
 
-  const handleFindRide = () => {
-    // TODO: Implement ride finding logic
-    alert("Finding rides near you...");
+  const onPickupPlaceChanged = useCallback(() => {
+    if (pickupAutocompleteRef.current) {
+      const place = pickupAutocompleteRef.current.getPlace();
+      if (place.geometry?.location) {
+        const lat = place.geometry.location.lat();
+        const lng = place.geometry.location.lng();
+
+        setPickupLocation({ lat, lng });
+        setCurrentLocation({ lat, lng });
+        setPickupSearchText(place.name || place.formatted_address || "Selected Location");
+
+        // Pan map to selected location
+        if (mapRef.current) {
+          mapRef.current.panTo({ lat, lng });
+          mapRef.current.setZoom(15);
+        }
+      }
+    }
+  }, []);
+
+  const handleFindRide = async () => {
+    if (!currentLocation || !selectedDestination) {
+      setErrorMessage("Please select a destination first");
+      return;
+    }
+
+    setRideStatus("searching");
+    setErrorMessage(null);
+
+    try {
+      // Get auth token
+      const user = auth?.currentUser;
+      if (!user) {
+        setRideStatus("error");
+        setErrorMessage("Please log in to request a ride");
+        return;
+      }
+
+      // Determine pickup location (prioritize manual selection)
+      const pickup = pickupLocation || currentLocation;
+      if (!pickup) {
+        setRideStatus("error");
+        setErrorMessage("Please set a pickup location");
+        return;
+      }
+
+      const token = await user.getIdToken();
+
+      const response = await fetch(`${backendUrl}/ride/request`, {
+        body: JSON.stringify({
+          dropLat: selectedDestination.lat,
+          dropLng: selectedDestination.lng,
+          pickupLat: pickup.lat,
+          pickupLng: pickup.lng,
+          riderId: user.uid,
+        }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+
+      const data: RideResponse = await response.json();
+
+      if (data.success && data.driverId && data.driverLocation) {
+        setRideStatus("matched");
+        setRideId(data.rideId || null);
+        setAssignedDriverId(data.driverId);
+        setAssignedDriverLocation(data.driverLocation);
+        setEta(data.eta || null);
+      } else {
+        setRideStatus("error");
+        setErrorMessage(data.message || "Failed to find a driver");
+      }
+    } catch (error) {
+      console.error("Error requesting ride:", error);
+      setRideStatus("error");
+      setErrorMessage("Network error. Please try again.");
+    }
+  };
+
+  const handleCancelRide = () => {
+    // Reset all ride state
+    setRideStatus("idle");
+    setRideId(null);
+    setAssignedDriverId(null);
+    setAssignedDriverLocation(null);
+    setEta(null);
+    setDirections(null);
+    setErrorMessage(null);
   };
 
   const handleViewRewards = () => {
@@ -410,9 +653,16 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
 
   const driverArray = Array.from(drivers.values());
   const availableCount = driverArray.filter((d) => d.status === "AVAILABLE").length;
-  const busyCount = driverArray.filter((d) => d.status === "BUSY").length;
+  const busyCount = driverArray.filter(
+    (d) => d.status === "BUSY" || d.status === "RESERVED",
+  ).length;
 
   const pageStyle = embedded ? { padding: "24px" } : styles.page;
+
+  // Determine button state
+  const pickup = pickupLocation || currentLocation;
+  const canRequestRide =
+    pickup && selectedDestination && (rideStatus === "idle" || rideStatus === "error");
 
   return (
     <div style={pageStyle}>
@@ -454,89 +704,350 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
         <div style={{ display: "grid", gap: "24px", gridTemplateColumns: "1fr 380px" }}>
           {/* Left Column - Map and Search */}
           <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-            {/* Search Card */}
-            <div style={styles.card}>
-              <div style={{ marginBottom: "16px" }}>
-                <h2
-                  style={{ color: "white", fontSize: "18px", fontWeight: 600, margin: "0 0 16px" }}
+            {/* Driver Matched Card */}
+            {rideStatus === "matched" && assignedDriverId && (
+              <div style={styles.matchedCard}>
+                <div
+                  style={{
+                    alignItems: "center",
+                    display: "flex",
+                    gap: "16px",
+                    marginBottom: "16px",
+                  }}
                 >
-                  <FaSearch style={{ marginRight: "8px" }} />
-                  Search Destination
-                </h2>
-                <div style={{ position: "relative" }}>
-                  <FaSearch
-                    style={{
-                      color: "#22c55e",
-                      fontSize: "18px",
-                      left: "16px",
-                      position: "absolute",
-                      top: "50%",
-                      transform: "translateY(-50%)",
-                    }}
-                  />
-                  <Autocomplete onLoad={onAutocompleteLoad} onPlaceChanged={onPlaceChanged}>
-                    <input
-                      type="text"
-                      placeholder="Where do you want to go?"
-                      value={searchDestination}
-                      onChange={(e) => setSearchDestination(e.target.value)}
-                      style={styles.searchInput}
-                    />
-                  </Autocomplete>
-                </div>
-                {selectedDestination && (
                   <div
                     style={{
                       alignItems: "center",
-                      background: "rgba(34, 197, 94, 0.1)",
-                      border: "1px solid rgba(34, 197, 94, 0.3)",
+                      background: "rgba(34, 197, 94, 0.3)",
+                      borderRadius: "50%",
+                      display: "flex",
+                      height: "56px",
+                      justifyContent: "center",
+                      width: "56px",
+                    }}
+                  >
+                    <FaCheckCircle style={{ color: "#4ade80", fontSize: "28px" }} />
+                  </div>
+                  <div>
+                    <h2 style={{ color: "#4ade80", fontSize: "22px", fontWeight: 700, margin: 0 }}>
+                      Driver Assigned!
+                    </h2>
+                    <p style={{ color: "#94a3b8", fontSize: "14px", margin: "4px 0 0" }}>
+                      Your driver is on the way
+                    </p>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    background: "rgba(15, 23, 42, 0.6)",
+                    borderRadius: "16px",
+                    display: "grid",
+                    gap: "16px",
+                    gridTemplateColumns: "1fr 1fr",
+                    padding: "16px",
+                  }}
+                >
+                  <div>
+                    <p style={{ color: "#94a3b8", fontSize: "12px", margin: 0 }}>Driver ID</p>
+                    <p
+                      style={{
+                        color: "white",
+                        fontFamily: "monospace",
+                        fontSize: "14px",
+                        margin: "4px 0 0",
+                      }}
+                    >
+                      {assignedDriverId.slice(0, 12)}...
+                    </p>
+                  </div>
+                  <div>
+                    <p style={{ color: "#94a3b8", fontSize: "12px", margin: 0 }}>ETA</p>
+                    <p
+                      style={{
+                        color: "#4ade80",
+                        fontSize: "20px",
+                        fontWeight: 700,
+                        margin: "4px 0 0",
+                      }}
+                    >
+                      {eta || "Calculating..."}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleCancelRide}
+                  style={{
+                    alignItems: "center",
+                    background: "rgba(239, 68, 68, 0.2)",
+                    border: "1px solid rgba(239, 68, 68, 0.5)",
+                    borderRadius: "12px",
+                    color: "#f87171",
+                    cursor: "pointer",
+                    display: "flex",
+                    fontSize: "14px",
+                    fontWeight: 500,
+                    gap: "8px",
+                    justifyContent: "center",
+                    marginTop: "16px",
+                    padding: "12px",
+                    width: "100%",
+                  }}
+                >
+                  <FaTimes /> Cancel Ride
+                </button>
+              </div>
+            )}
+
+            {/* Search Card - Hide when matched */}
+            {rideStatus !== "matched" && (
+              <div style={styles.card}>
+                <div style={{ marginBottom: "16px" }}>
+                  <h2
+                    style={{
+                      color: "white",
+                      fontSize: "18px",
+                      fontWeight: 600,
+                      margin: "0 0 16px",
+                    }}
+                  >
+                    <FaSearch style={{ marginRight: "8px" }} />
+                    Search Destination
+                  </h2>
+                  <div style={{ position: "relative" }}>
+                    <FaSearch
+                      style={{
+                        color: "#22c55e",
+                        fontSize: "18px",
+                        left: "16px",
+                        position: "absolute",
+                        top: "50%",
+                        transform: "translateY(-50%)",
+                      }}
+                    />
+                    <Autocomplete onLoad={onAutocompleteLoad} onPlaceChanged={onPlaceChanged}>
+                      <input
+                        type="text"
+                        placeholder="Where do you want to go?"
+                        value={searchDestination}
+                        onChange={(e) => setSearchDestination(e.target.value)}
+                        style={styles.searchInput}
+                      />
+                    </Autocomplete>
+                  </div>
+                  {selectedDestination && (
+                    <div
+                      style={{
+                        alignItems: "center",
+                        background: "rgba(34, 197, 94, 0.1)",
+                        border: "1px solid rgba(34, 197, 94, 0.3)",
+                        borderRadius: "12px",
+                        color: "#4ade80",
+                        display: "flex",
+                        fontSize: "14px",
+                        gap: "8px",
+                        marginTop: "12px",
+                        padding: "12px 16px",
+                      }}
+                    >
+                      <FaRoute />
+                      <span>Destination: {selectedDestination.name}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Pickup Location Section */}
+                <div style={{ marginBottom: "16px" }}>
+                  <h3
+                    style={{
+                      color: "white",
+                      fontSize: "16px",
+                      fontWeight: 600,
+                      margin: "0 0 12px",
+                    }}
+                  >
+                    <FaMapMarkerAlt style={{ color: "#22c55e", marginRight: "8px" }} />
+                    Pickup Location
+                  </h3>
+
+                  {/* Autocomplete Input for Pickup */}
+                  <div style={{ marginBottom: "12px", position: "relative", width: "100%" }}>
+                    <FaMapMarkerAlt
+                      style={{
+                        color: "#3b82f6",
+                        fontSize: "18px",
+                        left: "16px",
+                        position: "absolute",
+                        top: "50%",
+                        transform: "translateY(-50%)",
+                        zIndex: 1,
+                      }}
+                    />
+                    <Autocomplete
+                      onLoad={onPickupAutocompleteLoad}
+                      onPlaceChanged={onPickupPlaceChanged}
+                    >
+                      <input
+                        type="text"
+                        placeholder="Current Location (GPS)"
+                        value={pickupSearchText}
+                        onChange={(e) => setPickupSearchText(e.target.value)}
+                        style={{
+                          ...styles.searchInput,
+                          borderColor: manualPickupMode ? "#3b82f6" : "rgba(255, 255, 255, 0.1)",
+                        }}
+                      />
+                    </Autocomplete>
+                  </div>
+
+                  {/* Button to set pickup location */}
+                  <button
+                    type="button"
+                    onClick={() => setManualPickupMode(!manualPickupMode)}
+                    style={{
+                      alignItems: "center",
+                      background: manualPickupMode
+                        ? "linear-gradient(135deg, #3b82f6, #2563eb)"
+                        : "rgba(30, 41, 59, 0.8)",
+                      border: manualPickupMode ? "none" : "2px solid rgba(71, 85, 105, 0.5)",
                       borderRadius: "12px",
-                      color: "#4ade80",
+                      color: manualPickupMode ? "white" : "#94a3b8",
+                      cursor: "pointer",
+                      display: "flex",
+                      fontSize: "14px",
+                      fontWeight: 600,
+                      gap: "10px",
+                      justifyContent: "center",
+                      padding: "12px 16px",
+                      transition: "all 0.3s ease",
+                      width: "100%",
+                    }}
+                  >
+                    <FaMapMarkerAlt />
+                    {manualPickupMode ? "Cancel" : "Set Pickup on Map"}
+                  </button>
+                </div>
+
+                {/* Error message */}
+                {errorMessage && (
+                  <div
+                    style={{
+                      alignItems: "center",
+                      background: "rgba(239, 68, 68, 0.1)",
+                      border: "1px solid rgba(239, 68, 68, 0.3)",
+                      borderRadius: "12px",
+                      color: "#f87171",
                       display: "flex",
                       fontSize: "14px",
                       gap: "8px",
-                      marginTop: "12px",
+                      marginBottom: "16px",
                       padding: "12px 16px",
                     }}
                   >
-                    <FaRoute />
-                    <span>Destination: {selectedDestination.name}</span>
+                    <FaTimes />
+                    {errorMessage}
                   </div>
                 )}
+
+                <button
+                  type="button"
+                  onClick={handleFindRide}
+                  disabled={!canRequestRide}
+                  style={canRequestRide ? styles.actionButton : styles.actionButtonDisabled}
+                  onMouseEnter={(e) => {
+                    if (canRequestRide) {
+                      e.currentTarget.style.transform = "translateY(-2px)";
+                      e.currentTarget.style.boxShadow = "0 12px 28px rgba(34, 197, 94, 0.4)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (canRequestRide) {
+                      e.currentTarget.style.transform = "translateY(0)";
+                      e.currentTarget.style.boxShadow = "0 8px 24px rgba(34, 197, 94, 0.3)";
+                    }
+                  }}
+                >
+                  {rideStatus === "searching" ? (
+                    <>
+                      <FaSpinner
+                        style={{ animation: "spin 1s linear infinite", fontSize: "20px" }}
+                      />
+                      Finding Driver...
+                    </>
+                  ) : (
+                    <>
+                      <FaCar style={{ fontSize: "20px" }} />
+                      Find a Ride
+                    </>
+                  )}
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={handleFindRide}
-                style={styles.actionButton}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = "translateY(-2px)";
-                  e.currentTarget.style.boxShadow = "0 12px 28px rgba(34, 197, 94, 0.4)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = "translateY(0)";
-                  e.currentTarget.style.boxShadow = "0 8px 24px rgba(34, 197, 94, 0.3)";
-                }}
-              >
-                <FaCar style={{ fontSize: "20px" }} />
-                Find a Ride
-              </button>
-            </div>
+            )}
 
             {/* Map Card */}
             <div style={styles.mapCard}>
-              <div style={{ borderRadius: "16px", height: "450px", overflow: "hidden" }}>
+              <div
+                style={{
+                  borderRadius: "16px",
+                  height: "450px",
+                  overflow: "hidden",
+                  position: "relative",
+                }}
+              >
+                {/* Manual pickup mode indicator */}
+                {manualPickupMode && (
+                  <div
+                    style={{
+                      alignItems: "center",
+                      background: "rgba(34, 197, 94, 0.9)",
+                      color: "white",
+                      display: "flex",
+                      fontSize: "14px",
+                      fontWeight: 600,
+                      gap: "8px",
+                      justifyContent: "center",
+                      left: 0,
+                      padding: "10px",
+                      position: "absolute",
+                      right: 0,
+                      top: 0,
+                      zIndex: 10,
+                    }}
+                  >
+                    <FaMapMarkerAlt /> Click on the map to set your pickup location
+                  </div>
+                )}
                 <GoogleMap
                   mapContainerStyle={mapContainerStyle}
                   center={currentLocation || defaultCenter}
                   zoom={14}
                   onLoad={onLoad}
                   onUnmount={onUnmount}
+                  onClick={onMapClick}
                   options={{
                     disableDefaultUI: true,
+                    draggableCursor: manualPickupMode ? "crosshair" : undefined,
                     styles: darkMapStyles,
                     zoomControl: true,
                   }}
                 >
+                  {/* Route Directions */}
+                  {directions && (
+                    <DirectionsRenderer
+                      directions={directions}
+                      options={{
+                        polylineOptions: {
+                          strokeColor: "#22c55e",
+                          strokeOpacity: 0.8,
+                          strokeWeight: 5,
+                        },
+                        suppressMarkers: true,
+                      }}
+                    />
+                  )}
+
                   {/* Current Location Marker */}
                   {currentLocation && (
                     <Marker
@@ -573,22 +1084,36 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                     />
                   )}
 
-                  {/* Driver Markers */}
-                  {driverArray.map((driver) => (
+                  {/* Assigned Driver Marker (when matched) */}
+                  {rideStatus === "matched" && assignedDriverLocation && (
                     <Marker
-                      key={driver.id}
-                      position={{
-                        lat: driver.animatedLat ?? driver.lat,
-                        lng: driver.animatedLng ?? driver.lng,
-                      }}
+                      position={assignedDriverLocation}
                       icon={{
                         anchor: new google.maps.Point(22, 22),
-                        scaledSize: new google.maps.Size(45, 45),
+                        scaledSize: new google.maps.Size(50, 50),
                         url: "/car-icon.svg",
                       }}
-                      title={`Driver (${driver.status})`}
+                      title="Your Driver"
                     />
-                  ))}
+                  )}
+
+                  {/* Other Driver Markers (when not matched) */}
+                  {rideStatus !== "matched" &&
+                    driverArray.map((driver) => (
+                      <Marker
+                        key={driver.id}
+                        position={{
+                          lat: driver.animatedLat ?? driver.lat,
+                          lng: driver.animatedLng ?? driver.lng,
+                        }}
+                        icon={{
+                          anchor: new google.maps.Point(22, 22),
+                          scaledSize: new google.maps.Size(45, 45),
+                          url: "/car-icon.svg",
+                        }}
+                        title={`Driver (${driver.status})`}
+                      />
+                    ))}
                 </GoogleMap>
               </div>
             </div>
@@ -613,7 +1138,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                     e.currentTarget.style.transform = "translateY(0)";
                     e.currentTarget.style.borderColor = "rgba(71, 85, 105, 0.5)";
                   }}
-                  onClick={handleFindRide}
+                  onClick={rideStatus === "idle" ? handleFindRide : undefined}
                 >
                   <div style={{ alignItems: "center", display: "flex", gap: "16px" }}>
                     <div
