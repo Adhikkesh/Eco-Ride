@@ -1,10 +1,16 @@
 "use client";
 
-import { GoogleMap, type Libraries, Marker, useJsApiLoader } from "@react-google-maps/api";
-import { onDisconnect, ref, remove, set } from "firebase/database";
+import {
+  DirectionsRenderer,
+  GoogleMap,
+  type Libraries,
+  Marker,
+  useJsApiLoader,
+} from "@react-google-maps/api";
+import { onDisconnect, onValue, ref, remove, set } from "firebase/database";
 import * as geofire from "geofire-common";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FaCar, FaClock, FaLeaf, FaMapMarkerAlt, FaPowerOff } from "react-icons/fa";
+import { FaCar, FaClock, FaLeaf, FaMapMarkerAlt, FaPowerOff, FaRoute } from "react-icons/fa";
 import { auth, rtdb } from "@/lib/firebase";
 import { darkMapStyles } from "@/lib/mapStyles";
 
@@ -22,6 +28,14 @@ interface Position {
   lat: number;
   lng: number;
   heading: number;
+}
+
+interface AssignedRide {
+  rideId: string;
+  riderId: string;
+  pickup: { lat: number; lng: number };
+  drop: { lat: number; lng: number };
+  timestamp: number;
 }
 
 const styles = {
@@ -159,9 +173,19 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
   const [sessionTime, setSessionTime] = useState(0);
   const [manualLocationMode, setManualLocationMode] = useState(false);
 
+  // Ride assignment state
+  const [assignedRide, setAssignedRide] = useState<AssignedRide | null>(null);
+  // Color-coded routes: blue for driver->pickup, green for pickup->destination
+  const [directionsToPickup, setDirectionsToPickup] = useState<google.maps.DirectionsResult | null>(
+    null,
+  );
+  const [directionsToDestination, setDirectionsToDestination] =
+    useState<google.maps.DirectionsResult | null>(null);
+
   const watchIdRef = useRef<number | null>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
   const sessionIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
 
   const userId = auth?.currentUser?.uid || `test-driver-${Date.now()}`;
 
@@ -198,6 +222,77 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
       });
     }
   }, [status, isOnline, position, userId]);
+
+  // Listen for ride assignments from RTDB
+  useEffect(() => {
+    if (!rtdb || !isOnline) {
+      setAssignedRide(null);
+      setDirectionsToPickup(null);
+      setDirectionsToDestination(null);
+      return;
+    }
+
+    const assignedRideRef = ref(rtdb, `rides-assigned/${userId}`);
+
+    const unsubscribe = onValue(assignedRideRef, (snapshot) => {
+      const data = snapshot.val() as AssignedRide | null;
+      if (data) {
+        console.log("Ride assigned:", data);
+        setAssignedRide(data);
+        // Auto-set status to BUSY when assigned
+        setStatus("BUSY");
+      } else {
+        setAssignedRide(null);
+        setDirectionsToPickup(null);
+        setDirectionsToDestination(null);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [isOnline, userId]);
+
+  // Calculate routes when ride is assigned
+  useEffect(() => {
+    if (!isLoaded || !assignedRide || !position) {
+      return;
+    }
+
+    if (!directionsServiceRef.current) {
+      directionsServiceRef.current = new google.maps.DirectionsService();
+    }
+
+    // Calculate route 1: Driver -> Pickup (BLUE route)
+    directionsServiceRef.current.route(
+      {
+        destination: assignedRide.pickup,
+        origin: { lat: position.lat, lng: position.lng },
+        travelMode: google.maps.TravelMode.DRIVING,
+      },
+      (result, status) => {
+        if (status === google.maps.DirectionsStatus.OK && result) {
+          setDirectionsToPickup(result);
+        } else {
+          console.error("Directions to pickup failed:", status);
+        }
+      },
+    );
+
+    // Calculate route 2: Pickup -> Destination (GREEN route)
+    directionsServiceRef.current.route(
+      {
+        destination: assignedRide.drop,
+        origin: assignedRide.pickup,
+        travelMode: google.maps.TravelMode.DRIVING,
+      },
+      (result, status) => {
+        if (status === google.maps.DirectionsStatus.OK && result) {
+          setDirectionsToDestination(result);
+        } else {
+          console.error("Directions to destination failed:", status);
+        }
+      },
+    );
+  }, [isLoaded, assignedRide, position]);
 
   const formatTime = (seconds: number): string => {
     const hrs = Math.floor(seconds / 3600);
@@ -272,7 +367,9 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
       },
       (err) => {
         console.error("Geolocation error:", err);
-        setError(`Location error: ${err.message}`);
+        // Instead of blocking, enable manual location mode
+        setError("Location unavailable. Use 'Set Location on Map' to set your position.");
+        setManualLocationMode(true);
       },
       { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 },
     );
@@ -434,7 +531,7 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
               )}
               <GoogleMap
                 mapContainerStyle={mapContainerStyle}
-                center={position ? { lat: position.lat, lng: position.lng } : defaultCenter}
+                center={defaultCenter}
                 zoom={16}
                 onLoad={onLoad}
                 onUnmount={onUnmount}
@@ -442,10 +539,42 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
                 options={{
                   disableDefaultUI: true,
                   draggableCursor: manualLocationMode ? "crosshair" : undefined,
+                  gestureHandling: "greedy",
                   styles: darkMapStyles,
                   zoomControl: true,
                 }}
               >
+                {/* Route Directions - Driver to Pickup (BLUE) */}
+                {directionsToPickup && (
+                  <DirectionsRenderer
+                    directions={directionsToPickup}
+                    options={{
+                      polylineOptions: {
+                        strokeColor: "#3b82f6",
+                        strokeOpacity: 0.9,
+                        strokeWeight: 5,
+                      },
+                      suppressMarkers: true,
+                    }}
+                  />
+                )}
+
+                {/* Route Directions - Pickup to Destination (GREEN) */}
+                {directionsToDestination && (
+                  <DirectionsRenderer
+                    directions={directionsToDestination}
+                    options={{
+                      polylineOptions: {
+                        strokeColor: "#22c55e",
+                        strokeOpacity: 0.9,
+                        strokeWeight: 5,
+                      },
+                      suppressMarkers: true,
+                    }}
+                  />
+                )}
+
+                {/* Driver Position Marker */}
                 {position && (
                   <Marker
                     position={{ lat: position.lat, lng: position.lng }}
@@ -456,7 +585,82 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
                     }}
                   />
                 )}
+
+                {/* Pickup Location Marker */}
+                {assignedRide && (
+                  <Marker
+                    position={assignedRide.pickup}
+                    icon={{
+                      anchor: new google.maps.Point(12, 12),
+                      fillColor: "#3b82f6",
+                      fillOpacity: 1,
+                      path: google.maps.SymbolPath.CIRCLE,
+                      scale: 12,
+                      strokeColor: "#fff",
+                      strokeWeight: 3,
+                    }}
+                    title="Pickup Location"
+                  />
+                )}
+
+                {/* Destination Marker */}
+                {assignedRide && (
+                  <Marker
+                    position={assignedRide.drop}
+                    icon={{
+                      anchor: new google.maps.Point(12, 12),
+                      fillColor: "#22c55e",
+                      fillOpacity: 1,
+                      path: google.maps.SymbolPath.CIRCLE,
+                      scale: 12,
+                      strokeColor: "#fff",
+                      strokeWeight: 3,
+                    }}
+                    title="Destination"
+                  />
+                )}
               </GoogleMap>
+
+              {/* Route Legend - Show when ride is assigned */}
+              {assignedRide && (directionsToPickup || directionsToDestination) && (
+                <div
+                  style={{
+                    background: "rgba(15, 23, 42, 0.9)",
+                    borderRadius: "12px",
+                    bottom: "16px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "8px",
+                    left: "16px",
+                    padding: "12px 16px",
+                    position: "absolute",
+                    zIndex: 10,
+                  }}
+                >
+                  <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                    <div
+                      style={{
+                        background: "#3b82f6",
+                        borderRadius: "2px",
+                        height: "4px",
+                        width: "24px",
+                      }}
+                    />
+                    <span style={{ color: "#94a3b8", fontSize: "12px" }}>To pickup</span>
+                  </div>
+                  <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                    <div
+                      style={{
+                        background: "#22c55e",
+                        borderRadius: "2px",
+                        height: "4px",
+                        width: "24px",
+                      }}
+                    />
+                    <span style={{ color: "#94a3b8", fontSize: "12px" }}>To destination</span>
+                  </div>
+                </div>
+              )}
             </div>
             {position && (
               <div style={styles.locationInfo}>
@@ -470,6 +674,67 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
 
           {/* Control Panel */}
           <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+            {/* Assigned Ride Card - Show when ride is assigned */}
+            {assignedRide && (
+              <div
+                style={{
+                  background:
+                    "linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(34, 197, 94, 0.2))",
+                  border: "2px solid rgba(59, 130, 246, 0.5)",
+                  borderRadius: "24px",
+                  padding: "24px",
+                }}
+              >
+                <div
+                  style={{
+                    alignItems: "center",
+                    display: "flex",
+                    gap: "12px",
+                    marginBottom: "16px",
+                  }}
+                >
+                  <FaRoute style={{ color: "#3b82f6", fontSize: "24px" }} />
+                  <div>
+                    <h2 style={{ color: "#fff", fontSize: "18px", fontWeight: 700, margin: 0 }}>
+                      Ride Assigned!
+                    </h2>
+                    <p style={{ color: "#94a3b8", fontSize: "12px", margin: "2px 0 0" }}>
+                      Follow the routes on the map
+                    </p>
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                    <div
+                      style={{
+                        background: "#3b82f6",
+                        borderRadius: "50%",
+                        height: "10px",
+                        width: "10px",
+                      }}
+                    />
+                    <span style={{ color: "#94a3b8", fontSize: "13px" }}>
+                      Pickup: {assignedRide.pickup.lat.toFixed(4)},{" "}
+                      {assignedRide.pickup.lng.toFixed(4)}
+                    </span>
+                  </div>
+                  <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                    <div
+                      style={{
+                        background: "#22c55e",
+                        borderRadius: "50%",
+                        height: "10px",
+                        width: "10px",
+                      }}
+                    />
+                    <span style={{ color: "#94a3b8", fontSize: "13px" }}>
+                      Drop: {assignedRide.drop.lat.toFixed(4)}, {assignedRide.drop.lng.toFixed(4)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Status Card */}
             <div style={styles.card}>
               <div

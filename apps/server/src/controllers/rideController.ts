@@ -35,7 +35,8 @@ export const requestRide = async (req: Request, res: Response) => {
     }
 
     const center: [number, number] = [pickupLat, pickupLng];
-    const radiusInKm = 5; // 5km search radius
+    const radiusIncrement = 5; // 5km increments
+    const maxRadius = 100; // Maximum search radius to prevent infinite loops
 
     // ---------------------------------------------------------
     // STEP 1: FETCH ALL ONLINE DRIVERS FROM RTDB
@@ -51,52 +52,64 @@ export const requestRide = async (req: Request, res: Response) => {
     }
 
     // ---------------------------------------------------------
-    // STEP 2: FILTER BY DISTANCE AND STATUS
+    // STEP 2: FILTER BY DISTANCE AND STATUS (WITH EXPANDING RADIUS)
     // ---------------------------------------------------------
     const matchingDrivers: DriverMatch[] = [];
+    let currentRadius = radiusIncrement;
 
     console.log("=== RIDE REQUEST DEBUG ===");
     console.log("Total drivers online:", Object.keys(driversData).length);
 
-    for (const [driverId, locationData] of Object.entries(driversData)) {
-      const driver = locationData as DriverLocation;
+    // Keep expanding radius until we find drivers or hit max radius
+    while (matchingDrivers.length === 0 && currentRadius <= maxRadius) {
+      console.log(`Searching within ${currentRadius}km radius...`);
 
-      console.log(
-        `Driver ${driverId}: status=${driver.status}, lat=${driver.lat}, lng=${driver.lng}`,
-      );
+      for (const [driverId, locationData] of Object.entries(driversData)) {
+        const driver = locationData as DriverLocation;
 
-      // Only consider AVAILABLE drivers
-      if (driver.status !== "AVAILABLE") {
-        console.log(`  -> Skipping: status is ${driver.status}, not AVAILABLE`);
-        continue;
+        console.log(
+          `Driver ${driverId}: status=${driver.status}, lat=${driver.lat}, lng=${driver.lng}`,
+        );
+
+        // Only consider AVAILABLE drivers
+        if (driver.status !== "AVAILABLE") {
+          console.log(`  -> Skipping: status is ${driver.status}, not AVAILABLE`);
+          continue;
+        }
+
+        // Calculate distance from pickup location
+        const distanceInKm = geofire.distanceBetween([driver.lat, driver.lng], center);
+        console.log(`  -> Distance: ${distanceInKm.toFixed(2)} km`);
+
+        if (distanceInKm <= currentRadius) {
+          matchingDrivers.push({
+            distance: distanceInKm,
+            driverId,
+            lat: driver.lat,
+            lng: driver.lng,
+            status: driver.status,
+          });
+          console.log(`  -> ADDED to matching drivers`);
+        } else {
+          console.log(`  -> Skipping: outside ${currentRadius}km radius`);
+        }
       }
 
-      // Calculate distance from pickup location
-      const distanceInKm = geofire.distanceBetween([driver.lat, driver.lng], center);
-      console.log(`  -> Distance: ${distanceInKm.toFixed(2)} km`);
-
-      if (distanceInKm <= radiusInKm) {
-        matchingDrivers.push({
-          distance: distanceInKm,
-          driverId,
-          lat: driver.lat,
-          lng: driver.lng,
-          status: driver.status,
-        });
-        console.log(`  -> ADDED to matching drivers`);
-      } else {
-        console.log(`  -> Skipping: outside ${radiusInKm}km radius`);
+      if (matchingDrivers.length === 0) {
+        console.log(`No drivers found within ${currentRadius}km, expanding radius...`);
+        currentRadius += radiusIncrement;
       }
     }
 
     // Sort by distance (nearest first)
     matchingDrivers.sort((a, b) => a.distance - b.distance);
 
+    console.log(`Final search radius: ${currentRadius}km`);
     console.log("Matching drivers count:", matchingDrivers.length);
 
     if (matchingDrivers.length === 0) {
       return res.status(404).json({
-        message: "No available drivers found within 5km of your location",
+        message: `No available drivers found within ${maxRadius}km of your location`,
         success: false,
       });
     }
@@ -154,6 +167,21 @@ export const requestRide = async (req: Request, res: Response) => {
     };
 
     const rideRef = await db.collection("rides").add(rideData);
+
+    // ---------------------------------------------------------
+    // STEP 4.1: WRITE RIDE ASSIGNMENT TO RTDB FOR DRIVER
+    // ---------------------------------------------------------
+    // This allows the driver to listen in real-time for assigned rides
+    const assignedRideData = {
+      drop: { lat: dropLat, lng: dropLng },
+      pickup: { lat: pickupLat, lng: pickupLng },
+      rideId: rideRef.id,
+      riderId,
+      timestamp: Date.now(),
+    };
+
+    await rtdb.ref(`rides-assigned/${assignedDriver.driverId}`).set(assignedRideData);
+    console.log(`Ride assignment published to RTDB for driver: ${assignedDriver.driverId}`);
 
     // ---------------------------------------------------------
     // STEP 5: RETURN SUCCESS RESPONSE

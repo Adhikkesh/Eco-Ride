@@ -235,7 +235,12 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
   } | null>(null);
   const [eta, setEta] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
+  // Color-coded routes: blue for driver->pickup, green for pickup->destination
+  const [directionsToPickup, setDirectionsToPickup] = useState<google.maps.DirectionsResult | null>(
+    null,
+  );
+  const [directionsToDestination, setDirectionsToDestination] =
+    useState<google.maps.DirectionsResult | null>(null);
 
   // Pickup location state
   const [pickupLocation, setPickupLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -390,33 +395,53 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
       directionsServiceRef.current = new google.maps.DirectionsService();
     }
 
-    // Calculate route: Driver -> Pickup (rider location) -> Drop
+    const pickup = pickupLocation || currentLocation;
+
+    // Calculate route 1: Driver -> Pickup (BLUE route)
     directionsServiceRef.current.route(
       {
-        destination: { lat: selectedDestination.lat, lng: selectedDestination.lng },
+        destination: pickup,
         origin: assignedDriverLocation,
         travelMode: google.maps.TravelMode.DRIVING,
-        waypoints: [{ location: currentLocation, stopover: true }],
       },
       (result, status) => {
         if (status === google.maps.DirectionsStatus.OK && result) {
-          setDirections(result);
+          setDirectionsToPickup(result);
 
-          // Extract ETA from the first leg (driver to pickup)
-          const legs = result.routes[0]?.legs;
-          if (legs && legs.length > 0) {
-            // First leg is driver to pickup - this is the ETA
-            const driverToPickup = legs[0];
-            if (driverToPickup?.duration?.text) {
-              setEta(driverToPickup.duration.text);
-            }
+          // Extract ETA from driver to pickup
+          const leg = result.routes[0]?.legs[0];
+          if (leg?.duration?.text) {
+            setEta(leg.duration.text);
           }
         } else {
-          console.error("Directions request failed:", status);
+          console.error("Directions to pickup failed:", status);
         }
       },
     );
-  }, [isLoaded, rideStatus, assignedDriverLocation, currentLocation, selectedDestination]);
+
+    // Calculate route 2: Pickup -> Destination (GREEN route)
+    directionsServiceRef.current.route(
+      {
+        destination: { lat: selectedDestination.lat, lng: selectedDestination.lng },
+        origin: pickup,
+        travelMode: google.maps.TravelMode.DRIVING,
+      },
+      (result, status) => {
+        if (status === google.maps.DirectionsStatus.OK && result) {
+          setDirectionsToDestination(result);
+        } else {
+          console.error("Directions to destination failed:", status);
+        }
+      },
+    );
+  }, [
+    isLoaded,
+    rideStatus,
+    assignedDriverLocation,
+    currentLocation,
+    pickupLocation,
+    selectedDestination,
+  ]);
 
   // Animate driver markers
   useEffect(() => {
@@ -612,7 +637,8 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     setAssignedDriverId(null);
     setAssignedDriverLocation(null);
     setEta(null);
-    setDirections(null);
+    setDirectionsToPickup(null);
+    setDirectionsToDestination(null);
     setErrorMessage(null);
   };
 
@@ -996,6 +1022,48 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                   position: "relative",
                 }}
               >
+                {/* Route Legend - Show when matched */}
+                {rideStatus === "matched" && (directionsToPickup || directionsToDestination) && (
+                  <div
+                    style={{
+                      background: "rgba(15, 23, 42, 0.9)",
+                      borderRadius: "12px",
+                      bottom: "16px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "8px",
+                      left: "16px",
+                      padding: "12px 16px",
+                      position: "absolute",
+                      zIndex: 10,
+                    }}
+                  >
+                    <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                      <div
+                        style={{
+                          background: "#3b82f6",
+                          borderRadius: "2px",
+                          height: "4px",
+                          width: "24px",
+                        }}
+                      />
+                      <span style={{ color: "#94a3b8", fontSize: "12px" }}>Driver approaching</span>
+                    </div>
+                    <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                      <div
+                        style={{
+                          background: "#22c55e",
+                          borderRadius: "2px",
+                          height: "4px",
+                          width: "24px",
+                        }}
+                      />
+                      <span style={{ color: "#94a3b8", fontSize: "12px" }}>
+                        Trip to destination
+                      </span>
+                    </div>
+                  </div>
+                )}
                 {/* Manual pickup mode indicator */}
                 {manualPickupMode && (
                   <div
@@ -1029,18 +1097,34 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                   options={{
                     disableDefaultUI: true,
                     draggableCursor: manualPickupMode ? "crosshair" : undefined,
+                    gestureHandling: "greedy",
                     styles: darkMapStyles,
                     zoomControl: true,
                   }}
                 >
-                  {/* Route Directions */}
-                  {directions && (
+                  {/* Route Directions - Driver to Pickup (BLUE) */}
+                  {directionsToPickup && (
                     <DirectionsRenderer
-                      directions={directions}
+                      directions={directionsToPickup}
+                      options={{
+                        polylineOptions: {
+                          strokeColor: "#3b82f6",
+                          strokeOpacity: 0.9,
+                          strokeWeight: 5,
+                        },
+                        suppressMarkers: true,
+                      }}
+                    />
+                  )}
+
+                  {/* Route Directions - Pickup to Destination (GREEN) */}
+                  {directionsToDestination && (
+                    <DirectionsRenderer
+                      directions={directionsToDestination}
                       options={{
                         polylineOptions: {
                           strokeColor: "#22c55e",
-                          strokeOpacity: 0.8,
+                          strokeOpacity: 0.9,
                           strokeWeight: 5,
                         },
                         suppressMarkers: true,
