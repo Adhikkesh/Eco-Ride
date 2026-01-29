@@ -11,4 +11,4 @@ export const firebaseConfig = {
   storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
 };
 
-export const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+export const backendUrl = `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1`;
