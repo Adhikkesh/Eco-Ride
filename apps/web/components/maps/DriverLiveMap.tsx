@@ -10,7 +10,17 @@ import {
 import { onDisconnect, onValue, ref, remove, set } from "firebase/database";
 import * as geofire from "geofire-common";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FaCar, FaClock, FaLeaf, FaMapMarkerAlt, FaPowerOff, FaRoute } from "react-icons/fa";
+import {
+  FaCar,
+  FaClock,
+  FaFlagCheckered,
+  FaLeaf,
+  FaMapMarkerAlt,
+  FaPlay,
+  FaPowerOff,
+  FaRoute,
+} from "react-icons/fa";
+import { backendUrl } from "@/config";
 import { auth, rtdb } from "@/lib/firebase";
 import { darkMapStyles } from "@/lib/mapStyles";
 
@@ -36,6 +46,7 @@ interface AssignedRide {
   pickup: { lat: number; lng: number };
   drop: { lat: number; lng: number };
   timestamp: number;
+  status?: "MATCHED" | "IN_PROGRESS";
 }
 
 const styles = {
@@ -239,6 +250,8 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
       if (data) {
         console.log("Ride assigned:", data);
         setAssignedRide(data);
+        // Reset local ride status to saved status or MATCHED
+        setRideStatus(data.status || "MATCHED");
         // Auto-set status to BUSY when assigned
         setStatus("BUSY");
       } else {
@@ -250,6 +263,56 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
 
     return () => unsubscribe();
   }, [isOnline, userId]);
+
+  const [rideStatus, setRideStatus] = useState<"MATCHED" | "IN_PROGRESS" | "COMPLETED">("MATCHED");
+
+  const handleStartRide = async () => {
+    if (!assignedRide) return;
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch(`${backendUrl}/ride/start`, {
+        body: JSON.stringify({ rideId: assignedRide.rideId }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+      if (res.ok) {
+        setRideStatus("IN_PROGRESS");
+      } else {
+        console.error("Failed to start ride");
+      }
+    } catch (err) {
+      console.error("Error starting ride:", err);
+    }
+  };
+
+  const handleCompleteRide = async () => {
+    if (!assignedRide) return;
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch(`${backendUrl}/ride/complete`, {
+        body: JSON.stringify({ rideId: assignedRide.rideId }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+      if (res.ok) {
+        setRideStatus("COMPLETED");
+        setAssignedRide(null);
+        setDirectionsToPickup(null);
+        setDirectionsToDestination(null);
+        setStatus("AVAILABLE"); // Reset driver status
+      } else {
+        console.error("Failed to complete ride");
+      }
+    } catch (err) {
+      console.error("Error completing ride:", err);
+    }
+  };
 
   // Calculate routes when ride is assigned
   useEffect(() => {
@@ -696,24 +759,37 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
                   <FaRoute style={{ color: "#3b82f6", fontSize: "24px" }} />
                   <div>
                     <h2 style={{ color: "#fff", fontSize: "18px", fontWeight: 700, margin: 0 }}>
-                      Ride Assigned!
+                      {rideStatus === "IN_PROGRESS" ? "Trip in Progress" : "Ride Assigned!"}
                     </h2>
                     <p style={{ color: "#94a3b8", fontSize: "12px", margin: "2px 0 0" }}>
-                      Follow the routes on the map
+                      {rideStatus === "IN_PROGRESS" ? "Head to destination" : "Follow local laws"}
                     </p>
                   </div>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "12px",
+                    marginBottom: "20px",
+                  }}
+                >
                   <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
                     <div
                       style={{
-                        background: "#3b82f6",
+                        background: rideStatus === "IN_PROGRESS" ? "#64748b" : "#3b82f6",
                         borderRadius: "50%",
                         height: "10px",
                         width: "10px",
                       }}
                     />
-                    <span style={{ color: "#94a3b8", fontSize: "13px" }}>
+                    <span
+                      style={{
+                        color: rideStatus === "IN_PROGRESS" ? "#64748b" : "#94a3b8",
+                        fontSize: "13px",
+                        textDecoration: rideStatus === "IN_PROGRESS" ? "line-through" : "none",
+                      }}
+                    >
                       Pickup: {assignedRide.pickup.lat.toFixed(4)},{" "}
                       {assignedRide.pickup.lng.toFixed(4)}
                     </span>
@@ -732,6 +808,54 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
                     </span>
                   </div>
                 </div>
+
+                {rideStatus === "MATCHED" ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleStartRide();
+                    }}
+                    style={{
+                      background: "linear-gradient(90deg, #3b82f6, #2563eb)",
+                      border: "none",
+                      borderRadius: "12px",
+                      color: "white",
+                      cursor: "pointer",
+                      display: "flex",
+                      fontSize: "16px",
+                      fontWeight: 600,
+                      gap: "8px",
+                      justifyContent: "center",
+                      padding: "12px",
+                      width: "100%",
+                    }}
+                  >
+                    <FaPlay /> Start Trip
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleCompleteRide();
+                    }}
+                    style={{
+                      background: "linear-gradient(90deg, #22c55e, #16a34a)",
+                      border: "none",
+                      borderRadius: "12px",
+                      color: "white",
+                      cursor: "pointer",
+                      display: "flex",
+                      fontSize: "16px",
+                      fontWeight: 600,
+                      gap: "8px",
+                      justifyContent: "center",
+                      padding: "12px",
+                      width: "100%",
+                    }}
+                  >
+                    <FaFlagCheckered /> Complete Trip
+                  </button>
+                )}
               </div>
             )}
 

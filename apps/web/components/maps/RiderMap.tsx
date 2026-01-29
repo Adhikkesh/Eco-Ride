@@ -10,7 +10,7 @@ import {
 } from "@react-google-maps/api";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { onValue, ref } from "firebase/database";
-import { collection, doc, getDoc, getDocs, limit, query, where } from "firebase/firestore";
+import { doc, getDoc } from "firebase/firestore";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FaCar,
@@ -107,6 +107,7 @@ const styles = {
     fontWeight: 600,
     gap: "12px",
     justifyContent: "center",
+    marginTop: "4px",
     padding: "16px 24px",
     width: "100%",
   } as React.CSSProperties,
@@ -415,6 +416,43 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
 
     return () => unsubscribe();
   }, []);
+
+  // Listen for ride status changes (Start/Complete) via RTDB (Bypasses Firestore permissions)
+  useEffect(() => {
+    if (!rideId || !rtdb) return;
+
+    const rideStatusRef = ref(rtdb, `rides/${rideId}`);
+    const unsubscribe = onValue(rideStatusRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        console.log("DEBUG: RTDB Ride Update:", data);
+
+        if (data.status === "IN_PROGRESS") {
+          setRideStatus("on_trip");
+        } else if (data.status === "COMPLETED") {
+          // Trip Completed Logic
+          // Trip Completed Logic
+          setRideStatus("idle");
+          setRideId(null);
+          setAssignedDriverId(null);
+          setAssignedDriverName(null);
+          setAssignedDriverLocation(null);
+          setDirectionsToPickup(null);
+          setDirectionsToDestination(null);
+          setEta(null);
+          setPickupLocation(null);
+          setSelectedDestination(null);
+          setSearchDestination("");
+          setManualPickupMode(false);
+          setErrorMessage(null);
+          localStorage.removeItem("currentRideId");
+          alert("Your trip has been completed! Thank you for riding with EcoRide.");
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [rideId]);
 
   // Listen to online drivers
   useEffect(() => {
@@ -865,7 +903,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
           {/* Left Column - Map and Search */}
           <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
             {/* Driver Matched Card */}
-            {rideStatus === "matched" && assignedDriverId && (
+            {(rideStatus === "matched" || rideStatus === "on_trip") && assignedDriverId && (
               <div style={styles.matchedCard}>
                 <div
                   style={{
@@ -890,10 +928,12 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                   </div>
                   <div>
                     <h2 style={{ color: "#4ade80", fontSize: "22px", fontWeight: 700, margin: 0 }}>
-                      Driver Assigned!
+                      {rideStatus === "on_trip" ? "Trip in Progress" : "Driver Assigned!"}
                     </h2>
                     <p style={{ color: "#94a3b8", fontSize: "14px", margin: "4px 0 0" }}>
-                      Your driver is on the way
+                      {rideStatus === "on_trip"
+                        ? "Sit back and relax"
+                        : "Your driver is on the way"}
                     </p>
                   </div>
                 </div>
@@ -939,24 +979,30 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                 <button
                   type="button"
                   onClick={handleCancelRide}
-                  style={{
-                    alignItems: "center",
-                    background: "rgba(239, 68, 68, 0.2)",
-                    border: "1px solid rgba(239, 68, 68, 0.5)",
-                    borderRadius: "12px",
-                    color: "#f87171",
-                    cursor: "pointer",
-                    display: "flex",
-                    fontSize: "14px",
-                    fontWeight: 500,
-                    gap: "8px",
-                    justifyContent: "center",
-                    marginTop: "16px",
-                    padding: "12px",
-                    width: "100%",
-                  }}
+                  disabled={rideStatus === "on_trip"}
+                  style={
+                    rideStatus === "on_trip"
+                      ? styles.actionButtonDisabled
+                      : {
+                          alignItems: "center",
+                          background: "rgba(239, 68, 68, 0.2)",
+                          border: "1px solid rgba(239, 68, 68, 0.5)",
+                          borderRadius: "12px",
+                          color: "#f87171",
+                          cursor: "pointer",
+                          display: "flex",
+                          fontSize: "14px",
+                          fontWeight: 500,
+                          gap: "8px",
+                          justifyContent: "center",
+
+                          marginTop: "2px",
+                          padding: "12px",
+                          width: "100%",
+                        }
+                  }
                 >
-                  <FaTimes /> Cancel Ride
+                  <FaTimes /> {rideStatus === "on_trip" ? "Trip Started" : "Cancel Ride"}
                 </button>
               </div>
             )}

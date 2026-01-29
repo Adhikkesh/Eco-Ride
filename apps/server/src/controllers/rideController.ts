@@ -276,10 +276,77 @@ export const cancelRide = async (req: Request, res: Response) => {
   }
 };
 
+export const startRide = async (req: Request, res: Response) => {
+  try {
+    const { rideId } = req.body;
+    if (!rideId) return res.status(400).json({ message: "Missing rideId", success: false });
+
+    await db.collection("rides").doc(rideId).update({
+      startedAt: FieldValue.serverTimestamp(),
+      status: "IN_PROGRESS",
+    });
+
+    // Sync to RTDB for frontend listener
+    await rtdb.ref(`rides/${rideId}`).update({
+      status: "IN_PROGRESS",
+    });
+
+    // Also update the driver's assignment record so they know the status on reload
+    const rideDoc = await db.collection("rides").doc(rideId).get();
+    const driverId = rideDoc.data()?.driverId;
+    if (driverId) {
+      await rtdb.ref(`rides-assigned/${driverId}`).update({
+        status: "IN_PROGRESS",
+      });
+    }
+
+    return res.status(200).json({ message: "Ride started", success: true });
+  } catch (error) {
+    console.error("Start Ride Error:", error);
+    return res.status(500).json({ message: "Error starting ride", success: false });
+  }
+};
+
+export const completeRide = async (req: Request, res: Response) => {
+  try {
+    const { rideId } = req.body;
+    if (!rideId) return res.status(400).json({ message: "Missing rideId", success: false });
+
+    const rideRef = db.collection("rides").doc(rideId);
+    const rideDoc = await rideRef.get();
+
+    if (!rideDoc.exists) return res.status(404).json({ message: "Ride not found", success: false });
+
+    const driverId = rideDoc.data()?.driverId;
+
+    // 1. Update Ride Status
+    await rideRef.update({
+      completedAt: FieldValue.serverTimestamp(),
+      status: "COMPLETED",
+    });
+
+    // 2. Free up the driver
+    if (driverId) {
+      await rtdb.ref(`rides-assigned/${driverId}`).remove();
+      await rtdb.ref(`drivers-online/${driverId}`).update({ status: "AVAILABLE" });
+    }
+
+    // 3. Sync to RTDB for frontend listener
+    await rtdb.ref(`rides/${rideId}`).update({
+      status: "COMPLETED",
+    });
+
+    return res.status(200).json({ message: "Ride completed", success: true });
+  } catch (error) {
+    console.error("Complete Ride Error:", error);
+    return res.status(500).json({ message: "Error completing ride", success: false });
+  }
+};
+
 export const getActiveRide = async (req: Request, res: Response) => {
   try {
     // metadata is attached by verifyToken middleware
-    const riderId = (req as any).user?.uid;
+    const riderId = req.user?.uid;
 
     if (!riderId) {
       return res.status(401).json({
@@ -291,7 +358,7 @@ export const getActiveRide = async (req: Request, res: Response) => {
     const ridesRef = db.collection("rides");
     const snapshot = await ridesRef
       .where("riderId", "==", riderId)
-      .where("status", "==", "MATCHED")
+      .where("status", "in", ["MATCHED", "IN_PROGRESS"])
       .limit(1)
       .get();
 

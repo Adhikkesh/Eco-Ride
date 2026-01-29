@@ -5,7 +5,13 @@ import {
 } from "../controllers/adminController.js";
 import { VerifyTokenController } from "../controllers/authController.js";
 import { GetMeController, HealthCheckController } from "../controllers/index.js";
-import { cancelRide, getActiveRide, requestRide } from "../controllers/rideController.js";
+import {
+  cancelRide,
+  completeRide,
+  getActiveRide,
+  requestRide,
+  startRide,
+} from "../controllers/rideController.js";
 import { CreateUserController } from "../controllers/userController.js";
 import { verifyToken } from "../middleware/authMiddleware.js";
 
@@ -20,6 +26,8 @@ router.post("/user", verifyToken, CreateUserController);
 router.post("/ride/request", verifyToken, requestRide);
 router.get("/ride/active", verifyToken, getActiveRide);
 router.post("/ride/cancel", verifyToken, cancelRide);
+router.post("/ride/start", verifyToken, startRide);
+router.post("/ride/complete", verifyToken, completeRide);
 
 // Admin routes
 router.get("/admin/drivers/unverified", verifyToken, GetUnverifiedDriversController);
