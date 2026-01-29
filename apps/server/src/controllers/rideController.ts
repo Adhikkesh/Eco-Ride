@@ -186,6 +186,17 @@ export const requestRide = async (req: Request, res: Response) => {
     // ---------------------------------------------------------
     // STEP 5: RETURN SUCCESS RESPONSE
     // ---------------------------------------------------------
+    // Fetch driver name from Firestore
+    let driverName = "Unknown Driver";
+    try {
+      const userDoc = await db.collection("users").doc(assignedDriver.driverId).get();
+      if (userDoc.exists) {
+        driverName = userDoc.data()?.name || "Unknown Driver";
+      }
+    } catch (err) {
+      console.error("Error fetching driver name:", err);
+    }
+
     // Estimate ETA based on distance (rough estimate: 2 min per km)
     const etaMinutes = Math.ceil(assignedDriver.distance * 2);
 
@@ -196,6 +207,7 @@ export const requestRide = async (req: Request, res: Response) => {
         lat: assignedDriver.lat,
         lng: assignedDriver.lng,
       },
+      driverName,
       eta: `${etaMinutes} min`,
       message: "Driver matched successfully!",
       rideId: rideRef.id,

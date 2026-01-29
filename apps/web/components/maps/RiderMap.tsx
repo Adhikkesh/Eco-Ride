@@ -63,6 +63,7 @@ interface RideResponse {
   message: string;
   rideId?: string;
   driverId?: string;
+  driverName?: string;
   driverLocation?: { lat: number; lng: number };
   distance?: number;
   eta?: string;
@@ -229,6 +230,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
   const [rideStatus, setRideStatus] = useState<RideStatus>("idle");
   const [rideId, setRideId] = useState<string | null>(null);
   const [assignedDriverId, setAssignedDriverId] = useState<string | null>(null);
+  const [assignedDriverName, setAssignedDriverName] = useState<string | null>(null);
   const [assignedDriverLocation, setAssignedDriverLocation] = useState<{
     lat: number;
     lng: number;
@@ -617,6 +619,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
         setRideStatus("matched");
         setRideId(data.rideId || null);
         setAssignedDriverId(data.driverId);
+        setAssignedDriverName(data.driverName || "Unknown Driver");
         setAssignedDriverLocation(data.driverLocation);
         setEta(data.eta || null);
       } else {
@@ -635,6 +638,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     setRideStatus("idle");
     setRideId(null);
     setAssignedDriverId(null);
+    setAssignedDriverName(null);
     setAssignedDriverLocation(null);
     setEta(null);
     setDirectionsToPickup(null);
@@ -775,16 +779,16 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                   }}
                 >
                   <div>
-                    <p style={{ color: "#94a3b8", fontSize: "12px", margin: 0 }}>Driver ID</p>
+                    <p style={{ color: "#94a3b8", fontSize: "12px", margin: 0 }}>Driver Name</p>
                     <p
                       style={{
                         color: "white",
-                        fontFamily: "monospace",
                         fontSize: "14px",
+                        fontWeight: 600,
                         margin: "4px 0 0",
                       }}
                     >
-                      {assignedDriverId.slice(0, 12)}...
+                      {assignedDriverName}
                     </p>
                   </div>
                   <div>
