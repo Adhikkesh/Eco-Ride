@@ -39,4 +39,14 @@ yarn-error.log*
 
 firebase_credential.json
 
+# Generated Reports
+biome_report.json
+driver_lint.json
+driver_lint_clean.json
+*_errors.txt
+*_output.txt
+full_lint_report.txt
+check_head.txt
+
+
 
