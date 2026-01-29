@@ -8,8 +8,9 @@ import {
   Marker,
   useJsApiLoader,
 } from "@react-google-maps/api";
+import { onAuthStateChanged, type User } from "firebase/auth";
 import { onValue, ref } from "firebase/database";
-import { doc, getDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, limit, query, where } from "firebase/firestore";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FaCar,
@@ -317,6 +318,104 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     return () => unsubscribe();
   }, []);
 
+  // Check for active ride on mount
+  useEffect(() => {
+    const checkActiveRide = async () => {
+      const user = auth?.currentUser;
+      if (!user || !db) return;
+
+      // TOP PRIORITY: Check localStorage first (bypasses list query permissions)
+      const cachedRideId = localStorage.getItem("currentRideId");
+      if (cachedRideId) {
+        try {
+          console.log("Checking cached ride:", cachedRideId);
+          const rideDocRef = doc(db, "rides", cachedRideId);
+          const rideDoc = await getDoc(rideDocRef);
+
+          if (rideDoc.exists()) {
+            const rideData = rideDoc.data();
+            // Only restore if it's still active
+            if (rideData && rideData.status === "MATCHED") {
+              console.log("Restoring ride from cache");
+              setRideStatus("matched");
+              setRideId(cachedRideId);
+              setAssignedDriverId(rideData.driverId);
+
+              // Use stored driver name if available (new rides), otherwise fetch (legacy rides)
+              console.log("DEBUG: Restoring ride", {
+                hasDriverName: !!rideData.driverName,
+                rideId: cachedRideId,
+              });
+
+              if (rideData.driverName) {
+                setAssignedDriverName(rideData.driverName);
+              } else {
+                console.warn("DEBUG: driverName missing in ride doc, attempting fetch");
+                try {
+                  const userDoc = await getDoc(doc(db, "users", rideData.driverId));
+                  if (userDoc.exists()) {
+                    setAssignedDriverName(userDoc.data()?.name || "Unknown Driver");
+                  }
+                } catch (err) {
+                  console.warn("Permission error fetching driver name (expected for rider):", err);
+                  setAssignedDriverName("Unknown Driver");
+                }
+              }
+              return; // Exit early if successful
+            } else {
+              // Ride is no longer valid, clear cache
+              localStorage.removeItem("currentRideId");
+            }
+          }
+        } catch (error) {
+          console.error("Error checking cached ride:", error);
+          // Don't return, fall through to query method as backup
+        }
+      }
+
+      // FALLBACK: Query Backend API (Bypasses Firestore Security Rules)
+      try {
+        console.log("DEBUG: Checking active ride via Backend API...");
+        const token = await user.getIdToken();
+        const response = await fetch(`${backendUrl}/ride/active`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.rideId) {
+            console.log("DEBUG: Active ride found via API:", data);
+            setRideStatus("matched");
+            setRideId(data.rideId);
+            localStorage.setItem("currentRideId", data.rideId);
+            setAssignedDriverId(data.driverId);
+            setAssignedDriverName(data.driverName || "Unknown Driver");
+
+            // ETA logic
+            // We can re-calculate ETA in the effect that watches driver location
+          }
+        } else {
+          if (response.status !== 404) {
+            console.warn("DEBUG: Backend check active ride failed:", response.status);
+          }
+        }
+      } catch (error) {
+        console.error("Error checking active ride via API:", error);
+      }
+    };
+
+    // Use onAuthStateChanged to ensure we have a user
+    const unsubscribe = onAuthStateChanged(auth, (user: User | null) => {
+      if (user) {
+        checkActiveRide();
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   // Listen to online drivers
   useEffect(() => {
     if (!rtdb) return;
@@ -331,10 +430,17 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
 
         const data = snapshot.val();
         const newDrivers = new Map<string, DriverMarker>();
+        const now = Date.now();
+        const STALE_THRESHOLD = 5 * 60 * 1000; // 5 minutes
 
         if (data) {
           Object.entries(data).forEach(([driverId, locationData]) => {
             const location = locationData as DriverLocation;
+            // Filter out stale drivers (older than 5 mins or missing timestamp)
+            if (!location.lastUpdated || now - location.lastUpdated > STALE_THRESHOLD) {
+              return;
+            }
+
             newDrivers.set(driverId, {
               animatedLat: location.lat,
               animatedLng: location.lng,
@@ -615,9 +721,11 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
 
       const data: RideResponse = await response.json();
 
-      if (data.success && data.driverId && data.driverLocation) {
+      if (data.success && data.rideId && data.driverId && data.driverLocation) {
         setRideStatus("matched");
-        setRideId(data.rideId || null);
+        setRideId(data.rideId);
+        // Persist to localStorage
+        localStorage.setItem("currentRideId", data.rideId);
         setAssignedDriverId(data.driverId);
         setAssignedDriverName(data.driverName || "Unknown Driver");
         setAssignedDriverLocation(data.driverLocation);
@@ -633,17 +741,39 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     }
   };
 
-  const handleCancelRide = () => {
-    // Reset all ride state
-    setRideStatus("idle");
-    setRideId(null);
-    setAssignedDriverId(null);
-    setAssignedDriverName(null);
-    setAssignedDriverLocation(null);
-    setEta(null);
-    setDirectionsToPickup(null);
-    setDirectionsToDestination(null);
-    setErrorMessage(null);
+  const handleCancelRide = async () => {
+    if (!rideId) return;
+
+    try {
+      const user = auth?.currentUser;
+      const token = await user?.getIdToken();
+
+      await fetch(`${backendUrl}/ride/cancel`, {
+        body: JSON.stringify({ rideId }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+
+      // Clear persistence
+      localStorage.removeItem("currentRideId");
+
+      // Reset all ride state
+      setRideStatus("idle");
+      setRideId(null);
+      setAssignedDriverId(null);
+      setAssignedDriverName(null);
+      setAssignedDriverLocation(null);
+      setEta(null);
+      setDirectionsToPickup(null);
+      setDirectionsToDestination(null);
+      setErrorMessage(null);
+    } catch (error) {
+      console.error("Error cancelling ride:", error);
+      setErrorMessage("Failed to cancel ride. Please try again.");
+    }
   };
 
   const handleViewRewards = () => {

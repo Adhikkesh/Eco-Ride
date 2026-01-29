@@ -155,9 +155,21 @@ export const requestRide = async (req: Request, res: Response) => {
     // ---------------------------------------------------------
     // STEP 4: CREATE RIDE DOCUMENT IN FIRESTORE
     // ---------------------------------------------------------
+    // Fetch driver name from Firestore BEFORE creating the ride
+    let driverName = "Unknown Driver";
+    try {
+      const userDoc = await db.collection("users").doc(assignedDriver.driverId).get();
+      if (userDoc.exists) {
+        driverName = userDoc.data()?.name || "Unknown Driver";
+      }
+    } catch (err) {
+      console.error("Error fetching driver name:", err);
+    }
+
     const rideData = {
       createdAt: FieldValue.serverTimestamp(),
       driverId: assignedDriver.driverId,
+      driverName,
       drop: { lat: dropLat, lng: dropLng },
       fare: null, // Will be calculated later
       matchedAt: FieldValue.serverTimestamp(),
@@ -186,16 +198,6 @@ export const requestRide = async (req: Request, res: Response) => {
     // ---------------------------------------------------------
     // STEP 5: RETURN SUCCESS RESPONSE
     // ---------------------------------------------------------
-    // Fetch driver name from Firestore
-    let driverName = "Unknown Driver";
-    try {
-      const userDoc = await db.collection("users").doc(assignedDriver.driverId).get();
-      if (userDoc.exists) {
-        driverName = userDoc.data()?.name || "Unknown Driver";
-      }
-    } catch (err) {
-      console.error("Error fetching driver name:", err);
-    }
 
     // Estimate ETA based on distance (rough estimate: 2 min per km)
     const etaMinutes = Math.ceil(assignedDriver.distance * 2);
@@ -217,6 +219,126 @@ export const requestRide = async (req: Request, res: Response) => {
     console.error("Ride Request Error:", error);
     return res.status(500).json({
       message: "Internal server error while processing ride request",
+      success: false,
+    });
+  }
+};
+
+export const cancelRide = async (req: Request, res: Response) => {
+  try {
+    const { rideId } = req.body;
+
+    if (!rideId) {
+      return res.status(400).json({
+        message: "Missing rideId",
+        success: false,
+      });
+    }
+
+    // Get ride details
+    const rideRef = db.collection("rides").doc(rideId);
+    const rideDoc = await rideRef.get();
+
+    if (!rideDoc.exists) {
+      return res.status(404).json({
+        message: "Ride not found",
+        success: false,
+      });
+    }
+
+    const rideData = rideDoc.data();
+    const driverId = rideData?.driverId;
+
+    // 1. Update Firestore status
+    await rideRef.update({
+      cancelledAt: FieldValue.serverTimestamp(),
+      status: "CANCELLED",
+    });
+
+    // 2. Notify Driver (Remove assignment) & Make Driver Available
+    if (driverId) {
+      await rtdb.ref(`rides-assigned/${driverId}`).remove();
+      await rtdb.ref(`drivers-online/${driverId}`).update({
+        status: "AVAILABLE",
+      });
+    }
+
+    return res.status(200).json({
+      message: "Ride cancelled successfully",
+      success: true,
+    });
+  } catch (error) {
+    console.error("Cancel Ride Error:", error);
+    return res.status(500).json({
+      message: "Internal server error while cancelling ride",
+      success: false,
+    });
+  }
+};
+
+export const getActiveRide = async (req: Request, res: Response) => {
+  try {
+    // metadata is attached by verifyToken middleware
+    const riderId = (req as any).user?.uid;
+
+    if (!riderId) {
+      return res.status(401).json({
+        message: "Unauthorized",
+        success: false,
+      });
+    }
+
+    const ridesRef = db.collection("rides");
+    const snapshot = await ridesRef
+      .where("riderId", "==", riderId)
+      .where("status", "==", "MATCHED")
+      .limit(1)
+      .get();
+
+    if (snapshot.empty) {
+      return res.status(404).json({
+        message: "No active ride found",
+        success: false,
+      });
+    }
+
+    const rideDoc = snapshot.docs[0];
+
+    if (!rideDoc) {
+      return res.status(404).json({
+        message: "No active ride found",
+        success: false,
+      });
+    }
+
+    const rideData = rideDoc.data();
+
+    // If driverName is missing in Firestore, we can fetch it here safely (Admin SDK)
+    let driverName = rideData.driverName;
+    if (!driverName && rideData.driverId) {
+      try {
+        const userDoc = await db.collection("users").doc(rideData.driverId).get();
+        if (userDoc.exists) {
+          driverName = userDoc.data()?.name || "Unknown Driver";
+        }
+      } catch (err) {
+        console.error("Error fetching driver name in active ride check:", err);
+      }
+    }
+
+    return res.status(200).json({
+      driverId: rideData.driverId,
+      driverName: driverName || "Unknown Driver",
+      drop: rideData.drop,
+      pickup: rideData.pickup,
+      rideId: rideDoc.id,
+      status: rideData.status,
+      success: true,
+    });
+  } catch (error) {
+    console.error("Get Active Ride Error:", error);
+    return res.status(500).json({
+      message: "Internal server error fetching active ride",
       success: false,
     });
   }
