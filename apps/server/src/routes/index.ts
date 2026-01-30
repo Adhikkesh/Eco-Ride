@@ -4,6 +4,7 @@ import {
   VerifyDriverController,
 } from "../controllers/adminController.js";
 import { VerifyTokenController } from "../controllers/authController.js";
+import { calculateFare } from "../controllers/fareController.js";
 import { GetMeController, HealthCheckController } from "../controllers/index.js";
 import {
   cancelRide,
@@ -28,6 +29,7 @@ router.get("/ride/active", verifyToken, getActiveRide);
 router.post("/ride/cancel", verifyToken, cancelRide);
 router.post("/ride/start", verifyToken, startRide);
 router.post("/ride/complete", verifyToken, completeRide);
+router.post("/ride/estimate", verifyToken, calculateFare);
 
 // Admin routes
 router.get("/admin/drivers/unverified", verifyToken, GetUnverifiedDriversController);

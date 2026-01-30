@@ -1,11 +1,13 @@
 "use client";
 
+import polylineUtil from "@mapbox/polyline";
 import {
   Autocomplete,
   DirectionsRenderer,
   GoogleMap,
   type Libraries,
   Marker,
+  Polyline,
   useJsApiLoader,
 } from "@react-google-maps/api";
 import { onAuthStateChanged, type User } from "firebase/auth";
@@ -15,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FaCar,
   FaCheckCircle,
+  FaClock,
   FaGift,
   FaLeaf,
   FaMapMarkerAlt,
@@ -26,6 +29,7 @@ import {
   FaUsers,
 } from "react-icons/fa";
 import { backendUrl } from "@/config";
+import { useTripEstimator } from "@/hooks/useTripEstimator";
 import { auth, db, rtdb } from "@/lib/firebase";
 import { darkMapStyles } from "@/lib/mapStyles";
 
@@ -255,6 +259,10 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
   const [pickupSearchText, setPickupSearchText] = useState("");
   const [manualPickupMode, setManualPickupMode] = useState(false);
 
+  // Estimation State
+  const { getEstimate, estimate, loading: estimating, clearEstimate } = useTripEstimator();
+  const [decodedPolyline, setDecodedPolyline] = useState<{ lat: number; lng: number }[]>([]);
+
   const mapRef = useRef<google.maps.Map | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
@@ -299,8 +307,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
 
   // Fetch user stats from Firestore when user is authenticated
   useEffect(() => {
-    // Import onAuthStateChanged dynamically
-    const { onAuthStateChanged } = require("firebase/auth");
+    // Use the imported onAuthStateChanged
 
     const unsubscribe = onAuthStateChanged(auth, async (user: { uid: string } | null) => {
       if (user && db) {
@@ -361,8 +368,10 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                   if (userDoc.exists()) {
                     setAssignedDriverName(userDoc.data()?.name || "Unknown Driver");
                   }
-                } catch (err) {
-                  console.warn("Permission error fetching driver name (expected for rider):", err);
+                } catch (_err) {
+                  console.log(
+                    "Note: Could not fetch driver name details (expected behavior due to privacy rules). Using default.",
+                  );
                   setAssignedDriverName("Unknown Driver");
                 }
               }
@@ -540,13 +549,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
 
   // Calculate and update route when driver location or destination changes
   useEffect(() => {
-    if (
-      !isLoaded ||
-      rideStatus !== "matched" ||
-      !assignedDriverLocation ||
-      !currentLocation ||
-      !selectedDestination
-    ) {
+    if (!isLoaded || (!assignedDriverLocation && !currentLocation) || !selectedDestination) {
       return;
     }
 
@@ -556,43 +559,68 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
 
     const pickup = pickupLocation || currentLocation;
 
-    // Calculate route 1: Driver -> Pickup (BLUE route)
-    directionsServiceRef.current.route(
-      {
-        destination: pickup,
-        origin: assignedDriverLocation,
-        travelMode: google.maps.TravelMode.DRIVING,
-      },
-      (result, status) => {
-        if (status === google.maps.DirectionsStatus.OK && result) {
-          setDirectionsToPickup(result);
+    // CASE 1: MATCHED (Driver coming to pickup)
+    if (rideStatus === "matched" && assignedDriverLocation && pickup) {
+      // Calculate route: Driver -> Pickup
+      directionsServiceRef.current.route(
+        {
+          destination: pickup,
+          origin: assignedDriverLocation,
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          if (status === google.maps.DirectionsStatus.OK && result) {
+            setDirectionsToPickup(result);
 
-          // Extract ETA from driver to pickup
-          const leg = result.routes[0]?.legs[0];
-          if (leg?.duration?.text) {
-            setEta(leg.duration.text);
+            // Extract ETA from driver to pickup
+            const leg = result.routes[0]?.legs[0];
+            if (leg?.duration?.text) {
+              setEta(leg.duration.text);
+            }
+          } else {
+            console.error("Directions to pickup failed:", status);
           }
-        } else {
-          console.error("Directions to pickup failed:", status);
-        }
-      },
-    );
+        },
+      );
 
-    // Calculate route 2: Pickup -> Destination (GREEN route)
-    directionsServiceRef.current.route(
-      {
-        destination: { lat: selectedDestination.lat, lng: selectedDestination.lng },
-        origin: pickup,
-        travelMode: google.maps.TravelMode.DRIVING,
-      },
-      (result, status) => {
-        if (status === google.maps.DirectionsStatus.OK && result) {
-          setDirectionsToDestination(result);
-        } else {
-          console.error("Directions to destination failed:", status);
-        }
-      },
-    );
+      // Also prepare route: Pickup -> Destination for display
+      directionsServiceRef.current.route(
+        {
+          destination: { lat: selectedDestination.lat, lng: selectedDestination.lng },
+          origin: pickup,
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          if (status === google.maps.DirectionsStatus.OK && result) {
+            setDirectionsToDestination(result);
+          }
+        },
+      );
+    }
+
+    // CASE 2: ON TRIP (Driving to Destination)
+    else if (rideStatus === "on_trip" && assignedDriverLocation) {
+      // Calculate route: Driver (Current Loc) -> Destination
+      directionsServiceRef.current.route(
+        {
+          destination: { lat: selectedDestination.lat, lng: selectedDestination.lng },
+          origin: assignedDriverLocation, // Driver's current location is the car location
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          if (status === google.maps.DirectionsStatus.OK && result) {
+            setDirectionsToDestination(result);
+            setDirectionsToPickup(null); // Clear pickup route
+
+            // Extract ETA to destination
+            const leg = result.routes[0]?.legs[0];
+            if (leg?.duration?.text) {
+              setEta(leg.duration.text);
+            }
+          }
+        },
+      );
+    }
   }, [
     isLoaded,
     rideStatus,
@@ -727,6 +755,49 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     }
   }, []);
 
+  // Handle Get Estimate
+  const handleGetEstimate = async () => {
+    if (!currentLocation || !selectedDestination) {
+      setErrorMessage("Please select a destination first");
+      return;
+    }
+
+    const pickup = pickupLocation || currentLocation;
+    if (!pickup) {
+      setErrorMessage("Please set a pickup location");
+      return;
+    }
+
+    const result = await getEstimate(pickup, {
+      lat: selectedDestination.lat,
+      lng: selectedDestination.lng,
+    });
+
+    if (result?.polyline) {
+      try {
+        const decoded = polylineUtil.decode(result.polyline);
+        const path = decoded.map((p) => ({ lat: p[0], lng: p[1] }));
+        setDecodedPolyline(path);
+
+        // Fit bounds
+        if (mapRef.current) {
+          const bounds = new google.maps.LatLngBounds();
+          path.forEach((p) => {
+            bounds.extend(p);
+          });
+          mapRef.current.fitBounds(bounds);
+        }
+      } catch (e) {
+        console.error("Polyline decode error", e);
+      }
+    }
+  };
+
+  const cancelEstimate = () => {
+    clearEstimate();
+    setDecodedPolyline([]);
+  };
+
   const handleFindRide = async () => {
     if (!currentLocation || !selectedDestination) {
       setErrorMessage("Please select a destination first");
@@ -735,6 +806,8 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
 
     setRideStatus("searching");
     setErrorMessage(null);
+    clearEstimate(); // Clear estimate UI when searching starts
+    setDecodedPolyline([]);
 
     try {
       // Get auth token
@@ -762,6 +835,8 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
           pickupLat: pickup.lat,
           pickupLng: pickup.lng,
           riderId: user.uid,
+          // If we had fare in request, pass it here, but typically backend recalc or trusts estimate
+          // For now, adhere to existing API
         }),
         headers: {
           Authorization: `Bearer ${token}`,
@@ -1172,38 +1247,119 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                   </div>
                 )}
 
-                <button
-                  type="button"
-                  onClick={handleFindRide}
-                  disabled={!canRequestRide}
-                  style={canRequestRide ? styles.actionButton : styles.actionButtonDisabled}
-                  onMouseEnter={(e) => {
-                    if (canRequestRide) {
-                      e.currentTarget.style.transform = "translateY(-2px)";
-                      e.currentTarget.style.boxShadow = "0 12px 28px rgba(34, 197, 94, 0.4)";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (canRequestRide) {
-                      e.currentTarget.style.transform = "translateY(0)";
-                      e.currentTarget.style.boxShadow = "0 8px 24px rgba(34, 197, 94, 0.3)";
-                    }
-                  }}
-                >
-                  {rideStatus === "searching" ? (
-                    <>
-                      <FaSpinner
-                        style={{ animation: "spin 1s linear infinite", fontSize: "20px" }}
-                      />
-                      Finding Driver...
-                    </>
-                  ) : (
-                    <>
-                      <FaCar style={{ fontSize: "20px" }} />
-                      Find a Ride
-                    </>
-                  )}
-                </button>
+                {/* Estimate Card */}
+                {estimate ? (
+                  <div
+                    style={{
+                      background: "rgba(34, 197, 94, 0.1)",
+                      border: "1px solid rgba(34, 197, 94, 0.3)",
+                      borderRadius: "16px",
+                      marginBottom: "10px",
+                      padding: "16px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        alignItems: "flex-end",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        marginBottom: "12px",
+                      }}
+                    >
+                      <div>
+                        <div style={{ color: "#94a3b8", fontSize: "12px" }}>Total Fare</div>
+                        <div style={{ color: "#22c55e", fontSize: "24px", fontWeight: "bold" }}>
+                          ₹{estimate.fare}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div
+                          style={{
+                            alignItems: "center",
+                            color: "#e2e8f0",
+                            display: "flex",
+                            fontSize: "14px",
+                            gap: "6px",
+                          }}
+                        >
+                          <FaClock size={12} /> {estimate.eta_min} min
+                        </div>
+                        <div style={{ color: "#94a3b8", fontSize: "12px" }}>
+                          {estimate.distance_km} km
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", gap: "12px" }}>
+                      <button
+                        type="button"
+                        onClick={cancelEstimate}
+                        style={{
+                          background: "rgba(239, 68, 68, 0.1)",
+                          border: "1px solid rgba(239, 68, 68, 0.5)",
+                          borderRadius: "12px",
+                          color: "#f87171",
+                          cursor: "pointer",
+                          flex: 1,
+                          fontWeight: 600,
+                          padding: "12px",
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleFindRide}
+                        style={{
+                          background: "linear-gradient(135deg, #22c55e, #10b981)",
+                          border: "none",
+                          borderRadius: "12px",
+                          boxShadow: "0 4px 12px rgba(34, 197, 94, 0.3)",
+                          color: "white",
+                          cursor: "pointer",
+                          flex: 2,
+                          fontWeight: 600,
+                          padding: "12px",
+                        }}
+                      >
+                        Confirm Ride
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleFindRide}
+                    disabled={!canRequestRide}
+                    style={canRequestRide ? styles.actionButton : styles.actionButtonDisabled}
+                    onMouseEnter={(e) => {
+                      if (canRequestRide) {
+                        e.currentTarget.style.transform = "translateY(-2px)";
+                        e.currentTarget.style.boxShadow = "0 12px 28px rgba(34, 197, 94, 0.4)";
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (canRequestRide) {
+                        e.currentTarget.style.transform = "translateY(0)";
+                        e.currentTarget.style.boxShadow = "0 8px 24px rgba(34, 197, 94, 0.3)";
+                      }
+                    }}
+                  >
+                    {rideStatus === "searching" ? (
+                      <>
+                        <FaSpinner
+                          style={{ animation: "spin 1s linear infinite", fontSize: "20px" }}
+                        />
+                        Finding Driver...
+                      </>
+                    ) : (
+                      <>
+                        <FaCar style={{ fontSize: "20px" }} />
+                        Find a Ride
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
             )}
 
@@ -1313,7 +1469,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                   )}
 
                   {/* Route Directions - Pickup to Destination (GREEN) */}
-                  {directionsToDestination && (
+                  {directionsToDestination && !decodedPolyline.length && (
                     <DirectionsRenderer
                       directions={directionsToDestination}
                       options={{
@@ -1323,6 +1479,18 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                           strokeWeight: 5,
                         },
                         suppressMarkers: true,
+                      }}
+                    />
+                  )}
+
+                  {/* Estimated Route Polyline (Green) */}
+                  {decodedPolyline.length > 0 && (
+                    <Polyline
+                      path={decodedPolyline}
+                      options={{
+                        strokeColor: "#22c55e",
+                        strokeOpacity: 0.9,
+                        strokeWeight: 6,
                       }}
                     />
                   )}
@@ -1417,7 +1585,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                     e.currentTarget.style.transform = "translateY(0)";
                     e.currentTarget.style.borderColor = "rgba(71, 85, 105, 0.5)";
                   }}
-                  onClick={rideStatus === "idle" ? handleFindRide : undefined}
+                  onClick={rideStatus === "idle" ? handleGetEstimate : undefined}
                 >
                   <div style={{ alignItems: "center", display: "flex", gap: "16px" }}>
                     <div
@@ -1431,14 +1599,21 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                         width: "48px",
                       }}
                     >
-                      <FaCar style={{ color: "#4ade80", fontSize: "20px" }} />
+                      {estimating ? (
+                        <FaSpinner
+                          className="animate-spin"
+                          style={{ color: "#4ade80", fontSize: "20px" }}
+                        />
+                      ) : (
+                        <FaLeaf style={{ color: "#4ade80", fontSize: "20px" }} />
+                      )}
                     </div>
                     <div>
                       <h3 style={{ color: "white", fontSize: "16px", fontWeight: 600, margin: 0 }}>
-                        Find a Ride
+                        Get Price Estimate
                       </h3>
                       <p style={{ color: "#94a3b8", fontSize: "13px", margin: "4px 0 0" }}>
-                        Search for available carpools near you
+                        Check fare and ETA before booking
                       </p>
                     </div>
                   </div>
