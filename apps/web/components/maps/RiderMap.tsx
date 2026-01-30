@@ -91,6 +91,7 @@ const styles = {
     fontWeight: 600,
     gap: "12px",
     justifyContent: "center",
+    marginTop: "4px",
     padding: "16px 24px",
     transition: "all 0.3s ease",
     width: "100%",
