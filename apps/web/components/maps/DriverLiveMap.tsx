@@ -21,7 +21,7 @@ import {
   FaRoute,
 } from "react-icons/fa";
 import { backendUrl } from "@/config";
-import { auth, rtdb } from "@/lib/firebase";
+import { auth, db, rtdb } from "@/lib/firebase";
 import { darkMapStyles } from "@/lib/mapStyles";
 
 interface DriverLocation {
@@ -199,6 +199,26 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
   const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
 
   const userId = auth?.currentUser?.uid || `test-driver-${Date.now()}`;
+
+  const [driverName, setDriverName] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchDriverName = async () => {
+      if (!userId || !db) return;
+      try {
+        const { doc, getDoc } = await import("firebase/firestore");
+        const userDocRef = doc(db, "users", userId);
+        const userDoc = await getDoc(userDocRef);
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          setDriverName(userData.name || "Unknown Driver");
+        }
+      } catch (error) {
+        console.error("Error fetching driver name:", error);
+      }
+    };
+    fetchDriverName();
+  }, [userId]);
 
   useEffect(() => {
     if (isOnline) {
@@ -1021,9 +1041,9 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
               </h2>
               <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ color: "#94a3b8", fontSize: "14px" }}>ID</span>
+                  <span style={{ color: "#94a3b8", fontSize: "14px" }}>Name</span>
                   <span style={{ color: "white", fontFamily: "monospace", fontSize: "14px" }}>
-                    {userId.slice(0, 16)}...
+                    {driverName || "Loading..."}
                   </span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between" }}>
