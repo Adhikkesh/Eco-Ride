@@ -184,6 +184,11 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
   const [sessionTime, setSessionTime] = useState(0);
   const [manualLocationMode, setManualLocationMode] = useState(false);
 
+  // OTP State
+  const [showOtpModal, setShowOtpModal] = useState(false);
+  const [otpInput, setOtpInput] = useState("");
+  const [submittingOtp, setSubmittingOtp] = useState(false);
+
   // Ride assignment state
   const [assignedRide, setAssignedRide] = useState<AssignedRide | null>(null);
   // Color-coded routes: blue for driver->pickup, green for pickup->destination
@@ -286,25 +291,43 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
 
   const [rideStatus, setRideStatus] = useState<"MATCHED" | "IN_PROGRESS" | "COMPLETED">("MATCHED");
 
-  const handleStartRide = async () => {
-    if (!assignedRide) return;
+  const handleStartRideClick = () => {
+    setShowOtpModal(true);
+    setOtpInput("");
+  };
+
+  const handleSubmitOtp = async () => {
+    if (!assignedRide || !otpInput || otpInput.length !== 4) {
+      alert("Please enter a valid 4-digit OTP");
+      return;
+    }
+
+    setSubmittingOtp(true);
     try {
       const token = await auth.currentUser?.getIdToken();
       const res = await fetch(`${backendUrl}/ride/start`, {
-        body: JSON.stringify({ rideId: assignedRide.rideId }),
+        body: JSON.stringify({ otp: otpInput, rideId: assignedRide.rideId }),
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         method: "POST",
       });
-      if (res.ok) {
+
+      const data = await res.json();
+
+      if (res.ok && data.success) {
         setRideStatus("IN_PROGRESS");
+        setShowOtpModal(false);
       } else {
-        console.error("Failed to start ride");
+        console.error("Failed to start ride:", data.message);
+        alert(data.message || "Failed to start ride. Check OTP.");
       }
     } catch (err) {
       console.error("Error starting ride:", err);
+      alert("Error starting ride. Please try again.");
+    } finally {
+      setSubmittingOtp(false);
     }
   };
 
@@ -833,7 +856,7 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
                   <button
                     type="button"
                     onClick={() => {
-                      handleStartRide();
+                      handleStartRideClick();
                     }}
                     style={{
                       background: "linear-gradient(90deg, #3b82f6, #2563eb)",
@@ -1069,6 +1092,119 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
           </div>
         </div>
       </main>
+
+      {/* OTP Modal */}
+      {showOtpModal && (
+        <div
+          style={{
+            alignItems: "center",
+            backdropFilter: "blur(5px)",
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            bottom: 0,
+            display: "flex",
+            justifyContent: "center",
+            left: 0,
+            position: "fixed",
+            right: 0,
+            top: 0,
+            zIndex: 1000,
+          }}
+        >
+          <div
+            style={{
+              background: "rgba(30, 41, 59, 1)",
+              border: "1px solid rgba(71, 85, 105, 0.5)",
+              borderRadius: "24px",
+              boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
+              maxWidth: "400px",
+              padding: "32px",
+              width: "90%",
+            }}
+          >
+            <h2
+              style={{
+                color: "white",
+                fontSize: "24px",
+                fontWeight: 700,
+                margin: "0 0 16px",
+                textAlign: "center",
+              }}
+            >
+              Enter OTP
+            </h2>
+            <p
+              style={{
+                color: "#94a3b8",
+                fontSize: "14px",
+                marginBottom: "24px",
+                textAlign: "center",
+              }}
+            >
+              Ask the rider for the 4-digit OTP to start the trip.
+            </p>
+
+            <input
+              type="text"
+              value={otpInput}
+              onChange={(e) => setOtpInput(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))}
+              placeholder="0000"
+              style={{
+                background: "rgba(15, 23, 42, 0.5)",
+                border: "2px solid rgba(59, 130, 246, 0.5)",
+                borderRadius: "12px",
+                color: "white",
+                fontSize: "32px",
+                fontWeight: "bold",
+                letterSpacing: "8px",
+                marginBottom: "24px",
+                outline: "none",
+                padding: "16px",
+                textAlign: "center",
+                width: "100%",
+              }}
+            />
+
+            <div style={{ display: "flex", gap: "12px" }}>
+              <button
+                onClick={() => setShowOtpModal(false)}
+                type="button"
+                style={{
+                  background: "transparent",
+                  border: "1px solid rgba(148, 163, 184, 0.3)",
+                  borderRadius: "12px",
+                  color: "#cbd5e1",
+                  cursor: "pointer",
+                  flex: 1,
+                  fontSize: "16px",
+                  fontWeight: 600,
+                  padding: "12px",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmitOtp}
+                type="button"
+                disabled={submittingOtp || otpInput.length !== 4}
+                style={{
+                  background: "linear-gradient(90deg, #22c55e, #16a34a)",
+                  border: "none",
+                  borderRadius: "12px",
+                  color: "white",
+                  cursor: submittingOtp || otpInput.length !== 4 ? "not-allowed" : "pointer",
+                  flex: 1,
+                  fontSize: "16px",
+                  fontWeight: 600,
+                  opacity: submittingOtp || otpInput.length !== 4 ? 0.7 : 1,
+                  padding: "12px",
+                }}
+              >
+                {submittingOtp ? "Verifying..." : "Start Trip"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         @keyframes pulse {

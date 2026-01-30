@@ -173,6 +173,7 @@ export const requestRide = async (req: Request, res: Response) => {
       drop: { lat: dropLat, lng: dropLng },
       fare: null, // Will be calculated later
       matchedAt: FieldValue.serverTimestamp(),
+      otp: Math.floor(1000 + Math.random() * 9000).toString(), // Generate 4-digit OTP
       pickup: { lat: pickupLat, lng: pickupLng },
       riderId,
       status: "MATCHED",
@@ -212,6 +213,7 @@ export const requestRide = async (req: Request, res: Response) => {
       driverName,
       eta: `${etaMinutes} min`,
       message: "Driver matched successfully!",
+      otp: rideData.otp, // Return OTP to rider
       rideId: rideRef.id,
       success: true,
     });
@@ -278,10 +280,24 @@ export const cancelRide = async (req: Request, res: Response) => {
 
 export const startRide = async (req: Request, res: Response) => {
   try {
-    const { rideId } = req.body;
+    const { rideId, otp } = req.body;
     if (!rideId) return res.status(400).json({ message: "Missing rideId", success: false });
+    if (!otp) return res.status(400).json({ message: "Missing OTP", success: false });
 
-    await db.collection("rides").doc(rideId).update({
+    // Validate OTP
+    const rideRef = db.collection("rides").doc(rideId);
+    const rideDoc = await rideRef.get();
+
+    if (!rideDoc.exists) {
+      return res.status(404).json({ message: "Ride not found", success: false });
+    }
+
+    const rideData = rideDoc.data();
+    if (rideData?.otp !== otp) {
+      return res.status(400).json({ message: "Invalid OTP", success: false });
+    }
+
+    await rideRef.update({
       startedAt: FieldValue.serverTimestamp(),
       status: "IN_PROGRESS",
     });
@@ -292,10 +308,8 @@ export const startRide = async (req: Request, res: Response) => {
     });
 
     // Also update the driver's assignment record so they know the status on reload
-    const rideDoc = await db.collection("rides").doc(rideId).get();
-    const driverId = rideDoc.data()?.driverId;
-    if (driverId) {
-      await rtdb.ref(`rides-assigned/${driverId}`).update({
+    if (rideData?.driverId) {
+      await rtdb.ref(`rides-assigned/${rideData.driverId}`).update({
         status: "IN_PROGRESS",
       });
     }
@@ -397,6 +411,7 @@ export const getActiveRide = async (req: Request, res: Response) => {
       driverId: rideData.driverId,
       driverName: driverName || "Unknown Driver",
       drop: rideData.drop,
+      otp: rideData.otp, // Include OTP for active rides
       pickup: rideData.pickup,
       rideId: rideDoc.id,
       status: rideData.status,

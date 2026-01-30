@@ -68,6 +68,7 @@ interface RideResponse {
   driverLocation?: { lat: number; lng: number };
   distance?: number;
   eta?: string;
+  otp?: string;
 }
 
 type RideStatus = "idle" | "searching" | "matched" | "on_trip" | "error";
@@ -239,6 +240,8 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     lng: number;
   } | null>(null);
   const [eta, setEta] = useState<string | null>(null);
+  const [otp, setOtp] = useState<string | null>(null); // New OTP state
+  const [showOtpModal, setShowOtpModal] = useState(false); // Modal visibility state
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   // Color-coded routes: blue for driver->pickup, green for pickup->destination
   const [directionsToPickup, setDirectionsToPickup] = useState<google.maps.DirectionsResult | null>(
@@ -363,6 +366,12 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                   setAssignedDriverName("Unknown Driver");
                 }
               }
+
+              // Set OTP if available (for legacy support or if stored)
+              if (rideData.otp) {
+                setOtp(rideData.otp);
+                setShowOtpModal(true);
+              }
               return; // Exit early if successful
             } else {
               // Ride is no longer valid, clear cache
@@ -440,7 +449,10 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
           setAssignedDriverLocation(null);
           setDirectionsToPickup(null);
           setDirectionsToDestination(null);
+          setDirectionsToPickup(null);
+          setDirectionsToDestination(null);
           setEta(null);
+          setOtp(null); // Clear OTP
           setPickupLocation(null);
           setSelectedDestination(null);
           setSearchDestination("");
@@ -769,6 +781,8 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
         setAssignedDriverName(data.driverName || "Unknown Driver");
         setAssignedDriverLocation(data.driverLocation);
         setEta(data.eta || null);
+        setOtp(data.otp || null); // Store OTP
+        if (data.otp) setShowOtpModal(true);
       } else {
         setRideStatus("error");
         setErrorMessage(data.message || "Failed to find a driver");
@@ -1582,9 +1596,118 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
         </div>
       </main>
 
+      {/* Rider OTP Modal */}
+      {otp && rideStatus === "matched" && showOtpModal && (
+        <div
+          style={{
+            alignItems: "center",
+            backdropFilter: "blur(4px)",
+            backgroundColor: "rgba(0, 0, 0, 0.5)",
+            bottom: 0,
+            display: "flex",
+            justifyContent: "center",
+            left: 0,
+            position: "fixed",
+            right: 0,
+            top: 0,
+            zIndex: 2000,
+          }}
+        >
+          <div
+            style={{
+              animation: "popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)",
+              background: "rgba(30, 41, 59, 1)",
+              border: "1px solid rgba(71, 85, 105, 0.5)",
+              borderRadius: "24px",
+              boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
+              maxWidth: "360px",
+              padding: "32px",
+              textAlign: "center",
+              width: "90%",
+            }}
+          >
+            <div
+              style={{
+                alignItems: "center",
+                background: "rgba(34, 197, 94, 0.2)",
+                border: "2px solid #22c55e",
+                borderRadius: "50%",
+                display: "flex",
+                height: "64px",
+                justifyContent: "center",
+                margin: "0 auto 16px",
+                width: "64px",
+              }}
+            >
+              <FaCheckCircle style={{ color: "#22c55e", fontSize: "32px" }} />
+            </div>
+
+            <h2 style={{ color: "white", fontSize: "22px", fontWeight: 700, margin: "0 0 8px" }}>
+              Ride Confirmed!
+            </h2>
+            <p style={{ color: "#94a3b8", fontSize: "14px", margin: "0 0 24px" }}>
+              Please share this OTP with your driver to start the trip.
+            </p>
+
+            <div
+              style={{
+                background: "rgba(15, 23, 42, 0.8)",
+                border: "2px dashed rgba(34, 197, 94, 0.5)",
+                borderRadius: "16px",
+                marginBottom: "24px",
+                padding: "16px",
+              }}
+            >
+              <span
+                style={{
+                  color: "#4ade80",
+                  display: "block",
+                  fontFamily: "monospace",
+                  fontSize: "32px",
+                  fontWeight: "bold",
+                  letterSpacing: "8px",
+                }}
+              >
+                {otp}
+              </span>
+            </div>
+
+            <button
+              // Close modal only (we might want a state for closing it, but for now just let it be persistent or add a close button)
+              // However, user asked for a popup. Usually these dismiss themselves or minimize.
+              // Let's make it minimize to the card.
+              // But wait, my logic "otp && rideStatus === matched" keeps it open.
+              // I should add a local state to dismiss it, or just a generic "Okay" button that doesn't actually remove the OTP but maybe overlays it?
+              // Actually, keeping it persistent until trip starts is better UX for "Don't forget the OTP".
+              // Maybe just a "Close" button that sets a temporary flag?
+              // For simplicity and to ensure they see it, I'll just leave it or adding a "Close" button that sets a local state "showOtpModal" instead of relying on "otp" existence.
+              onClick={() => setShowOtpModal(false)}
+              type="button"
+              style={{
+                background: "linear-gradient(90deg, #22c55e, #16a34a)",
+                border: "none",
+                borderRadius: "12px",
+                color: "white",
+                cursor: "pointer",
+                fontSize: "16px",
+                fontWeight: 600,
+                padding: "12px 24px",
+                width: "100%",
+              }}
+            >
+              Okay, got it
+            </button>
+          </div>
+        </div>
+      )}
+
       <style>{`
         @keyframes pulse {
           0%, 100% { opacity: 1; }
+        @keyframes popIn {
+          0% { transform: scale(0.9); opacity: 0; }
+          100% { transform: scale(1); opacity: 1; }
+        }
           50% { opacity: 0.5; }
         }
         @keyframes spin {
