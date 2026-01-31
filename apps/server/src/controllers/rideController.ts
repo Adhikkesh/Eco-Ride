@@ -24,7 +24,7 @@ interface DriverMatch {
 
 export const requestRide = async (req: Request, res: Response) => {
   try {
-    const { riderId, pickupLat, pickupLng, dropLat, dropLng } = req.body;
+    const { riderId, pickupLat, pickupLng, dropLat, dropLng, fare } = req.body;
 
     // Validate required fields
     if (!riderId || !pickupLat || !pickupLng || !dropLat || !dropLng) {
@@ -171,7 +171,7 @@ export const requestRide = async (req: Request, res: Response) => {
       driverId: assignedDriver.driverId,
       driverName,
       drop: { lat: dropLat, lng: dropLng },
-      fare: null, // Will be calculated later
+      fare: fare || null,
       matchedAt: FieldValue.serverTimestamp(),
       otp: Math.floor(1000 + Math.random() * 9000).toString(), // Generate 4-digit OTP
       pickup: { lat: pickupLat, lng: pickupLng },
