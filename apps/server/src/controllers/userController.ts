@@ -121,3 +121,27 @@ export const CreateUserController: RequestHandler<object, object, CreateUserBody
     });
   }
 };
+
+export const GetDriverStatusController: RequestHandler = async (req, res) => {
+  const firebaseUser = req.user;
+
+  if (!firebaseUser) {
+    return res.status(status.UNAUTHORIZED).json({ message: "Unauthorized" });
+  }
+
+  try {
+    const driverProfileDoc = await db.collection("driver_profile").doc(firebaseUser.uid).get();
+
+    if (!driverProfileDoc.exists) {
+      return res.status(status.OK).json({ kyc_verified: false });
+    }
+
+    const data = driverProfileDoc.data();
+    return res.status(status.OK).json({
+      kyc_verified: data?.kyc_verified || false,
+    });
+  } catch (error) {
+    console.error("Error fetching driver status:", error);
+    return res.status(status.INTERNAL_SERVER_ERROR).json({ message: "Internal Server Error" });
+  }
+};

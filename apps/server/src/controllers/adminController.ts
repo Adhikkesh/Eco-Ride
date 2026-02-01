@@ -118,6 +118,11 @@ export const VerifyDriverController: RequestHandler<object, object, VerifyDriver
       kyc_verified: verified,
     });
 
+    // Also update users collection for frontend access
+    await db.collection("users").doc(driver_uid).update({
+      kyc_verified: verified,
+    });
+
     res.status(status.OK).json({
       data: { driver_uid, verified },
       message: verified ? "Driver verified successfully" : "Driver verification declined",

@@ -14,7 +14,7 @@ import {
   requestRide,
   startRide,
 } from "../controllers/rideController.js";
-import { CreateUserController } from "../controllers/userController.js";
+import { CreateUserController, GetDriverStatusController } from "../controllers/userController.js";
 import { verifyToken } from "../middleware/authMiddleware.js";
 
 export const router: Router = express.Router();
@@ -23,6 +23,7 @@ router.get("/health", HealthCheckController);
 router.get("/auth/verify", verifyToken, VerifyTokenController);
 router.get("/getme", verifyToken, GetMeController);
 router.post("/user", verifyToken, CreateUserController);
+router.get("/user/driver-status", verifyToken, GetDriverStatusController);
 
 // Ride routes
 router.post("/ride/request", verifyToken, requestRide);

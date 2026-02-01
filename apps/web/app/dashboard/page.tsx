@@ -5,10 +5,11 @@ import { doc, getDoc } from "firebase/firestore";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { FaMoon, FaSignOutAlt, FaSun, FaUser } from "react-icons/fa";
+import { FaMoon, FaShieldAlt, FaSignOutAlt, FaSun, FaUser } from "react-icons/fa";
 import DriverLiveMap from "@/components/maps/DriverLiveMap";
 import RiderMap from "@/components/maps/RiderMap";
 import { Button } from "@/components/ui/button";
+import { backendUrl } from "@/config";
 import { auth, db } from "@/lib/firebase";
 
 // Prevent static generation - this page requires Firebase auth
@@ -19,6 +20,7 @@ export default function Dashboard(): React.ReactNode {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<"rider" | "driver" | null>(null);
+  const [kycVerified, setKycVerified] = useState(false);
   const [darkMode, setDarkMode] = useState(true);
 
   useEffect(() => {
@@ -37,6 +39,30 @@ export default function Dashboard(): React.ReactNode {
           if (userDoc.exists()) {
             const userData = userDoc.data();
             setUserRole(userData?.role || "rider");
+            // Check KYC status for drivers (default to false if not present)
+            if (userData?.role === "driver") {
+              try {
+                // Fetch latest status from backend API to ensure accuracy (bypass Firestore cache/sync issues)
+                const token = await currentUser.getIdToken();
+                const statusRes = await fetch(`${backendUrl}/user/driver-status`, {
+                  headers: {
+                    Authorization: `Bearer ${token}`,
+                  },
+                });
+
+                if (statusRes.ok) {
+                  const statusData = await statusRes.json();
+                  console.log("Driver API Status:", statusData);
+                  setKycVerified(statusData.kyc_verified);
+                } else {
+                  console.error("Failed to fetch driver status, defaulting to Firestore");
+                  setKycVerified(userData?.kyc_verified || false);
+                }
+              } catch (err) {
+                console.error("Error fetching driver status from API:", err);
+                setKycVerified(userData?.kyc_verified || false);
+              }
+            }
           } else {
             // User not in Firestore, redirect to onboarding
             router.push("/onboarding");
@@ -349,6 +375,88 @@ export default function Dashboard(): React.ReactNode {
           <RiderMap embedded darkMode={darkMode} />
         )}
       </main>
+
+      {/* KYC Verification Pending Popup - Only for drivers who are not verified */}
+      {userRole === "driver" && !kycVerified && (
+        <div
+          style={{
+            alignItems: "center",
+            backdropFilter: "blur(8px)",
+            background: "rgba(0, 0, 0, 0.5)",
+            bottom: 0,
+            display: "flex",
+            justifyContent: "center",
+            left: 0,
+            position: "fixed",
+            right: 0,
+            top: 0,
+            zIndex: 90,
+          }}
+        >
+          <div
+            style={{
+              background: darkMode ? "#1e293b" : "white",
+              border: "1px solid",
+              borderColor: darkMode ? "rgba(255, 255, 255, 0.1)" : "rgba(0, 0, 0, 0.1)",
+              borderRadius: "16px",
+              boxShadow:
+                "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)",
+              maxWidth: "400px",
+              padding: "32px",
+              textAlign: "center",
+              width: "90%",
+            }}
+          >
+            <div
+              style={{
+                alignItems: "center",
+                background: "rgba(34, 197, 94, 0.2)",
+                borderRadius: "50%",
+                color: "#22c55e",
+                display: "inline-flex",
+                height: "64px",
+                justifyContent: "center",
+                marginBottom: "24px",
+                width: "64px",
+              }}
+            >
+              <FaShieldAlt style={{ fontSize: "32px" }} />
+            </div>
+            <h2
+              style={{
+                color: darkMode ? "white" : "#1e293b",
+                fontSize: "24px",
+                fontWeight: "bold",
+                marginBottom: "12px",
+              }}
+            >
+              Verification in Progress
+            </h2>
+            <p
+              style={{
+                color: darkMode ? "#94a3b8" : "#64748b",
+                fontSize: "16px",
+                lineHeight: "1.5",
+                marginBottom: "24px",
+              }}
+            >
+              Please Wait We are Verifying your documents
+            </p>
+            <div
+              style={{
+                background: darkMode ? "rgba(15, 23, 42, 0.5)" : "#f1f5f9",
+                borderRadius: "8px",
+                color: darkMode ? "#cbd5e1" : "#475569",
+                fontSize: "14px",
+                padding: "12px",
+              }}
+            >
+              This process usually takes 24-48 hours. You will be notified once your account is
+              approved.
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
