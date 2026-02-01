@@ -1,6 +1,6 @@
 "use client";
 
-import { signInWithEmailAndPassword } from "firebase/auth";
+import { signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -13,6 +13,7 @@ import {
   FaLock,
   FaPhone,
   FaShieldAlt,
+  FaSignOutAlt,
   FaTimes,
   FaUser,
 } from "react-icons/fa";
@@ -121,6 +122,15 @@ export default function AdminVerification(): JSX.Element {
       setIsVerified(true);
     } else {
       setError("Invalid passkey. Please try again.");
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      router.push("/");
+    } catch (error) {
+      console.error("Error signing out:", error);
     }
   };
 
@@ -293,6 +303,29 @@ export default function AdminVerification(): JSX.Element {
                 EcoRide Driver Verification Panel
               </p>
             </div>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              style={{
+                alignItems: "center",
+                background: "white",
+                border: "1px solid #ff5252",
+                borderRadius: "8px",
+                color: "#ff5252",
+                cursor: "pointer",
+                display: "flex",
+                fontSize: "14px",
+                fontWeight: "600",
+                gap: "8px",
+                marginLeft: "auto",
+                padding: "10px 16px",
+                transition: "all 0.2s",
+              }}
+            >
+              <FaSignOutAlt />
+              Logout
+            </button>
           </div>
 
           {/* Driver Verification Queue */}
