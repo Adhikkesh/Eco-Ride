@@ -5,7 +5,7 @@ import { doc, getDoc } from "firebase/firestore";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { FaSignOutAlt, FaUser } from "react-icons/fa";
+import { FaMoon, FaSignOutAlt, FaSun, FaUser } from "react-icons/fa";
 import DriverLiveMap from "@/components/maps/DriverLiveMap";
 import RiderMap from "@/components/maps/RiderMap";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,7 @@ export default function Dashboard(): React.ReactNode {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<"rider" | "driver" | null>(null);
+  const [darkMode, setDarkMode] = useState(true);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -129,20 +130,26 @@ export default function Dashboard(): React.ReactNode {
   return (
     <div
       style={{
-        background: "linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)",
+        background: darkMode
+          ? "linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)"
+          : "linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 50%, #f0f9ff 100%)",
         minHeight: "100vh",
+        transition: "background 0.3s ease",
       }}
     >
       {/* Header/Navbar */}
       <header
         style={{
           backdropFilter: "blur(12px)",
-          background: "rgba(30, 41, 59, 0.95)",
-          borderBottom: "1px solid rgba(71, 85, 105, 0.5)",
-          boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
+          background: darkMode ? "rgba(30, 41, 59, 0.95)" : "rgba(255, 255, 255, 0.95)",
+          borderBottom: darkMode
+            ? "1px solid rgba(71, 85, 105, 0.5)"
+            : "1px solid rgba(203, 213, 225, 0.5)",
+          boxShadow: darkMode ? "0 4px 20px rgba(0,0,0,0.3)" : "0 4px 20px rgba(0,0,0,0.1)",
           padding: "12px 24px",
           position: "sticky",
           top: 0,
+          transition: "all 0.3s ease",
           zIndex: 100,
         }}
       >
@@ -173,8 +180,23 @@ export default function Dashboard(): React.ReactNode {
               🚗
             </div>
             <div style={{ display: "flex", flexDirection: "column" }}>
-              <span style={{ color: "white", fontSize: "20px", fontWeight: "bold" }}>EcoRide</span>
-              <span style={{ color: "#94a3b8", fontSize: "12px" }}>
+              <span
+                style={{
+                  color: darkMode ? "white" : "#1e293b",
+                  fontSize: "20px",
+                  fontWeight: "bold",
+                  transition: "color 0.3s ease",
+                }}
+              >
+                EcoRide
+              </span>
+              <span
+                style={{
+                  color: darkMode ? "#94a3b8" : "#64748b",
+                  fontSize: "12px",
+                  transition: "color 0.3s ease",
+                }}
+              >
                 {userRole === "driver" ? "Driver Dashboard" : "Rider Dashboard"}
               </span>
             </div>
@@ -182,6 +204,42 @@ export default function Dashboard(): React.ReactNode {
 
           {/* User Info & Logout */}
           <div style={{ alignItems: "center", display: "flex", gap: "16px" }}>
+            {/* Dark Mode Toggle */}
+            <button
+              type="button"
+              onClick={() => setDarkMode(!darkMode)}
+              style={{
+                alignItems: "center",
+                background: darkMode ? "rgba(59, 130, 246, 0.2)" : "rgba(79, 70, 229, 0.1)",
+                border: "1px solid",
+                borderColor: darkMode ? "rgba(59, 130, 246, 0.3)" : "rgba(79, 70, 229, 0.2)",
+                borderRadius: "12px",
+                color: darkMode ? "#60a5fa" : "#4f46e5",
+                cursor: "pointer",
+                display: "flex",
+                height: "40px",
+                justifyContent: "center",
+                transition: "all 0.3s ease",
+                width: "40px",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = darkMode
+                  ? "rgba(59, 130, 246, 0.3)"
+                  : "rgba(79, 70, 229, 0.15)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = darkMode
+                  ? "rgba(59, 130, 246, 0.2)"
+                  : "rgba(79, 70, 229, 0.1)";
+              }}
+            >
+              {darkMode ? (
+                <FaSun style={{ fontSize: "16px" }} />
+              ) : (
+                <FaMoon style={{ fontSize: "16px" }} />
+              )}
+            </button>
+
             {/* Role Badge */}
             <div
               style={{
@@ -206,11 +264,12 @@ export default function Dashboard(): React.ReactNode {
             <div
               style={{
                 alignItems: "center",
-                background: "rgba(15, 23, 42, 0.5)",
+                background: darkMode ? "rgba(15, 23, 42, 0.5)" : "rgba(203, 213, 225, 0.2)",
                 borderRadius: "12px",
                 display: "flex",
                 gap: "12px",
                 padding: "8px 16px",
+                transition: "all 0.3s ease",
               }}
             >
               {user?.photoURL ? (
