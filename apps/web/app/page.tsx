@@ -7,6 +7,7 @@ import {
   signInWithEmailAndPassword,
   signInWithPopup,
 } from "firebase/auth";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -264,30 +265,22 @@ export default function Home(): React.ReactNode {
         >
           <nav style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
             <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
-              <div
+              <Image
+                src="/logo.png"
+                alt="EcoRide Logo"
+                width={150}
+                height={50}
                 style={{
-                  alignItems: "center",
-                  background: "#2e7d32",
-                  borderRadius: "50%",
-                  display: "flex",
-                  fontSize: "24px",
-                  height: "48px",
-                  justifyContent: "center",
-                  width: "48px",
+                  filter: darkMode
+                    ? "brightness(1.2) contrast(1.2) invert(1) hue-rotate(180deg)"
+                    : "none",
+                  height: "50px",
+                  mixBlendMode: darkMode ? "screen" : "normal",
+                  objectFit: "contain",
+                  width: "auto",
                 }}
-              >
-                🚗
-              </div>
-              <span
-                style={{
-                  color: darkMode ? "white" : "#333",
-                  fontSize: "24px",
-                  fontWeight: "bold",
-                  transition: "color 0.3s ease",
-                }}
-              >
-                EcoRide
-              </span>
+                priority
+              />
             </div>
 
             <ul

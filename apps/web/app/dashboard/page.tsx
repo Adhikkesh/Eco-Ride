@@ -164,42 +164,22 @@ export default function Dashboard(): React.ReactNode {
         >
           {/* Logo */}
           <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
-            <div
+            <Image
+              src="/logo.png"
+              alt="EcoRide Logo"
+              width={150}
+              height={50}
               style={{
-                alignItems: "center",
-                background: "linear-gradient(135deg, #22c55e, #10b981)",
-                borderRadius: "12px",
-                boxShadow: "0 4px 12px rgba(34, 197, 94, 0.3)",
-                display: "flex",
-                fontSize: "20px",
+                filter: darkMode
+                  ? "brightness(1.2) contrast(1.2) invert(1) hue-rotate(180deg)"
+                  : "none",
                 height: "44px",
-                justifyContent: "center",
-                width: "44px",
+                mixBlendMode: darkMode ? "screen" : "normal",
+                objectFit: "contain",
+                width: "auto",
               }}
-            >
-              🚗
-            </div>
-            <div style={{ display: "flex", flexDirection: "column" }}>
-              <span
-                style={{
-                  color: darkMode ? "white" : "#1e293b",
-                  fontSize: "20px",
-                  fontWeight: "bold",
-                  transition: "color 0.3s ease",
-                }}
-              >
-                EcoRide
-              </span>
-              <span
-                style={{
-                  color: darkMode ? "#94a3b8" : "#64748b",
-                  fontSize: "12px",
-                  transition: "color 0.3s ease",
-                }}
-              >
-                {userRole === "driver" ? "Driver Dashboard" : "Rider Dashboard"}
-              </span>
-            </div>
+              priority
+            />
           </div>
 
           {/* User Info & Logout */}
