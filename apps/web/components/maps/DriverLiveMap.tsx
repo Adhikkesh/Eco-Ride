@@ -22,7 +22,7 @@ import {
 } from "react-icons/fa";
 import { backendUrl } from "@/config";
 import { auth, db, rtdb } from "@/lib/firebase";
-import { darkMapStyles } from "@/lib/mapStyles";
+import { darkMapStyles, lightMapStyles } from "@/lib/mapStyles";
 
 interface DriverLocation {
   lat: number;
@@ -168,9 +168,13 @@ const libraries: Libraries = ["places"];
 
 interface DriverLiveMapProps {
   embedded?: boolean;
+  darkMode?: boolean;
 }
 
-export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps): React.ReactNode {
+export default function DriverLiveMap({
+  embedded = false,
+  darkMode = true,
+}: DriverLiveMapProps): React.ReactNode {
   const { isLoaded } = useJsApiLoader({
     googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
     id: "google-map-script",
@@ -646,7 +650,7 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
                   disableDefaultUI: true,
                   draggableCursor: manualLocationMode ? "crosshair" : undefined,
                   gestureHandling: "greedy",
-                  styles: darkMapStyles,
+                  styles: darkMode ? darkMapStyles : lightMapStyles,
                   zoomControl: true,
                 }}
               >

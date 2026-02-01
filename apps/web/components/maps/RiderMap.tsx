@@ -31,7 +31,7 @@ import {
 import { backendUrl } from "@/config";
 import { useTripEstimator } from "@/hooks/useTripEstimator";
 import { auth, db, rtdb } from "@/lib/firebase";
-import { darkMapStyles } from "@/lib/mapStyles";
+import { darkMapStyles, lightMapStyles } from "@/lib/mapStyles";
 import PaymentModal from "../booking/PaymentModal";
 
 // ---------------------------------------------------------
@@ -208,9 +208,13 @@ const defaultCenter = {
 // ---------------------------------------------------------
 interface RiderMapProps {
   embedded?: boolean;
+  darkMode?: boolean;
 }
 
-export default function RiderMap({ embedded = false }: RiderMapProps): React.ReactNode {
+export default function RiderMap({
+  embedded = false,
+  darkMode = true,
+}: RiderMapProps): React.ReactNode {
   const { isLoaded } = useJsApiLoader({
     googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
     id: "google-map-script",
@@ -1502,7 +1506,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                     disableDefaultUI: true,
                     draggableCursor: manualPickupMode ? "crosshair" : undefined,
                     gestureHandling: "greedy",
-                    styles: darkMapStyles,
+                    styles: darkMode ? darkMapStyles : lightMapStyles,
                     zoomControl: true,
                   }}
                 >

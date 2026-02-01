@@ -113,7 +113,6 @@ export default function PaymentModal({
   clientSecret,
   amount,
   onSuccess,
-  onClose,
 }: PaymentModalProps): JSX.Element | null {
   if (!clientSecret) return null;
 

@@ -301,10 +301,25 @@ export default function Dashboard(): React.ReactNode {
                 </div>
               )}
               <div style={{ display: "flex", flexDirection: "column" }}>
-                <span style={{ color: "white", fontSize: "14px", fontWeight: "500" }}>
+                <span
+                  style={{
+                    color: darkMode ? "white" : "#1e293b",
+                    fontSize: "14px",
+                    fontWeight: "500",
+                    transition: "color 0.3s ease",
+                  }}
+                >
                   {user?.displayName || user?.email?.split("@")[0] || "User"}
                 </span>
-                <span style={{ color: "#94a3b8", fontSize: "11px" }}>{user?.email}</span>
+                <span
+                  style={{
+                    color: darkMode ? "#94a3b8" : "#64748b",
+                    fontSize: "11px",
+                    transition: "color 0.3s ease",
+                  }}
+                >
+                  {user?.email}
+                </span>
               </div>
             </div>
 
@@ -315,21 +330,28 @@ export default function Dashboard(): React.ReactNode {
               style={{
                 alignItems: "center",
                 background: "transparent",
-                border: "1px solid rgba(239, 68, 68, 0.3)",
+                border: "1px solid",
+                borderColor: darkMode ? "rgba(239, 68, 68, 0.3)" : "rgba(239, 68, 68, 0.4)",
                 borderRadius: "10px",
-                color: "#f87171",
+                color: darkMode ? "#f87171" : "#dc2626",
                 display: "flex",
                 gap: "8px",
                 padding: "10px 16px",
                 transition: "all 0.2s ease",
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "rgba(239, 68, 68, 0.1)";
-                e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.5)";
+                e.currentTarget.style.background = darkMode
+                  ? "rgba(239, 68, 68, 0.1)"
+                  : "rgba(239, 68, 68, 0.08)";
+                e.currentTarget.style.borderColor = darkMode
+                  ? "rgba(239, 68, 68, 0.5)"
+                  : "rgba(239, 68, 68, 0.6)";
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "transparent";
-                e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.3)";
+                e.currentTarget.style.borderColor = darkMode
+                  ? "rgba(239, 68, 68, 0.3)"
+                  : "rgba(239, 68, 68, 0.4)";
               }}
             >
               <FaSignOutAlt />
@@ -341,7 +363,11 @@ export default function Dashboard(): React.ReactNode {
 
       {/* Main Content - Render based on role */}
       <main style={{ paddingTop: "0" }}>
-        {userRole === "driver" ? <DriverLiveMap embedded /> : <RiderMap embedded />}
+        {userRole === "driver" ? (
+          <DriverLiveMap embedded darkMode={darkMode} />
+        ) : (
+          <RiderMap embedded darkMode={darkMode} />
+        )}
       </main>
     </div>
   );

@@ -21,6 +21,7 @@ interface BookingFormProps {
   loading: boolean;
   onConfirmRide: () => void;
   selectionMode: "none" | "pickup" | "drop";
+  darkMode?: boolean;
 }
 
 export default function BookingForm({
@@ -33,20 +34,26 @@ export default function BookingForm({
   loading,
   onConfirmRide,
   selectionMode,
+  darkMode = true,
 }: BookingFormProps): JSX.Element {
   return (
     <div
       style={{
         backdropFilter: "blur(12px)",
-        background: "rgba(30, 41, 59, 0.8)",
-        border: "1px solid rgba(71, 85, 105, 0.5)",
+        background: darkMode ? "rgba(30, 41, 59, 0.8)" : "rgba(255, 255, 255, 0.85)",
+        border: darkMode
+          ? "1px solid rgba(71, 85, 105, 0.5)"
+          : "1px solid rgba(203, 213, 225, 0.5)",
         borderRadius: "24px",
-        boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
-        color: "white",
+        boxShadow: darkMode
+          ? "0 25px 50px -12px rgba(0, 0, 0, 0.5)"
+          : "0 25px 50px -12px rgba(0, 0, 0, 0.1)",
+        color: darkMode ? "white" : "#1e293b",
         display: "flex",
         flexDirection: "column",
         gap: "20px",
         padding: "24px",
+        transition: "all 0.3s ease",
       }}
     >
       <div style={{ alignItems: "center", display: "flex", gap: "12px", marginBottom: "8px" }}>
@@ -66,13 +73,18 @@ export default function BookingForm({
         </div>
         <div>
           <h2 style={{ fontSize: "20px", fontWeight: "bold", margin: 0 }}>Book Eco-Ride</h2>
-          <p style={{ color: "#94a3b8", fontSize: "14px", margin: 0 }}>
+          <p
+            style={{
+              color: darkMode ? "#94a3b8" : "#64748b",
+              fontSize: "14px",
+              margin: 0,
+              transition: "color 0.3s ease",
+            }}
+          >
             Sustainable travel made easy
           </p>
         </div>
       </div>
-
-      {/* Location Selectors */}
       <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
         {/* Pickup */}
         <button
@@ -81,8 +93,20 @@ export default function BookingForm({
           style={{
             alignItems: "center",
             background:
-              selectionMode === "pickup" ? "rgba(59, 130, 246, 0.2)" : "rgba(15, 23, 42, 0.5)",
-            border: `1px solid ${selectionMode === "pickup" ? "#3b82f6" : "rgba(71, 85, 105, 0.5)"}`,
+              selectionMode === "pickup"
+                ? darkMode
+                  ? "rgba(59, 130, 246, 0.2)"
+                  : "rgba(59, 130, 246, 0.1)"
+                : darkMode
+                  ? "rgba(15, 23, 42, 0.5)"
+                  : "rgba(203, 213, 225, 0.3)",
+            border: `1px solid ${
+              selectionMode === "pickup"
+                ? "#3b82f6"
+                : darkMode
+                  ? "rgba(71, 85, 105, 0.5)"
+                  : "rgba(203, 213, 225, 0.5)"
+            }`,
             borderRadius: "16px",
             cursor: "pointer",
             display: "flex",
@@ -98,11 +122,23 @@ export default function BookingForm({
           </div>
           <div style={{ flex: 1 }}>
             <span
-              style={{ color: "#94a3b8", display: "block", fontSize: "12px", marginBottom: "4px" }}
+              style={{
+                color: darkMode ? "#94a3b8" : "#64748b",
+                display: "block",
+                fontSize: "12px",
+                marginBottom: "4px",
+                transition: "color 0.3s ease",
+              }}
             >
               Pickup Location
             </span>
-            <div style={{ color: pickup ? "white" : "#64748b", fontWeight: 500 }}>
+            <div
+              style={{
+                color: pickup ? (darkMode ? "white" : "#1e293b") : darkMode ? "#64748b" : "#94a3b8",
+                fontWeight: 500,
+                transition: "color 0.3s ease",
+              }}
+            >
               {pickup
                 ? `${pickup.lat.toFixed(4)}, ${pickup.lng.toFixed(4)}`
                 : "Tap to select on map"}
@@ -118,8 +154,20 @@ export default function BookingForm({
           style={{
             alignItems: "center",
             background:
-              selectionMode === "drop" ? "rgba(239, 68, 68, 0.2)" : "rgba(15, 23, 42, 0.5)",
-            border: `1px solid ${selectionMode === "drop" ? "#ef4444" : "rgba(71, 85, 105, 0.5)"}`,
+              selectionMode === "drop"
+                ? darkMode
+                  ? "rgba(239, 68, 68, 0.2)"
+                  : "rgba(239, 68, 68, 0.1)"
+                : darkMode
+                  ? "rgba(15, 23, 42, 0.5)"
+                  : "rgba(203, 213, 225, 0.3)",
+            border: `1px solid ${
+              selectionMode === "drop"
+                ? "#ef4444"
+                : darkMode
+                  ? "rgba(71, 85, 105, 0.5)"
+                  : "rgba(203, 213, 225, 0.5)"
+            }`,
             borderRadius: "16px",
             cursor: "pointer",
             display: "flex",
@@ -147,14 +195,16 @@ export default function BookingForm({
         </button>
       </div>
 
-      {/* Estimate Button/Result */}
       {estimate ? (
         <div
           style={{
-            background: "rgba(34, 197, 94, 0.1)",
-            border: "1px solid rgba(34, 197, 94, 0.3)",
+            background: darkMode ? "rgba(34, 197, 94, 0.1)" : "rgba(34, 197, 94, 0.08)",
+            border: darkMode
+              ? "1px solid rgba(34, 197, 94, 0.3)"
+              : "1px solid rgba(34, 197, 94, 0.4)",
             borderRadius: "16px",
             padding: "16px",
+            transition: "all 0.3s ease",
           }}
         >
           <div
@@ -166,7 +216,15 @@ export default function BookingForm({
             }}
           >
             <div>
-              <div style={{ color: "#94a3b8", fontSize: "14px" }}>Total Fare</div>
+              <div
+                style={{
+                  color: darkMode ? "#94a3b8" : "#64748b",
+                  fontSize: "14px",
+                  transition: "color 0.3s ease",
+                }}
+              >
+                Total Fare
+              </div>
               <div style={{ color: "#22c55e", fontSize: "28px", fontWeight: "bold" }}>
                 ₹{estimate.fare}
               </div>
@@ -237,7 +295,6 @@ export default function BookingForm({
         </button>
       )}
 
-      {/* Confirm Button */}
       {estimate && (
         <button
           type="button"
