@@ -12,6 +12,7 @@ import * as geofire from "geofire-common";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FaCar,
+  FaCheckCircle,
   FaClock,
   FaFlagCheckered,
   FaLeaf,
@@ -193,6 +194,11 @@ export default function DriverLiveMap({
   const [otpInput, setOtpInput] = useState("");
   const [submittingOtp, setSubmittingOtp] = useState(false);
 
+  // Payment Popup State
+  const [finishedRideId, setFinishedRideId] = useState<string | null>(null);
+  const [showPaymentPopup, setShowPaymentPopup] = useState(false);
+  const [receivedAmount, setReceivedAmount] = useState(0);
+
   // Ride assignment state
   const [assignedRide, setAssignedRide] = useState<AssignedRide | null>(null);
   // Color-coded routes: blue for driver->pickup, green for pickup->destination
@@ -348,6 +354,7 @@ export default function DriverLiveMap({
         method: "POST",
       });
       if (res.ok) {
+        setFinishedRideId(assignedRide.rideId); // Track for payment
         setRideStatus("COMPLETED");
         setAssignedRide(null);
         setDirectionsToPickup(null);
@@ -447,6 +454,22 @@ export default function DriverLiveMap({
     },
     [userId, status],
   );
+
+  // Listen for payment confirmation
+  useEffect(() => {
+    if (!finishedRideId || !rtdb) return;
+
+    const rideRef = ref(rtdb, `rides/${finishedRideId}`);
+    const unsubscribe = onValue(rideRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data && data.paymentStatus === "PAID") {
+        setReceivedAmount(data.paidAmount || 0);
+        setShowPaymentPopup(true);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [finishedRideId]);
 
   const goOnline = useCallback(async () => {
     if (!rtdb) {
@@ -1206,6 +1229,93 @@ export default function DriverLiveMap({
                 {submittingOtp ? "Verifying..." : "Start Trip"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Payment Received Popup */}
+      {showPaymentPopup && (
+        <div
+          style={{
+            alignItems: "center",
+            backdropFilter: "blur(8px)",
+            backgroundColor: "rgba(0, 0, 0, 0.8)",
+            bottom: 0,
+            display: "flex",
+            justifyContent: "center",
+            left: 0,
+            position: "fixed",
+            right: 0,
+            top: 0,
+            zIndex: 1100,
+          }}
+        >
+          <div
+            style={{
+              alignItems: "center",
+              background: "rgba(30, 41, 59, 0.95)",
+              border: "1px solid rgba(34, 197, 94, 0.5)",
+              borderRadius: "24px",
+              boxShadow: "0 25px 50px -12px rgba(34, 197, 94, 0.25)",
+              display: "flex",
+              flexDirection: "column",
+              maxWidth: "400px",
+              padding: "40px",
+              textAlign: "center",
+              width: "90%",
+            }}
+          >
+            <div
+              style={{
+                alignItems: "center",
+                background: "rgba(34, 197, 94, 0.2)",
+                borderRadius: "50%",
+                display: "flex",
+                height: "96px",
+                justifyContent: "center",
+                marginBottom: "24px",
+                width: "96px",
+              }}
+            >
+              <FaCheckCircle style={{ color: "#22c55e", fontSize: "48px" }} />
+            </div>
+
+            <h2
+              style={{ color: "white", fontSize: "24px", fontWeight: "bold", margin: "0 0 16px" }}
+            >
+              Payment Received
+            </h2>
+
+            <p style={{ color: "#94a3b8", fontSize: "16px", margin: "0 0 8px" }}>Amount Paid</p>
+
+            <p
+              style={{ color: "#ffffff", fontSize: "36px", fontWeight: "bold", margin: "0 0 32px" }}
+            >
+              ₹{receivedAmount}
+            </p>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowPaymentPopup(false);
+                setFinishedRideId(null);
+              }}
+              style={{
+                background: "linear-gradient(90deg, #22c55e, #16a34a)",
+                border: "none",
+                borderRadius: "16px",
+                boxShadow: "0 10px 25px -5px rgba(34, 197, 94, 0.4)",
+                color: "white",
+                cursor: "pointer",
+                fontSize: "18px",
+                fontWeight: "600",
+                padding: "16px",
+                transition: "transform 0.2s",
+                width: "100%",
+              }}
+            >
+              Okay
+            </button>
           </div>
         </div>
       )}

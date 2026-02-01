@@ -446,7 +446,28 @@ export default function RiderMap({
     return () => unsubscribe();
   }, []);
 
-  const handlePaymentSuccess = useCallback(() => {
+  const handlePaymentSuccess = useCallback(async () => {
+    // Notify backend about payment success so driver gets the popup
+    if (rideId && auth.currentUser) {
+      try {
+        const token = await auth.currentUser.getIdToken();
+        await fetch(`${backendUrl}/ride/confirm-payment`, {
+          body: JSON.stringify({
+            amount: paymentAmount,
+            rideId,
+          }),
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        });
+        console.log("Payment confirmed with backend");
+      } catch (err) {
+        console.error("Failed to confirm payment:", err);
+      }
+    }
+
     setShowPayment(false);
     setClientSecret(null);
     localStorage.removeItem("currentRideId");
@@ -471,7 +492,7 @@ export default function RiderMap({
 
     // Nice success message could go here or in the modal close
     // alert("Payment Successful! Thank you for riding with EcoRide.");
-  }, []);
+  }, [rideId, paymentAmount]);
 
   // Listen for ride status changes (Start/Complete) via RTDB (Bypasses Firestore permissions)
   useEffect(() => {
@@ -485,7 +506,7 @@ export default function RiderMap({
 
         if (data.status === "IN_PROGRESS") {
           setRideStatus("on_trip");
-        } else if (data.status === "COMPLETED") {
+        } else if (data.status === "COMPLETED" && data.paymentStatus !== "PAID") {
           // Trip Completed Logic - Trigger Payment
           console.log("Trip completed. Initializing payment...");
 

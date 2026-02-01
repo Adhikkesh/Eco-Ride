@@ -6,7 +6,7 @@ import {
 import { VerifyTokenController } from "../controllers/authController.js";
 import { calculateFare } from "../controllers/fareController.js";
 import { GetMeController, HealthCheckController } from "../controllers/index.js";
-import { createPaymentIntent } from "../controllers/paymentController.js";
+import { confirmPayment, createPaymentIntent } from "../controllers/paymentController.js";
 import {
   cancelRide,
   completeRide,
@@ -32,6 +32,7 @@ router.post("/ride/start", verifyToken, startRide);
 router.post("/ride/complete", verifyToken, completeRide);
 router.post("/ride/estimate", verifyToken, calculateFare);
 router.post("/payment/create-intent", verifyToken, createPaymentIntent);
+router.post("/ride/confirm-payment", verifyToken, confirmPayment);
 
 // Admin routes
 router.get("/admin/drivers/unverified", verifyToken, GetUnverifiedDriversController);

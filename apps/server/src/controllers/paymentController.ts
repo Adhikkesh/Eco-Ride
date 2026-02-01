@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import Stripe from "stripe";
-import { db } from "../config/firebase.js";
+import { db, rtdb } from "../config/firebase.js";
 
 let stripeInstance: Stripe | null = null;
 
@@ -93,6 +93,44 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
     console.error("❌ Create Payment Intent Error:", error);
     return res.status(500).json({
       message: `Error creating payment intent: ${error instanceof Error ? error.message : "Unknown error"}`,
+      success: false,
+    });
+  }
+};
+
+export const confirmPayment = async (req: Request, res: Response) => {
+  try {
+    const { rideId, amount } = req.body;
+
+    if (!rideId) {
+      return res.status(400).json({
+        message: "Missing rideId",
+        success: false,
+      });
+    }
+
+    console.log(`Confirming payment for ride: ${rideId}, amount: ${amount}`);
+
+    // Update RTDB to notify driver
+    await rtdb.ref(`rides/${rideId}`).update({
+      paidAmount: amount,
+      paymentStatus: "PAID",
+    });
+
+    // Update Firestore
+    await db.collection("rides").doc(rideId).update({
+      paidAmount: amount,
+      paymentStatus: "PAID",
+    });
+
+    return res.status(200).json({
+      message: "Payment confirmed",
+      success: true,
+    });
+  } catch (error) {
+    console.error("Confirm Payment Error:", error);
+    return res.status(500).json({
+      message: "Error confirming payment",
       success: false,
     });
   }
