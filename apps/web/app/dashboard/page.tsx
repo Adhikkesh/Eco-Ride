@@ -237,7 +237,7 @@ export default function Dashboard(): React.ReactNode {
                 textTransform: "capitalize",
               }}
             >
-              {userRole === "driver" ? "🚗 Driver" : "🚶 Rider"}
+              {userRole === "driver" ? "Driver" : "Rider"}
             </div>
 
             {/* Profile */}
