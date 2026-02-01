@@ -32,6 +32,7 @@ import { backendUrl } from "@/config";
 import { useTripEstimator } from "@/hooks/useTripEstimator";
 import { auth, db, rtdb } from "@/lib/firebase";
 import { darkMapStyles } from "@/lib/mapStyles";
+import PaymentModal from "../booking/PaymentModal";
 
 // ---------------------------------------------------------
 // Types
@@ -259,6 +260,11 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
   const [pickupSearchText, setPickupSearchText] = useState("");
   const [manualPickupMode, setManualPickupMode] = useState(false);
 
+  // Payment State
+  const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [paymentAmount, setPaymentAmount] = useState<number>(0);
+  const [showPayment, setShowPayment] = useState(false);
+
   // Estimation State
   const { getEstimate, estimate, loading: estimating, clearEstimate } = useTripEstimator();
   const [decodedPolyline, setDecodedPolyline] = useState<{ lat: number; lng: number }[]>([]);
@@ -436,6 +442,33 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     return () => unsubscribe();
   }, []);
 
+  const handlePaymentSuccess = useCallback(() => {
+    setShowPayment(false);
+    setClientSecret(null);
+    localStorage.removeItem("currentRideId");
+
+    // Reset all ride state
+    setRideStatus("idle");
+    setRideId(null);
+    setAssignedDriverId(null);
+    setAssignedDriverName(null);
+    setAssignedDriverLocation(null);
+    setDirectionsToPickup(null);
+    setDirectionsToDestination(null);
+    setDirectionsToPickup(null);
+    setDirectionsToDestination(null);
+    setEta(null);
+    setOtp(null);
+    setPickupLocation(null);
+    setSelectedDestination(null);
+    setSearchDestination("");
+    setManualPickupMode(false);
+    setErrorMessage(null);
+
+    // Nice success message could go here or in the modal close
+    // alert("Payment Successful! Thank you for riding with EcoRide.");
+  }, []);
+
   // Listen for ride status changes (Start/Complete) via RTDB (Bypasses Firestore permissions)
   useEffect(() => {
     if (!rideId || !rtdb) return;
@@ -449,32 +482,53 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
         if (data.status === "IN_PROGRESS") {
           setRideStatus("on_trip");
         } else if (data.status === "COMPLETED") {
-          // Trip Completed Logic
-          // Trip Completed Logic
-          setRideStatus("idle");
-          setRideId(null);
-          setAssignedDriverId(null);
-          setAssignedDriverName(null);
-          setAssignedDriverLocation(null);
-          setDirectionsToPickup(null);
-          setDirectionsToDestination(null);
-          setDirectionsToPickup(null);
-          setDirectionsToDestination(null);
-          setEta(null);
-          setOtp(null); // Clear OTP
-          setPickupLocation(null);
-          setSelectedDestination(null);
-          setSearchDestination("");
-          setManualPickupMode(false);
-          setErrorMessage(null);
-          localStorage.removeItem("currentRideId");
-          alert("Your trip has been completed! Thank you for riding with EcoRide.");
+          // Trip Completed Logic - Trigger Payment
+          console.log("Trip completed. Initializing payment...");
+
+          // Fetch payment intent
+          const user = auth?.currentUser;
+          if (user) {
+            user.getIdToken().then((token) => {
+              fetch(`${backendUrl}/payment/create-intent`, {
+                body: JSON.stringify({ rideId }),
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  "Content-Type": "application/json",
+                },
+                method: "POST",
+              })
+                .then((res) => res.json())
+                .then((paymentData) => {
+                  if (paymentData.success && paymentData.clientSecret) {
+                    setClientSecret(paymentData.clientSecret);
+                    setPaymentAmount(paymentData.amount);
+                    setShowPayment(true);
+                  } else {
+                    console.error("Failed to create payment intent", {
+                      fullResponse: paymentData,
+                      message: paymentData.message,
+                      success: paymentData.success,
+                    });
+                    alert(
+                      `Error initializing payment: ${paymentData.message || "Unknown error"}. Please contact support.`,
+                    );
+                    handlePaymentSuccess(); // Fallback to close for now if payment fails initialization
+                  }
+                })
+                .catch((err) => {
+                  console.error("Payment Intent Error", err);
+                  // Fallback for demo if backend fails or not configured
+                  alert("Trip completed! (Payment skipped due to error)");
+                  handlePaymentSuccess();
+                });
+            });
+          }
         }
       }
     });
 
     return () => unsubscribe();
-  }, [rideId]);
+  }, [rideId, handlePaymentSuccess]);
 
   // Listen to online drivers
   useEffect(() => {
@@ -832,11 +886,10 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
         body: JSON.stringify({
           dropLat: selectedDestination.lat,
           dropLng: selectedDestination.lng,
+          fare: estimate?.fare || null,
           pickupLat: pickup.lat,
           pickupLng: pickup.lng,
           riderId: user.uid,
-          // If we had fare in request, pass it here, but typically backend recalc or trusts estimate
-          // For now, adhere to existing API
         }),
         headers: {
           Authorization: `Bearer ${token}`,
@@ -1889,6 +1942,16 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
           to { transform: rotate(360deg); }
         }
       `}</style>
+
+      {/* Payment Modal */}
+      {showPayment && clientSecret && (
+        <PaymentModal
+          clientSecret={clientSecret}
+          amount={paymentAmount}
+          onSuccess={handlePaymentSuccess}
+          onClose={() => setShowPayment(false)}
+        />
+      )}
     </div>
   );
 }

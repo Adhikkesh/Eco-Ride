@@ -14,7 +14,7 @@ console.log(
   process.env.GOOGLE_API_KEY ? "EXISTS" : "MISSING",
 );
 
-import { app } from "./app.js";
+const { app } = await import("./app.js");
 
 const PORT = process.env.PORT || 3001;
 
