@@ -45,7 +45,7 @@ interface Driver {
   vehicle: Vehicle | null;
 }
 
-export default function AdminVerification() {
+export default function AdminVerification(): JSX.Element {
   const router = useRouter();
   const [passkey, setPasskey] = useState("");
   const [isVerified, setIsVerified] = useState(false);
