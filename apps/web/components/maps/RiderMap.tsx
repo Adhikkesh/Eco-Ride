@@ -15,17 +15,22 @@ import { onValue, ref } from "firebase/database";
 import { doc, getDoc } from "firebase/firestore";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  FaBriefcase,
   FaCar,
   FaCheckCircle,
   FaClock,
+  FaEdit,
   FaGift,
+  FaHome,
   FaLeaf,
   FaMapMarkerAlt,
   FaRoute,
   FaSearch,
   FaSpinner,
+  FaStar,
   FaSync,
   FaTimes,
+  FaTrash,
   FaUsers,
 } from "react-icons/fa";
 import { backendUrl } from "@/config";
@@ -75,6 +80,21 @@ interface RideResponse {
   eta?: string;
   otp?: string;
 }
+
+// Saved locations types
+interface SavedLocation {
+  lat: number;
+  lng: number;
+  name: string;
+}
+
+interface SavedLocations {
+  home: SavedLocation | null;
+  work: SavedLocation | null;
+  favourite: SavedLocation | null;
+}
+
+type LocationType = "home" | "work" | "favourite";
 
 type RideStatus = "idle" | "searching" | "matched" | "on_trip" | "error";
 
@@ -273,6 +293,16 @@ export default function RiderMap({
   const { getEstimate, estimate, loading: estimating, clearEstimate } = useTripEstimator();
   const [decodedPolyline, setDecodedPolyline] = useState<{ lat: number; lng: number }[]>([]);
 
+  // Saved Locations State
+  const [savedLocations, setSavedLocations] = useState<SavedLocations>({
+    favourite: null,
+    home: null,
+    work: null,
+  });
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [savingLocation, setSavingLocation] = useState(false);
+  const [editingLocationType, setEditingLocationType] = useState<LocationType | null>(null);
+
   const mapRef = useRef<google.maps.Map | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
@@ -334,6 +364,40 @@ export default function RiderMap({
         } catch (error) {
           console.error("Error fetching user stats:", error);
         }
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Fetch saved locations on mount
+  useEffect(() => {
+    const fetchSavedLocations = async () => {
+      const user = auth?.currentUser;
+      if (!user) return;
+
+      try {
+        const token = await user.getIdToken();
+        const response = await fetch(`${backendUrl}/user/saved-locations`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.savedLocations) {
+            setSavedLocations(data.savedLocations);
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching saved locations:", error);
+      }
+    };
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        fetchSavedLocations();
       }
     });
 
@@ -987,6 +1051,115 @@ export default function RiderMap({
     alert("Viewing your green rewards...");
   };
 
+  // Save current destination to a slot
+  const handleSaveLocation = async (type: LocationType) => {
+    if (!selectedDestination) {
+      setErrorMessage("Please select a destination first");
+      return;
+    }
+
+    const user = auth?.currentUser;
+    if (!user) {
+      setErrorMessage("Please log in to save locations");
+      return;
+    }
+
+    setSavingLocation(true);
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch(`${backendUrl}/user/saved-locations`, {
+        body: JSON.stringify({
+          location: {
+            lat: selectedDestination.lat,
+            lng: selectedDestination.lng,
+            name: selectedDestination.name,
+          },
+          type,
+        }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        method: "PUT",
+      });
+
+      if (response.ok) {
+        // Update local state
+        setSavedLocations((prev) => ({
+          ...prev,
+          [type]: {
+            lat: selectedDestination.lat,
+            lng: selectedDestination.lng,
+            name: selectedDestination.name,
+          },
+        }));
+        setShowSaveModal(false);
+      } else {
+        const data = await response.json();
+        setErrorMessage(data.message || "Failed to save location");
+      }
+    } catch (error) {
+      console.error("Error saving location:", error);
+      setErrorMessage("Failed to save location");
+    } finally {
+      setSavingLocation(false);
+    }
+  };
+
+  // Select a saved location as destination
+  const handleSelectSavedLocation = (type: LocationType) => {
+    const location = savedLocations[type];
+    if (!location) return;
+
+    setSelectedDestination({
+      lat: location.lat,
+      lng: location.lng,
+      name: location.name,
+    });
+    setSearchDestination(location.name);
+    setEditingLocationType(null); // Close edit menu
+
+    // Pan map to selected location
+    if (mapRef.current) {
+      mapRef.current.panTo({ lat: location.lat, lng: location.lng });
+      mapRef.current.setZoom(15);
+    }
+  };
+
+  // Clear/delete a saved location
+  const handleClearSavedLocation = async (type: LocationType) => {
+    const user = auth?.currentUser;
+    if (!user) return;
+
+    setSavingLocation(true);
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch(`${backendUrl}/user/saved-locations`, {
+        body: JSON.stringify({
+          location: null, // Setting to null clears the location
+          type,
+        }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        method: "PUT",
+      });
+
+      if (response.ok) {
+        setSavedLocations((prev) => ({
+          ...prev,
+          [type]: null,
+        }));
+        setEditingLocationType(null);
+      }
+    } catch (error) {
+      console.error("Error clearing saved location:", error);
+    } finally {
+      setSavingLocation(false);
+    }
+  };
+
   if (!isLoaded) {
     return (
       <div
@@ -1230,7 +1403,471 @@ export default function RiderMap({
                       <span>Destination: {selectedDestination.name}</span>
                     </div>
                   )}
+
+                  {/* Saved Locations Quick Select */}
+                  <div style={{ marginTop: "16px" }}>
+                    <p style={{ color: "#94a3b8", fontSize: "12px", marginBottom: "8px" }}>
+                      Quick Select:
+                    </p>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                      {/* Home Button */}
+                      <div style={{ position: "relative" }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            savedLocations.home
+                              ? editingLocationType === "home"
+                                ? setEditingLocationType(null)
+                                : setEditingLocationType("home")
+                              : selectedDestination
+                                ? setShowSaveModal(true)
+                                : setErrorMessage("Please search and select a destination first")
+                          }
+                          style={{
+                            alignItems: "center",
+                            background: savedLocations.home
+                              ? "rgba(34, 197, 94, 0.15)"
+                              : "rgba(71, 85, 105, 0.3)",
+                            border: savedLocations.home
+                              ? "1px solid rgba(34, 197, 94, 0.4)"
+                              : "1px solid rgba(71, 85, 105, 0.4)",
+                            borderRadius: "8px",
+                            color: savedLocations.home ? "#4ade80" : "#64748b",
+                            cursor: "pointer",
+                            display: "flex",
+                            fontSize: "13px",
+                            gap: "6px",
+                            padding: "8px 12px",
+                          }}
+                          title={savedLocations.home?.name || "Click to set Home"}
+                        >
+                          <FaHome style={{ fontSize: "14px" }} /> Home
+                        </button>
+                        {/* Edit Menu for Home */}
+                        {editingLocationType === "home" && savedLocations.home && (
+                          <div
+                            style={{
+                              background: "rgba(15, 23, 42, 0.98)",
+                              border: "1px solid rgba(34, 197, 94, 0.3)",
+                              borderRadius: "8px",
+                              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                              left: 0,
+                              minWidth: "140px",
+                              padding: "8px",
+                              position: "absolute",
+                              top: "100%",
+                              zIndex: 10,
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleSelectSavedLocation("home")}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#4ade80",
+                                cursor: "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaMapMarkerAlt /> Use Location
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingLocationType(null);
+                                setShowSaveModal(true);
+                              }}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#60a5fa",
+                                cursor: "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaEdit /> Change
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleClearSavedLocation("home")}
+                              disabled={savingLocation}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#f87171",
+                                cursor: savingLocation ? "not-allowed" : "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaTrash /> Remove
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Work Button */}
+                      <div style={{ position: "relative" }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            savedLocations.work
+                              ? editingLocationType === "work"
+                                ? setEditingLocationType(null)
+                                : setEditingLocationType("work")
+                              : selectedDestination
+                                ? setShowSaveModal(true)
+                                : setErrorMessage("Please search and select a destination first")
+                          }
+                          style={{
+                            alignItems: "center",
+                            background: savedLocations.work
+                              ? "rgba(34, 197, 94, 0.15)"
+                              : "rgba(71, 85, 105, 0.3)",
+                            border: savedLocations.work
+                              ? "1px solid rgba(34, 197, 94, 0.4)"
+                              : "1px solid rgba(71, 85, 105, 0.4)",
+                            borderRadius: "8px",
+                            color: savedLocations.work ? "#4ade80" : "#64748b",
+                            cursor: "pointer",
+                            display: "flex",
+                            fontSize: "13px",
+                            gap: "6px",
+                            padding: "8px 12px",
+                          }}
+                          title={savedLocations.work?.name || "Click to set Work"}
+                        >
+                          <FaBriefcase style={{ fontSize: "14px" }} /> Work
+                        </button>
+                        {/* Edit Menu for Work */}
+                        {editingLocationType === "work" && savedLocations.work && (
+                          <div
+                            style={{
+                              background: "rgba(15, 23, 42, 0.98)",
+                              border: "1px solid rgba(34, 197, 94, 0.3)",
+                              borderRadius: "8px",
+                              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                              left: 0,
+                              minWidth: "140px",
+                              padding: "8px",
+                              position: "absolute",
+                              top: "100%",
+                              zIndex: 10,
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleSelectSavedLocation("work")}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#4ade80",
+                                cursor: "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaMapMarkerAlt /> Use Location
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingLocationType(null);
+                                setShowSaveModal(true);
+                              }}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#60a5fa",
+                                cursor: "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaEdit /> Change
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleClearSavedLocation("work")}
+                              disabled={savingLocation}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#f87171",
+                                cursor: savingLocation ? "not-allowed" : "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaTrash /> Remove
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Favourite Button */}
+                      <div style={{ position: "relative" }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            savedLocations.favourite
+                              ? editingLocationType === "favourite"
+                                ? setEditingLocationType(null)
+                                : setEditingLocationType("favourite")
+                              : selectedDestination
+                                ? setShowSaveModal(true)
+                                : setErrorMessage("Please search and select a destination first")
+                          }
+                          style={{
+                            alignItems: "center",
+                            background: savedLocations.favourite
+                              ? "rgba(34, 197, 94, 0.15)"
+                              : "rgba(71, 85, 105, 0.3)",
+                            border: savedLocations.favourite
+                              ? "1px solid rgba(34, 197, 94, 0.4)"
+                              : "1px solid rgba(71, 85, 105, 0.4)",
+                            borderRadius: "8px",
+                            color: savedLocations.favourite ? "#4ade80" : "#64748b",
+                            cursor: "pointer",
+                            display: "flex",
+                            fontSize: "13px",
+                            gap: "6px",
+                            padding: "8px 12px",
+                          }}
+                          title={savedLocations.favourite?.name || "Click to set Favourite"}
+                        >
+                          <FaStar style={{ fontSize: "14px" }} /> Favourite
+                        </button>
+                        {/* Edit Menu for Favourite */}
+                        {editingLocationType === "favourite" && savedLocations.favourite && (
+                          <div
+                            style={{
+                              background: "rgba(15, 23, 42, 0.98)",
+                              border: "1px solid rgba(34, 197, 94, 0.3)",
+                              borderRadius: "8px",
+                              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                              left: 0,
+                              minWidth: "140px",
+                              padding: "8px",
+                              position: "absolute",
+                              top: "100%",
+                              zIndex: 10,
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleSelectSavedLocation("favourite")}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#4ade80",
+                                cursor: "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaMapMarkerAlt /> Use Location
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingLocationType(null);
+                                setShowSaveModal(true);
+                              }}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#60a5fa",
+                                cursor: "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaEdit /> Change
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleClearSavedLocation("favourite")}
+                              disabled={savingLocation}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#f87171",
+                                cursor: savingLocation ? "not-allowed" : "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaTrash /> Remove
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Save Current Destination Button */}
+                    {selectedDestination && (
+                      <button
+                        type="button"
+                        onClick={() => setShowSaveModal(true)}
+                        style={{
+                          alignItems: "center",
+                          background: "transparent",
+                          border: "1px dashed rgba(34, 197, 94, 0.5)",
+                          borderRadius: "8px",
+                          color: "#4ade80",
+                          cursor: "pointer",
+                          display: "flex",
+                          fontSize: "13px",
+                          gap: "6px",
+                          justifyContent: "center",
+                          marginTop: "8px",
+                          padding: "8px 12px",
+                          width: "100%",
+                        }}
+                      >
+                        + Save this destination
+                      </button>
+                    )}
+                  </div>
                 </div>
+
+                {/* Save Location Modal */}
+                {showSaveModal && (
+                  <div
+                    style={{
+                      background: "rgba(15, 23, 42, 0.95)",
+                      border: "1px solid rgba(34, 197, 94, 0.3)",
+                      borderRadius: "16px",
+                      marginBottom: "16px",
+                      padding: "16px",
+                    }}
+                  >
+                    <h4 style={{ color: "white", fontSize: "14px", margin: "0 0 12px" }}>
+                      Save "{selectedDestination?.name}" as:
+                    </h4>
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      <button
+                        type="button"
+                        onClick={() => handleSaveLocation("home")}
+                        disabled={savingLocation}
+                        style={{
+                          alignItems: "center",
+                          background: "rgba(34, 197, 94, 0.2)",
+                          border: "1px solid rgba(34, 197, 94, 0.5)",
+                          borderRadius: "8px",
+                          color: "#4ade80",
+                          cursor: savingLocation ? "not-allowed" : "pointer",
+                          display: "flex",
+                          flex: 1,
+                          fontSize: "13px",
+                          gap: "6px",
+                          justifyContent: "center",
+                          padding: "10px",
+                        }}
+                      >
+                        <FaHome style={{ fontSize: "14px" }} /> Home
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSaveLocation("work")}
+                        disabled={savingLocation}
+                        style={{
+                          alignItems: "center",
+                          background: "rgba(34, 197, 94, 0.2)",
+                          border: "1px solid rgba(34, 197, 94, 0.5)",
+                          borderRadius: "8px",
+                          color: "#4ade80",
+                          cursor: savingLocation ? "not-allowed" : "pointer",
+                          display: "flex",
+                          flex: 1,
+                          fontSize: "13px",
+                          gap: "6px",
+                          justifyContent: "center",
+                          padding: "10px",
+                        }}
+                      >
+                        <FaBriefcase style={{ fontSize: "14px" }} /> Work
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSaveLocation("favourite")}
+                        disabled={savingLocation}
+                        style={{
+                          alignItems: "center",
+                          background: "rgba(34, 197, 94, 0.2)",
+                          border: "1px solid rgba(34, 197, 94, 0.5)",
+                          borderRadius: "8px",
+                          color: "#4ade80",
+                          cursor: savingLocation ? "not-allowed" : "pointer",
+                          display: "flex",
+                          flex: 1,
+                          fontSize: "13px",
+                          gap: "6px",
+                          justifyContent: "center",
+                          padding: "10px",
+                        }}
+                      >
+                        <FaStar style={{ fontSize: "14px" }} /> Favourite
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowSaveModal(false)}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        color: "#94a3b8",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                        marginTop: "12px",
+                        padding: "4px",
+                        width: "100%",
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
 
                 {/* Pickup Location Section */}
                 <div style={{ marginBottom: "16px" }}>

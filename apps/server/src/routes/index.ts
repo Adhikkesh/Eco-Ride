@@ -14,6 +14,7 @@ import {
   requestRide,
   startRide,
 } from "../controllers/rideController.js";
+import { getSavedLocations, updateSavedLocation } from "../controllers/savedLocationsController.js";
 import { CreateUserController, GetDriverStatusController } from "../controllers/userController.js";
 import { verifyToken } from "../middleware/authMiddleware.js";
 
@@ -24,6 +25,10 @@ router.get("/auth/verify", verifyToken, VerifyTokenController);
 router.get("/getme", verifyToken, GetMeController);
 router.post("/user", verifyToken, CreateUserController);
 router.get("/user/driver-status", verifyToken, GetDriverStatusController);
+
+// Saved locations routes
+router.get("/user/saved-locations", verifyToken, getSavedLocations);
+router.put("/user/saved-locations", verifyToken, updateSavedLocation);
 
 // Ride routes
 router.post("/ride/request", verifyToken, requestRide);
