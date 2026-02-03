@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -92,7 +93,10 @@ class AuthService {
   
   // Backend URL (Use 10.0.2.2 for Android Emulator, localhost for iOS Simulator/Web)
   // TODO: Use better config management
+  // Backend URL (Use 10.0.2.2 for Android Emulator, localhost for iOS Simulator/Web)
+  // TODO: Use better config management
   String get _backendUrl {
+     if (kIsWeb) return 'http://localhost:3001';
      if (Platform.isAndroid) return 'http://10.0.2.2:3001';
      return 'http://localhost:3001';
   }

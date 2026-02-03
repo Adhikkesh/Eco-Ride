@@ -174,63 +174,67 @@ class _LoginScreenState extends State<LoginScreen>
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
-        child: SingleChildScrollView(
-          child: Container(
-            height: size.height - MediaQuery.of(context).padding.top,
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppDimens.paddingLG,
-            ),
-            child: FadeTransition(
-              opacity: _fadeAnimation,
-              child: SlideTransition(
-                position: _slideAnimation,
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const Spacer(flex: 2),
+        child: CustomScrollView(
+          slivers: [
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppDimens.paddingLG,
+                ),
+                child: FadeTransition(
+                  opacity: _fadeAnimation,
+                  child: SlideTransition(
+                    position: _slideAnimation,
+                    child: Form(
+                      key: _formKey,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Spacer(flex: 2),
 
-                      // Logo & Branding
-                      _buildHeader(),
+                          // Logo & Branding
+                          _buildHeader(),
 
-                      const SizedBox(height: 48),
+                          const SizedBox(height: 48),
 
-                      // Form Fields
-                      _buildForm(),
+                          // Form Fields
+                          _buildForm(),
 
-                      const SizedBox(height: 16),
+                          const SizedBox(height: 16),
 
-                      // Forgot Password
-                      _buildForgotPassword(),
+                          // Forgot Password
+                          _buildForgotPassword(),
 
-                      const SizedBox(height: 32),
+                          const SizedBox(height: 32),
 
-                      // Login Button
-                      _buildLoginButton(),
+                          // Login Button
+                          _buildLoginButton(),
 
-                      const SizedBox(height: 24),
+                          const SizedBox(height: 24),
 
-                      // OR Divider
-                      _buildOrDivider(),
+                          // OR Divider
+                          _buildOrDivider(),
 
-                      const SizedBox(height: 24),
+                          const SizedBox(height: 24),
 
-                      // Google Sign-In Button
-                      _buildGoogleSignInButton(),
+                          // Google Sign-In Button
+                          _buildGoogleSignInButton(),
 
-                      const Spacer(flex: 2),
+                          const Spacer(flex: 2),
 
-                      // Sign Up Link
-                      _buildSignUpLink(),
+                          // Sign Up Link
+                          _buildSignUpLink(),
 
-                      const SizedBox(height: AppDimens.paddingLG),
-                    ],
+                          const SizedBox(height: AppDimens.paddingLG),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
+          ],
         ),
       ),
     );

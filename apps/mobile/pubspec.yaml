@@ -23,6 +23,11 @@ dependencies:
   # UI & Styling
   google_fonts: ^6.2.1
   cupertino_icons: ^1.0.8
+  flutter_svg: ^2.0.10
+  
+  # Maps & Location
+  google_maps_flutter: ^2.5.3
+  location: ^6.0.2
 
 dev_dependencies:
   flutter_test:

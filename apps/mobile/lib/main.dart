@@ -12,6 +12,7 @@ import 'core/constants/app_constants.dart';
 import 'core/services/auth_service.dart';
 import 'features/auth/screens/login_screen.dart';
 import 'features/onboarding/screens/onboarding_screen.dart';
+import 'features/home/screens/home_screen.dart';
 import 'firebase_options.dart';
 
 /// Global flag to indicate if Firebase is available
@@ -316,6 +317,7 @@ class AuthGate extends StatelessWidget {
               }
 
               if (profileSnapshot.hasData && profileSnapshot.data == true) {
+                // TODO: Check user role here if needed to separate Rider/Driver dashboards
                 return const HomeScreen();
               }
 
@@ -332,101 +334,4 @@ class AuthGate extends StatelessWidget {
   }
 }
 
-/// Placeholder Home Screen
-/// TODO: Replace with actual home screen based on user role
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
 
-  @override
-  Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: Text(
-          AppStrings.appName,
-          style: GoogleFonts.poppins(
-            fontWeight: FontWeight.bold,
-            color: AppColors.primary,
-          ),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () async {
-              await FirebaseAuth.instance.signOut();
-            },
-          ),
-        ],
-      ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(AppDimens.paddingLG),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // Success Icon
-              Container(
-                width: 100,
-                height: 100,
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.check_circle,
-                  size: 60,
-                  color: AppColors.primary,
-                ),
-              ),
-
-              const SizedBox(height: 32),
-
-              Text(
-                'Welcome to Eco-Ride!',
-                style: GoogleFonts.poppins(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-
-              const SizedBox(height: 8),
-
-              Text(
-                'You are successfully signed in',
-                style: GoogleFonts.poppins(
-                  fontSize: 16,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              Text(
-                user?.email ?? 'No email',
-                style: GoogleFonts.poppins(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.primary,
-                ),
-              ),
-
-              const SizedBox(height: 48),
-
-              // Sign Out Button
-              OutlinedButton.icon(
-                onPressed: () async {
-                  await FirebaseAuth.instance.signOut();
-                },
-                icon: const Icon(Icons.logout),
-                label: const Text('Sign Out'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}

@@ -81,12 +81,33 @@ class _SignUpScreenState extends State<SignUpScreen>
         role: _selectedRole,
       );
 
+      // Sign out immediately so user can log in
+      await AuthService.instance.signOut();
+
       // Show success message
       if (mounted) {
-        _showSuccessSnackbar('Account created successfully!');
-        // Navigation will be handled by auth state listener in main.dart
+        _showSuccessSnackbar('Account created! Please sign in.');
+        _navigateToLogin(); 
       }
     } on AuthException catch (e) {
+      // Smart Registration: If email exists, try to log in
+      if (e.code == 'email-already-in-use') {
+        try {
+          await AuthService.instance.signIn(
+            email: _emailController.text,
+            password: _passwordController.text,
+          );
+          // If successful, AuthGate will handle navigation to Home
+          return;
+        } catch (_) {
+          // If login fails (wrong password), fall through to show simple error
+          if (mounted) {
+             _showErrorSnackbar('Account exists. Please sign in.');
+          }
+          return;
+        }
+      }
+      
       if (mounted) {
         _showErrorSnackbar(e.message);
       }

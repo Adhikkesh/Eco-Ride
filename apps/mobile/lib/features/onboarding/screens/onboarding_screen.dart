@@ -156,10 +156,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         pollutionExpiry: _pollutionExpiryController.text,
       );
 
+      // Sign out immediately
+       await AuthService.instance.signOut();
+
       if (mounted) {
-        // Navigate to dashboard/home (placeholder)
-         _showSuccessSnackbar('Welcome to Eco-Ride!');
-         // TODO: Navigate to Home Screen
+         _showSuccessSnackbar('Profile Completed! Please sign in.');
+         // Navigate to Login Screen (clearing stack works best if we came from AuthGate)
+         // But since AuthGate catches the signOut, it will rebuild to Login Screen automatically.
+         // However, in some cases it's better to be explicit if we are inside a navigator.
+         // For OnboardingScreen which is shown by AuthGate, signOut will trigger rebuild.
       }
     } catch (e) {
       if (mounted) {
