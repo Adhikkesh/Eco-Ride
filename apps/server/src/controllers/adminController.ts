@@ -1,11 +1,29 @@
+/**
+ * @fileoverview Admin Controller
+ * @description Handles administrative operations for the Eco-Ride platform.
+ *              Includes driver verification management and admin-only access controls.
+ * @module controllers/adminController
+ */
+
 import type { RequestHandler } from "express";
 import status from "http-status";
 import { db } from "../config/firebase.js";
 
-// Admin UID for authorization
+/**
+ * Admin User ID for authorization checks.
+ * Only this user has access to admin-level operations.
+ * @constant {string}
+ */
 const ADMIN_UID = "dq8zZsXXsldH9yVcrB4B7qbHzgB2";
 
-// Get all drivers with kyc_verified = false
+/**
+ * Get Unverified Drivers Controller
+ * @description Retrieves all drivers with pending KYC verification (kyc_verified = false).
+ *              Includes user details, driver profile, and vehicle information for each driver.
+ * @route GET /admin/unverified-drivers
+ * @access Admin only
+ * @returns {Object} JSON response containing array of unverified driver data
+ */
 export const GetUnverifiedDriversController: RequestHandler = async (req, res) => {
   const firebaseUser = req.user;
 
@@ -79,12 +97,26 @@ export const GetUnverifiedDriversController: RequestHandler = async (req, res) =
   }
 };
 
+/**
+ * Request body interface for driver verification endpoint.
+ * @interface VerifyDriverBody
+ * @property {string} driver_uid - The unique identifier of the driver to verify
+ * @property {boolean} verified - Whether to approve (true) or decline (false) the driver
+ */
 interface VerifyDriverBody {
   driver_uid: string;
   verified: boolean;
 }
 
-// Verify or decline a driver
+/**
+ * Verify Driver Controller
+ * @description Approves or declines a driver's KYC verification status.
+ *              Updates both driver_profile and users collections in Firestore.
+ * @route POST /admin/verify-driver
+ * @access Admin only
+ * @param {VerifyDriverBody} req.body - Contains driver_uid and verification decision
+ * @returns {Object} JSON response with verification result
+ */
 export const VerifyDriverController: RequestHandler<object, object, VerifyDriverBody> = async (
   req,
   res,
