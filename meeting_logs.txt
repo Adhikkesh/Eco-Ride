@@ -1,0 +1,350 @@
+Meeting 1 Date: 12/25/2025 Meeting Summary: First proper sit-down to figure out what we’re actually building. Mainly focused on the user stories for the driver onboarding. Agenda:
+
+Define the scope of the driver app.
+List out the "must-have" features for the MVP.
+Create user stories for the signup process. Audit:
+Adithya Ajay drafted the main user stories for the driver onboarding process so we know exactly what screens we need.
+Adhikkesh SK simplified the rider booking flow into smaller tasks to make it easier to track progress.
+Varun listed out all the requirements for the admin dashboard, focusing specifically on how we handle user reports.
+Nitin went through the stories and added clear acceptance criteria so QA knows exactly what to test later.
+Vijay helped prioritize the critical stories for the MVP launch so we don't get sidetracked by nice-to-haves. Final Outcome: We have a solid list of user stories for the driver side. Everyone knows what the "Happy Path" looks like for a new driver joining the platform.
+Meeting 2 Date: 12/26/2025 Meeting Summary: Follow-up on the user stories, filling in the gaps we missed yesterday, especially for the admin side. Agenda:
+
+Review yesterday's stories.
+Brainstorm missing edge cases.
+Finalize the rider flow stories. Audit:
+Adhikkesh SK mapped out the entire rider flow so we could spot the gaps in our current story list.
+Adithya Ajay realized we forgot a few key stories for the driver verification process and got those added.
+Varun suggested breaking down the big payment story into smaller chunks so it's not so overwhelming.
+Nitin insisted we add acceptance criteria for the map loading speed in the search stories.
+Vijay reviewed the backlog and helped us flag which stories are actual blockers for the next sprint. Final Outcome: Rider stories are complete. We realized verification is going to be trickier than we thought.
+Meeting 3 Date: 12/27/2025 Meeting Summary: Drawing day. We got the whiteboard out and sketched the whole user journey. Agenda:
+
+Visualize the user flow.
+Identify dead ends in the navigation.
+Draw the initial flowcharts. Audit:
+Adithya Ajay grabbed the marker and drew out the main user journey on the whiteboard so we could actually see the flow.
+Adhikkesh SK organized all the sticky notes on the chart, grouping them by feature so the board wasn't a total mess.
+Varun was typing up the digital version while we were drawing, making sure we didn't lose any of the details.
+Nitin pointed out a dead end in the flow chart for the sign-up process that we completely missed at first.
+Vijay took pictures of the final chart and uploaded them to the drive so we have a reference for later. Final Outcome: A messy but accurate flowchart of the whole app on the whiteboard. Digital version is in progress.
+Meeting 4 Date: 12/29/2025 Meeting Summary: Verifying the charts we made. We found some logic holes and fixed them before starting the real diagrams. Agenda:
+
+Review the digital flowcharts.
+Walk through the logic step-by-step.
+Sign off on the flows. Audit:
+Adhikkesh SK led the final review of the chart, walking us through each step to verify it matches the latest requirements.
+Adithya Ajay spotted a couple of logical gaps in the driver flow we drew yesterday and we fixed them right there.
+Varun double-checked the documentation against the visual chart to make sure the text descriptions were actually accurate.
+Nitin did a mock run-through using the chart as a guide, pretending to be a new user to see if it made sense.
+Vijay gave the final thumbs up on the chart and saved the finished version to the shared project folder. Final Outcome: Flowcharts are locked. We are ready to move to formal UML diagrams.
+Meeting 5 Date: 12/30/2025 Meeting Summary: Use Case diagram time. Defining exactly who does what in the system. Agenda:
+
+Identify all actors (Driver, Rider, Admin).
+Map use cases to actors.
+Define "include" and "extend" relationships. Audit:
+Adithya Ajay sketched out the system boundary first so we were clear on what's inside the app vs outside.
+Adhikkesh SK identified all the primary actors like Rider, Driver, and Admin to make sure we covered every user type.
+Varun started drawing lines between the actors and their specific use cases to sort out who does what.
+Nitin pointed out that "Manage Profile" needed to be its own use case since both drivers and riders do it differently.
+Vijay made sure we used the right arrows for the "include" and "extend" relationships so the logic actually holds up. Final Outcome: Clear Use Case diagram. We know exactly what permissions each role needs.
+Meeting 6 Date: 12/31/2025 Meeting Summary: New Year's Eve working session (dedication!). Tackling the Class Diagram. Agenda:
+
+Define core classes (User, Ride, Vehicle).
+Determine attributes and methods.
+Map relationships and multiplicity. Audit:
+Adhikkesh SK listed out the core entities like User, Driver, and Trip so we could start building the class structure around them.
+Adithya Ajay added the essential attributes and methods to each class, making sure we didn't miss things like "updateLocation" for the Driver.
+Varun connected the classes with the right relationships, figuring out where we needed composition versus just simple association.
+Nitin checked the multiplicity constraints, asking stuff like "can a User really have multiple active Trips at once?"
+Vijay suggested we use an abstract class for the User since Riders and Drivers share so many of the same properties. Final Outcome: A solid class diagram that basically writes our database schema for us.
+Meeting 7 Date: 01/01/2026 Meeting Summary: Sequence diagrams. figuring out the timing of messages, especially for payments and matching. Agenda:
+
+Map out the "Book Ride" sequence.
+Map out the "Payment" sequence.
+Identify async operations. Audit:
+Adithya Ajay mapped out the vertical lifelines for the User, Server, and Stripe to show who talks to whom during a payment.
+Adhikkesh SK drew the message arrows for the ride acceptance flow, making sure we distinguished between the sync and async calls.
+Varun added the activation boxes on the lifelines so we could see exactly when the server is busy processing a request.
+Nitin caught a missing "alt" fragment where we forgot to show what happens if the payment actually fails.
+Vijay walked through the timeline step-by-step to make sure the order of operations matched our backend logic perfectly. Final Outcome: We know the order of API calls now. The payment flow is much clearer.
+Meeting 8 Date: 01/02/2026 Meeting Summary: ER Diagram. Designing the database tables and how they link up. Agenda:
+
+Define database collections/tables.
+Normalize the data.
+define Foreign keys and indexes. Audit:
+Adhikkesh SK sketched out the main tables on the board, separating the 'Vehicle' details from the 'Driver' table so the schema is cleaner.
+Adithya Ajay connected the tables with the lines, making us figure out the exact cardinality like whether one user can really have multiple active bookings.
+Varun argued that we should keep the 'Location' history in a separate collection instead of embedding it, just to keep the main documents light.
+Nitin pointed out we were missing a foreign key in the 'Review' table, so we wouldn't have known which ride the rating actually belonged to.
+Vijay went through the whole diagram one last time to make sure we weren't duplicating data and that everything was properly normalized. Final Outcome: Database schema is ready. We chose to separate Vehicle data to keep things clean.
+Meeting 9 Date: 01/03/2026 Meeting Summary: Architecture diagram day. High-level view of the stack. Agenda:
+
+Define the tech stack components.
+Draw the interaction between Frontend, Backend, and DB.
+Identify external services (Maps, Stripe). Audit:
+Adithya Ajay drew the big boxes for the Frontend, Backend, and Database to show the high-level separation of concerns.
+Adhikkesh SK added the specific tech stack icons like React, Node.js, and Firebase so it was clear what tools we're actually using.
+Varun drew the cloud around the external services like Stripe and Google Maps to show they live outside our main infrastructure.
+Nitin insisted we draw the Load Balancer in front of the server instances to show how we handle traffic scaling.
+Vijay connected everything with directional arrows to show the data flow between the client, server, and the database clusters. Final Outcome: Full architecture diagram is done. It looks professional and covers all our bases.
+Meeting 10 Date: 01/05/2026 Meeting Summary: Actual coding starts! Project setup and repo structure. Agenda:
+
+Initialize the Monorepo.
+Set up Firebase Console.
+Configure Shared libraries. Audit:
+Adhikkesh SK set up the monorepo structure with Turbo, separating the apps and packages folders so the code stays organized.
+Adithya Ajay initialized the Firebase project console and generated the config files we needed to connect the app.
+Varun created the shared UI library folder so we can reuse components between the driver and rider apps later.
+Nitin added the Firebase SDK to the package.json and tested the connection to make sure the keys were actually working.
+Vijay documented the folder hierarchy in the README so everyone knows exactly where to put new files. Final Outcome: Repo is live. Firebase is connected. We are ready to code.
+Meeting 11 Date: 01/06/2026 Meeting Summary: Authentication and Login logic. Getting users into the system. Agenda:
+
+Implement Firebase Auth.
+Build Login UI.
+Secure routes. Audit:
+Adithya Ajay hooked up the Firebase Authentication SDK so we can actually sign users up with Google and email.
+Adhikkesh SK built the login form UI and made sure the validation errors show up properly when you type the wrong password.
+Varun implemented the protected route wrapper so unauthenticated users get kicked back to the login page immediately.
+Nitin set up the JWT token exchange on the backend to verify the user's identity on every API request.
+Vijay tested the "forgot password" flow and fixed a bug where the reset email wasn't sending out at first. Final Outcome: We can log in and sign up. Basic auth security is in place.
+Meeting 12 Date: 01/07/2026 Meeting Summary: Mobile App Setup. We decided on Flutter. Agenda:
+
+Initialize Flutter project.
+Setup file structure.
+Configure linting. Audit:
+Adhikkesh SK ran flutter create and wiped out that default counter app so we had a clean base to work from.
+Adithya Ajay updated the pubspec.yaml file, adding the essential packages like provider and firebase_core that we need right away.
+Varun organized the lib folder structure, creating separate directories for models, views, and view-models to keep the architecture clean.
+Nitin spent some time debugging the Gradle build errors but finally got the app running smoothly on the Android emulator.
+Vijay set up the analysis_options.yaml with stricter linting rules so we don't get lazy with our code quality. Final Outcome: Mobile repo is initialized. Emulator is running.
+Meeting 13 Date: 01/08/2026 Meeting Summary: separating the roles. Drivers and Riders see different things. Agenda:
+
+Implement RBAC (Role Based Access Control).
+Update User model.
+Test permission checks. Audit:
+Adithya Ajay added that middleware check so now regular users definitely can't accidentally hit the admin routes.
+Adhikkesh SK updated the user model in the database to include the new role field so we can distinguish between drivers and riders.
+Varun started splitting up the main navigation bar so drivers see the "Find Rides" button while riders just see "Book".
+Nitin tried manually sending a driver-only request as a rider token and confirmed it got rejected with a 403 error.
+Vijay wrote down the full permission list in the wiki so we don't forget which role is allowed to edit generic profile settings versus sensitive data. Final Outcome: Role separation is working. Backend is secure against unauthorized role access.
+Meeting 14 Date: 01/09/2026 Meeting Summary: Admin Dashboard kickoff. We need to see what's happening in the system. Agenda:
+
+Build Stats overview.
+Build User Management table.
+Implement Search/Filter. Audit:
+Adhikkesh SK mocked up the main stats page so we can finally see how many active rides we actually have at a glance.
+Adithya Ajay hooked up the user management table to the live API and thankfully the data is loading pretty fast.
+Varun added that "Suspend User" button we talked about, but put it behind a confirmation modal so we don't click it by accident.
+Nitin fixed the pagination on the activity logs because it was breaking whenever we went past page one.
+Vijay added a search filter to the driver list so we don't have to scroll forever to find a specific person. Final Outcome: Admin dashboard is functional. We can manage users now.
+Meeting 15 Date: 01/10/2026 Meeting Summary: License Verification and KYC. Critical for the driver side. Agenda:
+
+Secure storage for docs.
+Frontend upload form.
+Expiry checking logic. Audit:
+Adithya Ajay set up the secure storage bucket so usage of the uploaded license photos doesn't expose them to the public.
+Adhikkesh SK finished the frontend form for the KYC submission, ensuring the camera capture actually works on mobile.
+Varun added the backend logic to automatically flag licenses that are about to expire so we don't approve invalid drivers.
+Nitin tested the manual approval flow in the admin panel to make sure the status updates immediately for the driver.
+Vijay wrote the script to verify the document format is actually an image or PDF before the upload even starts. Final Outcome: KYC flow is built. We can accept and store license docs securely.
+Meeting 16 Date: 01/12/2026 Meeting Summary: Map Integration. Getting Google Maps to show up and look good. Agenda:
+
+API Key configuration.
+Drawing Polylines.
+Custom Markers. Audit:
+Adhikkesh SK got the Google Maps API keys working and restricted them to our domain so we don't get charged for random usage.
+Adithya Ajay figured out how to draw the polyline on the map so the route actually looks smooth instead of just a straight line.
+Varun customized the map markers to use our car icons instead of the default red pins which looked kinda generic.
+Nitin added the autocomplete for the address search and debounced the input so we aren't firing a request for every single letter.
+Vijay looked into the pricing and suggested we cache common routes because the direction API calls are gonna get expensive fast. Final Outcome: Maps are rendering with custom styles. Address search is working.
+Meeting 17 Date: 01/13/2026 Meeting Summary: Matching Logic. Finding the right driver for the rider. Agenda:
+
+Geospatial queries.
+Filtering by vehicle type.
+Request timeouts. Audit:
+Adithya Ajay wrote the geospatial query to find the nearest drivers within a 3km radius so we aren't matching people across town.
+Adhikkesh SK added the vehicle type filter because users were getting matched with bikes when they specifically requested a car.
+Varun optimized the driver ranking logic to prioritize those with higher ratings, which should hopefully improve service quality.
+Nitin implemented a timeout so if a driver doesn't accept in 30 seconds, the request automatically moves to the next closest one.
+Vijay fixed that race condition where two riders could book the same driver at the exact same moment. Final Outcome: Matching engine is solid. It handles timeouts and race conditions well.
+Meeting 18 Date: 01/14/2026 Meeting Summary: ETA and Pricing. Calculating how much it costs and how long it takes. Agenda:
+
+Distance Matrix API.
+Base fare + Surge pricing logic.
+Waiting charges. Audit:
+Adhikkesh SK fine-tuned the distance matrix API call to make sure the ETA prediction accounts for the current rush hour traffic.
+Adithya Ajay implemented the base fare calculation logic so it automatically adjusts based on the vehicle type selected.
+Varun added the surge pricing multiplier that kicks in when demand in a specific area gets too high.
+Nitin fixed the bug where the estimated price wasn't updating when the user changed their drop-off location.
+Vijay wrote the function to calculate the waiting charges if the driver has been sitting at the pickup point for more than 5 minutes. Final Outcome: Pricing is accurate and dynamic. ETA is linked to real-time traffic.
+Meeting 19 Date: 01/15/2026 Meeting Summary: OTP Validation. Security for starting the ride. Agenda:
+
+Generate 4-digit OTP.
+Rider Popup.
+Driver Verification input. Audit:
+Adithya Ajay implemented the logic to generate a secure 4-digit OTP as soon as the driver arrives at the pickup location.
+Adhikkesh SK built the modal on the rider's screen that pops up automatically so they don't have to go digging for the code.
+Varun added the verification step on the driver's side, ensuring the ride absolutely cannot start until the correct code is entered.
+Nitin put in a retry limit so if someone guesses the wrong code 5 times, it alerts the support system immediately.
+Vijay tested the flow with bad network conditions to make sure the OTP validation doesn't hang if the signal drops for a second. Final Outcome: Start Ride flow is secure with OTP.
+Meeting 20 Date: 01/16/2026 Meeting Summary: Admin Driver Validation. The interface for approving drivers. Agenda:
+
+Side-by-side comparison view.
+Auto-validation of dates.
+Notifications on approval. Audit:
+Adhikkesh SK built the review interface so admins can see the license photo and the driver's selfie side-by-side for easy comparison.
+Adithya Ajay wrote the backend validator that automatically checks if the submitted insurance dates are actually valid.
+Varun added the "Request Re-upload" feature so we don't have to flat out reject a driver just because the image was a bit blurry.
+Nitin set up the webhook that instantly notifies the driver via a push notification the second they get approved.
+Vijay ensured that every single approval action is logged with the admin's ID so we know exactly who verified whom. Final Outcome: Admin workflow for driver onboarding is smooth and logs everything.
+Meeting 21 Date: 01/17/2026 Meeting Summary: Routes API and Navigation. Better pathfinding. Agenda:
+
+Google Routes API integration.
+Rendering smooth polylines.
+Map camera bounds optimization. Audit:
+Adithya Ajay integrated the Google Routes API to fetch the most efficient path, ensuring we factor in real-time traffic data.
+Adhikkesh SK worked on rendering the polyline on the frontend so the route actually snaps to the roads instead of being a jagged mess.
+Varun implemented the logic to offer alternative routes, giving riders the choice between the fastest way and the cheapest way.
+Nitin added error handling for when the API fails, falling back to a straight-line estimation so the app doesn't just crash.
+Vijay optimized the map view bounds so that when a route is loaded, the camera automatically zooms to fit both the pickup and drop-off points perfectly. Final Outcome: Navigation looks professional. "Snap to road" makes a huge difference.
+Meeting 22 Date: 01/19/2026 Meeting Summary: Green Points System. Gamifying the eco-friendly aspect. Agenda:
+
+Progress bars.
+Carbon emission calc.
+Rewards catalog. Audit:
+Adhikkesh SK added the progress bar on the home screen so users know exactly how close they are to the next green tier.
+Adithya Ajay wired up the carbon emission calculator to the points engine so it's based on actual data, not just random numbers.
+Varun built the rewards catalog page, making sure the discount coupons actually look clickable.
+Nitin spotted that edge case where cancelling a ride was still awarding points and fixed it immediately.
+Vijay defined the point expiration policy so we don't carry that liability on the books forever. Final Outcome: Gamification is live. Logic for carbon saving is connected to the ride data.
+Meeting 23 Date: 01/20/2026 Meeting Summary: Saved Locations. Making booking faster. Agenda:
+
+Home/Work shortcuts.
+Specialized search.
+Syncing across devices. Audit:
+Adithya Ajay set up the "Home" and "Work" shortcuts so users can book a ride to their daily spots with just one tap.
+Adhikkesh SK built the specialized search bar that prioritizes your saved places before showing random Google Maps results.
+Varun added the "Recent Destinations" list below the saved spots, because half the time you just want to go back to where you were yesterday.
+Nitin implemented the delete functionality so users can clear out that coffee shop they only visited once.
+Vijay fixed the syncing issue where saved locations added on the website weren't showing up on the mobile app immediately. Final Outcome: Saved locations work. Recent destinations is a nice touch.
+Meeting 24 Date: 01/21/2026 Meeting Summary: UI Redesign. Making it look premium. Agenda:
+
+Glassmorphism.
+Dark Mode.
+Icon standardization. Audit:
+Adhikkesh SK proposed the new glassmorphism look for the dashboard cards and it looks surprisingly clean.
+Adithya Ajay pushed for a complete dark mode overhaul because the current grey just looked muddy on OLED screens.
+Varun standardized the spacing system to use 4px increments so we stop guessing margins during development.
+Nitin replaced all the raster icons with SVGs so they stay crisp no matter how much you zoom in.
+Vijay convinced us to simplify the ride booking animation so it doesn't lag on older Android phones. Final Outcome: App looks 10x better. Dark mode is the default now.
+Meeting 25 Date: 01/22/2026 Meeting Summary: Mobile Login nuances. Biometrics and Persistent state. Agenda:
+
+FaceID/Biometrics.
+Smooth transitions.
+Persistent login state. Audit:
+Adithya Ajay implemented the biometric login using FaceID so users don't have to type their password every single time.
+Adhikkesh SK smoothed out the animation on the splash screen so the transition to the login form feels seamless.
+Varun hooked up the "Sign in with Google" button and finally got the redirect callback working properly on iOS.
+Nitin added the persistent storage logic so the user stays logged in even if they kill the app and restart it.
+Vijay fixed the keyboard avoiding view issue where the input fields were getting hidden behind the software keypad on smaller screens. Final Outcome: Login is seamless now. Biometrics works great.
+Meeting 26 Date: 01/23/2026 Meeting Summary: Modifying Onboarding flow. Feedback from initial checks. Agenda:
+
+Remove "Why join us".
+Verify phone number logic.
+Permissions timing. Audit:
+Adhikkesh SK removed that extra "Why join us" slide because the analytics showed almost everyone was skipping it anyway.
+Adithya Ajay tweaked the phone number verification logic so it doesn't block users if the SMS delivery is delayed by a few seconds.
+Varun added a subtle progress stepper at the top so users actually know how many screens are left before they finish.
+Nitin found a critical bug where pressing "Back" during the tutorial was crashing the app on older iOS versions.
+Vijay suggested we ask for location permissions slightly later in the flow so we don't scare new users off immediately. Final Outcome: Onboarding is leaner and less annoying.
+Meeting 27 Date: 01/24/2026 Meeting Summary: Updating Dashboard Logic. Real-time charts. Agenda:
+
+Aggregation query optimization.
+New Chart library.
+Websocket connections. Audit:
+Adithya Ajay rewrote the main aggregation query because fetching all that ride history at once was killing the server CPU.
+Adhikkesh SK switched us over to a new chart library since the old one kept flickering whenever the data refreshed.
+Varun rearranged the widget layout so the "Earnings Today" card is finally the first thing drivers see.
+Nitin hooked up the WebSocket connection so the ride counter actually increments in real-time without needing a page reload.
+Vijay added a "skeleton" loading state so the dashboard doesn't just look like a blank white screen while it's fetching data. Final Outcome: Dashboard is performant now. No more flickering charts.
+Meeting 28 Date: 01/26/2026 Meeting Summary: Stripe Payment Integration. Taking money. Agenda:
+
+Payment Sheet integration (Client).
+Payment Intent Creation (Server).
+Webhooks. Audit:
+Adhikkesh SK integrated the Stripe Payment Sheet on the client side so users can check out without ever leaving the app interface.
+Adithya Ajay wrote the backend function to create the Payment Intent and ensure the customer ID is attached correctly every time.
+Varun set up the webhook listener to automatically update the ride status to "Paid" as soon as Stripe confirms the transaction.
+Nitin ran a bunch of test transactions with those 3D Secure cards to make sure the verification challenges don't crash the UI.
+Vijay added a nice "Payment Successful" animation to give the user immediate feedback that their money actually went through. Final Outcome: Payments are working. Webhooks are updating status correctly.
+Meeting 29 Date: 01/27/2026 Meeting Summary: Branding polish. Logo, Navbar, Themes. Agenda:
+
+New Logo implementation.
+Mobile Navbar redesign.
+Theme switching logic. Audit:
+Adithya Ajay mocked up the new logo concepts and the minimalist leaf icon really stands out against the dark background.
+Adhikkesh SK completely restructured the mobile navbar so the "Book Ride" button is permanently accessible in the center floating dock.
+Varun audited our entire color palette and swapped out the pure blacks for those softer dark greys to reduce eye strain.
+Nitin fixed the SVG export of the new logo because it was getting pixelated when we scaled it down for the favicon.
+Vijay handled the theme switching logic so the app automatically remembers your dark mode preference between sessions. Final Outcome: App matches the new brand guidelines. Floating navbar is a big UX improvement.
+Meeting 30 Date: 01/28/2026 Meeting Summary: Manual Testing Session. Breaking things on purpose. Agenda:
+
+Field testing GPS.
+Input fuzzing.
+Accessibility audit. Audit:
+Adhikkesh SK took the app for a literal test drive and confirmed the GPS tracking is accurate even when switching between 4G and WiFi.
+Adithya Ajay spent an hour intentionally trying to break the booking form by entering invalid characters and emojis.
+Varun tested the "Driver Cancel" flow to make sure the rider gets the refund notification instantly.
+Nitin verified that the app doesn't crash if you receive a phone call right in the middle of a payment.
+Vijay checked the accessibility features and found that the screen reader was missing labels on the "SOS" button. Final Outcome: Found a few bugs, but core flow is stable. Accessibility needs work.
+Meeting 31 Date: 01/29/2026 Meeting Summary: Simulation Planning. preparing to load test. Agenda:
+
+Spawn virtual drivers.
+Simulate surge demand.
+Test concurrency. Audit:
+Adithya Ajay wrote that script to spawn 50 virtual drivers around the city center so we could see how the map handles the clutter.
+Adhikkesh SK cranked up the request rate to simulate a Friday night surge and the server actually held up pretty well.
+Varun was watching the database latency like a hawk and noticed a spike whenever we simulated a mass cancellation event.
+Nitin ran the scenario where 100 users try to book the exact same driver at once to test our locking mechanism.
+Vijay validated that the dynamic pricing algorithm kicked in correctly when we artificially inflated the demand in one zone. Final Outcome: Simulation scripts are ready. We can stress test the server now.
+Meeting 32 Date: 01/30/2026 Meeting Summary: Simulation Tuning. Making it realistic. Agenda:
+
+Adjust spawn locations.
+Fix driver "off-duty" bugs.
+Implement "wandering". Audit:
+Adhikkesh SK adjusted the spawn parameters so the virtual drivers appear in realistic clusters near malls and stations, not just randomly in the middle of a lake.
+Adithya Ajay fixed the bug where spawned drivers were starting with "off-duty" status, making them invisible to the matching engine.
+Varun implemented a "wandering" behavior so the simulated cars actually drive around the block instead of sitting perfectly still.
+Nitin added a script to slowly despawn drivers over time to mimic the late-night drop-off in availability.
+Vijay verified that the geospatial query was correctly picking up these new virtual entities just like real users. Final Outcome: The map looks alive now with moving cars. Much better for demos.
+Meeting 33 Date: 01/31/2026 Meeting Summary: CI/CD & Husky. Automating the workflow. Agenda:
+
+Pre-commit hooks.
+Github Actions optimization.
+Branch protection. Audit:
+Adithya Ajay configured the pre-commit hook with Husky so we can't physically push code that has linting errors anymore.
+Adhikkesh SK updated the GitHub Actions workflow to run the unit tests in parallel, which shaved about 2 minutes off the build time.
+Varun added the commit message linter because he was tired of seeing "update files" as the description for every single PR.
+Nitin fixed the caching issue in the CI pipeline where it was re-downloading all the node modules from scratch every single run.
+Vijay set up the branch protection rules so the merge button is disabled until the CI checks actually pass green. Final Outcome: Pipeline is robust. No more broken builds on main.
+Meeting 34 Date: 02/02/2026 Meeting Summary: Unit Testing kickoff. Setting up Vitest. Agenda:
+
+Init Vitest.
+Mock DB responses.
+Coverage reports. Audit:
+Adhikkesh SK initialized the Vitest configuration and wrote the first passing test for the user login utility just to get the ball rolling.
+Adithya Ajay started mocking the database responses so we aren't dependent on the actual Firestore connection for every single test case.
+Varun took on the ride fare calculator and added edge cases for negative distances and zero duration just to see if it would break.
+Nitin identified a chunk of dead code in the driver controller while trying to write a test cover for it.
+Vijay set up the coverage report generator so we can actually visualize which parts of the codebase are still untested. Final Outcome: Test framework is in place. First tests are passing.
+Meeting 35 Date: 02/03/2026 Meeting Summary: Unit Test Refinement. Agenda:
+
+Debug port conflict.
+Fix remaining test/lint errors.
+Final verify. Audit:
+Adithya Ajay resolved the EADDRINUSE error by identifying the zombie process on port 3001.
+Adhikkesh SK fixed the CommonJS/ESM import warnings we were ignoring in the Prisma client.
+Varun updated the test documentation so we know how to run the tricky integrated tests.
+Nitin went through and fixed the random failures we were seeing in the fare calculation logic.
+Vijay gave the detailed "Audit" for the record to show exactly how much coverage we gained today. Final Outcome: All systems go. Tests pass. Code is clean
