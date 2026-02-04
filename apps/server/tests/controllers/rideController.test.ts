@@ -1,8 +1,29 @@
 /**
  * Unit Tests for Ride Controller - Business Logic
  *
- * This file contains unit tests for ride-related business logic.
- * Tests cover validation, OTP generation, distance calculation, and ETA estimation.
+ * TESTING APPROACH:
+ * These are pure unit tests that test business logic in isolation.
+ * The functions below are extracted/mirrored from the actual controller
+ * to test the logic WITHOUT requiring Firebase or database connections.
+ *
+ * WHY NO DATABASE MOCKING?
+ * - Faster test execution (no async DB calls)
+ * - Simpler test setup (no mock configuration)
+ * - Tests focus purely on ride logic and calculations
+ *
+ * WHAT IS TESTED:
+ * - Ride request validation (required fields)
+ * - OTP generation and verification
+ * - ETA calculation based on distance
+ * - Driver filtering (available status)
+ * - Driver sorting by distance
+ * - Ride status transition validation
+ *
+ * WHAT IS NOT TESTED:
+ * - Actual Firebase RTDB read/write operations
+ * - Express request/response handling
+ * - Real-time ride matching with drivers
+ * - Payment processing
  *
  * @author Team Member 3 - Ride Module
  * @date 2026-02-03
