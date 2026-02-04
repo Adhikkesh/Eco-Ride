@@ -36,6 +36,11 @@ import { describe, expect, it } from "vitest";
  */
 
 // Validate ride request input
+/**
+ * Validates the ride request payload.
+ * Checks for existence of riderId and all coordinate fields.
+ * @param body - The request body
+ */
 const validateRideRequest = (body: any) => {
   const { riderId, pickupLat, pickupLng, dropLat, dropLng } = body;
 
@@ -76,6 +81,11 @@ const generateOTP = () => {
 };
 
 // Calculate ETA based on distance
+/**
+ * Calculates generic ETA based on distance.
+ * Assumption: 30km/h average speed in city traffic (2 mins per km).
+ * @param distanceKm - Distance in kilometers
+ */
 const calculateETA = (distanceKm: number) => {
   // Rough estimate: 2 min per km
   return Math.ceil(distanceKm * 2);
@@ -187,11 +197,11 @@ describe("Ride Controller - Business Logic", () => {
 
     it("should generate numeric OTP", () => {
       const otp = generateOTP();
-      expect(parseInt(otp)).not.toBeNaN();
+      expect(parseInt(otp, 10)).not.toBeNaN();
     });
 
     it("should generate OTP between 1000 and 9999", () => {
-      const otp = parseInt(generateOTP());
+      const otp = parseInt(generateOTP(), 10);
       expect(otp).toBeGreaterThanOrEqual(1000);
       expect(otp).toBeLessThanOrEqual(9999);
     });
@@ -225,6 +235,11 @@ describe("Ride Controller - Business Logic", () => {
 
     it("should handle large distances", () => {
       expect(calculateETA(100)).toBe(200);
+    });
+
+    it("should return consistent ETA for minimal distance", () => {
+      // For very small distance (100m = 0.1km), ETA should be 1 min (ceil)
+      expect(calculateETA(0.1)).toBe(1);
     });
   });
 

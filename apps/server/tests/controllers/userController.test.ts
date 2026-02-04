@@ -34,6 +34,10 @@ import { describe, expect, it } from "vitest";
  */
 
 // Check if required user fields are present
+/**
+ * Validates required common fields for all users.
+ * @param body - Request body
+ */
 const validateUserFields = (body: any) => {
   const { name, phone_number, role } = body;
 
@@ -48,6 +52,10 @@ const validateUserFields = (body: any) => {
 };
 
 // Check if driver-specific fields are present
+/**
+ * Validates specific fields required for drivers.
+ * @param body - Request body
+ */
 const validateDriverFields = (body: any) => {
   const { role, license_url, plate_number, model, pollution_expiry } = body;
 
@@ -133,6 +141,15 @@ describe("User Controller - Validation Logic", () => {
         name: "Driver Name",
         phone_number: "+919876543210",
         role: "driver",
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it("should accept random strings as role (basic validation only checks presence)", () => {
+      const result = validateUserFields({
+        name: "Test User",
+        phone_number: "123",
+        role: "admin", // 'admin' is not strictly riders/drivers but passed basic presence check
       });
       expect(result.valid).toBe(true);
     });

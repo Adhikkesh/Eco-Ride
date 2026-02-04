@@ -33,6 +33,10 @@ import { describe, expect, it } from "vitest";
  */
 
 // Validate authentication
+/**
+ * Validates authentication status.
+ * @param user - The user object from request
+ */
 const validateAuth = (user: any) => {
   if (!user) {
     return { message: "Unauthorized", valid: false };
@@ -41,6 +45,10 @@ const validateAuth = (user: any) => {
 };
 
 // Validate location type
+/**
+ * Validates if the location type is supported.
+ * @param type - Location type (home, work, favourite)
+ */
 const validateLocationType = (type: string) => {
   const validTypes = ["home", "work", "favourite"];
   if (!type || !validTypes.includes(type)) {
@@ -204,6 +212,13 @@ describe("Saved Locations Controller - Validation Logic", () => {
 
     it("should accept location with negative coordinates", () => {
       const location = { lat: -33.8688, lng: 151.2093, name: "Sydney" };
+      const result = validateLocationFormat(location);
+      expect(result.valid).toBe(true);
+    });
+
+    it("should accept valid location with empty name string", () => {
+      // Assuming empty name is technically allowed by schema, though maybe not UI
+      const location = { lat: 10, lng: 10, name: "" };
       const result = validateLocationFormat(location);
       expect(result.valid).toBe(true);
     });
