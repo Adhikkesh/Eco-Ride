@@ -13,6 +13,8 @@ interface CreateUserBody {
   plate_number?: string;
   model?: string;
   is_ev?: boolean;
+  vehicle_type?: "PETROL" | "DIESEL" | "HYBRID" | "ELECTRIC";
+  passenger_capacity?: number;
   pollution_expiry?: string; // ISO date string
 }
 
@@ -29,6 +31,8 @@ export const CreateUserController: RequestHandler<object, object, CreateUserBody
     plate_number,
     model,
     is_ev,
+    vehicle_type,
+    passenger_capacity,
     pollution_expiry,
   } = req.body;
   const firebaseUser = req.user;
@@ -96,8 +100,10 @@ export const CreateUserController: RequestHandler<object, object, CreateUserBody
         driver_uid: uid,
         is_ev: is_ev || false,
         model,
+        passenger_capacity: passenger_capacity || 4,
         plate_number,
         pollution_expiry: pollution_expiry ? new Date(pollution_expiry) : null,
+        vehicle_type: vehicle_type || "PETROL",
       });
     }
 

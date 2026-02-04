@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import { FieldValue } from "firebase-admin/firestore";
 import * as geofire from "geofire-common";
 import { db, rtdb } from "../config/firebase.js";
+import { calculateGreenPoints, type VehicleType } from "../utils/greenPoints.js";
 
 interface DriverLocation {
   lat: number;
@@ -331,7 +332,11 @@ export const completeRide = async (req: Request, res: Response) => {
 
     if (!rideDoc.exists) return res.status(404).json({ message: "Ride not found", success: false });
 
-    const driverId = rideDoc.data()?.driverId;
+    const rideData = rideDoc.data();
+    const driverId = rideData?.driverId;
+    const riderId = rideData?.riderId;
+    const pickup = rideData?.pickup;
+    const drop = rideData?.drop;
 
     // 1. Update Ride Status
     await rideRef.update({
@@ -350,7 +355,60 @@ export const completeRide = async (req: Request, res: Response) => {
       status: "COMPLETED",
     });
 
-    return res.status(200).json({ message: "Ride completed", success: true });
+    // 4. Calculate and award green points
+    let greenPointsAwarded = 0;
+    if (driverId && riderId && pickup && drop) {
+      try {
+        // Calculate trip distance
+        const distanceKm = geofire.distanceBetween([pickup.lat, pickup.lng], [drop.lat, drop.lng]);
+
+        // Fetch driver's vehicle info
+        const vehicleSnapshot = await db
+          .collection("vehicle")
+          .where("driver_uid", "==", driverId)
+          .limit(1)
+          .get();
+
+        let vehicleType: VehicleType = "PETROL"; // Default
+        let passengerCapacity = 4; // Default
+
+        if (!vehicleSnapshot.empty) {
+          const vehicleData = vehicleSnapshot.docs[0]?.data();
+          if (vehicleData) {
+            vehicleType = (vehicleData.vehicle_type as VehicleType) || "PETROL";
+            passengerCapacity = vehicleData.passenger_capacity || 4;
+          }
+        }
+
+        // Calculate green points
+        greenPointsAwarded = calculateGreenPoints(vehicleType, passengerCapacity, distanceKm);
+
+        // Award points to both rider and driver
+        if (greenPointsAwarded > 0) {
+          const batch = db.batch();
+          batch.update(db.collection("users").doc(riderId), {
+            green_points: FieldValue.increment(greenPointsAwarded),
+          });
+          batch.update(db.collection("users").doc(driverId), {
+            green_points: FieldValue.increment(greenPointsAwarded),
+          });
+          await batch.commit();
+
+          console.log(
+            `Green points awarded: ${greenPointsAwarded} to rider ${riderId} and driver ${driverId}`,
+          );
+        }
+      } catch (gpError) {
+        // Log error but don't fail the ride completion
+        console.error("Error calculating/awarding green points:", gpError);
+      }
+    }
+
+    return res.status(200).json({
+      greenPointsAwarded,
+      message: "Ride completed",
+      success: true,
+    });
   } catch (error) {
     console.error("Complete Ride Error:", error);
     return res.status(500).json({ message: "Error completing ride", success: false });

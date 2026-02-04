@@ -12,7 +12,7 @@ import {
 } from "@react-google-maps/api";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { onValue, ref } from "firebase/database";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, onSnapshot } from "firebase/firestore";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FaCar,
@@ -319,22 +319,39 @@ export default function RiderMap({
   useEffect(() => {
     // Use the imported onAuthStateChanged
 
-    const unsubscribe = onAuthStateChanged(auth, async (user: { uid: string } | null) => {
+    const unsubscribe = onAuthStateChanged(auth, (user: { uid: string } | null) => {
+      let unsubscribeSnapshot: (() => void) | undefined;
+
       if (user && db) {
         try {
-          const userDoc = await getDoc(doc(db, "users", user.uid));
-          if (userDoc.exists()) {
-            const data = userDoc.data() as UserData;
-            setUserStats((prev) => ({
-              ...prev,
-              greenPoints: data.green_points ?? 0,
-              trustScore: data.trust_score ?? 0,
-            }));
-          }
+          // Real-time listener for user stats
+          unsubscribeSnapshot = onSnapshot(
+            doc(db, "users", user.uid),
+            (docSnapshot: any) => {
+              if (docSnapshot.exists()) {
+                const data = docSnapshot.data() as UserData;
+                setUserStats((prev) => ({
+                  ...prev,
+                  greenPoints: data.green_points ?? 0,
+                  trustScore: data.trust_score ?? 0,
+                }));
+              }
+            },
+            (error: any) => {
+              console.error("Error listening to user stats:", error);
+            },
+          );
         } catch (error) {
-          console.error("Error fetching user stats:", error);
+          console.error("Error setting up user listener:", error);
         }
       }
+
+      // Cleanup snapshot listener when auth state changes or component unmounts
+      return () => {
+        if (unsubscribeSnapshot) {
+          unsubscribeSnapshot();
+        }
+      };
     });
 
     return () => unsubscribe();
