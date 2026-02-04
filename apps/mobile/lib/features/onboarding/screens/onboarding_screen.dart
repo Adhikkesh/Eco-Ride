@@ -1,13 +1,11 @@
 import 'dart:io';
-
-import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
-
+import 'package:file_picker/file_picker.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/services/auth_service.dart';
-import '../../auth/screens/login_screen.dart';
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -18,8 +16,6 @@ class OnboardingScreen extends StatefulWidget {
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final _formKey = GlobalKey<FormState>();
-
-  // State
   bool _isLoading = false;
   UserRole _selectedRole = UserRole.rider;
 
@@ -31,13 +27,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final _plateNumberController = TextEditingController();
   final _modelController = TextEditingController();
   final _pollutionExpiryController = TextEditingController();
+  final _passengersController = TextEditingController();
   bool _isEv = false;
 
   // Files
-  File? _kycFile;
-  File? _licenseFile;
+  Uint8List? _kycBytes;
+  Uint8List? _licenseBytes;
   String? _kycFileName;
   String? _licenseFileName;
+
+  // Design Colors
+  static const Color sageGreen = Color(0xFFC8E6C9);
+  static const Color ecoGreen = Color(0xFF4CAF50);
 
   @override
   void initState() {
@@ -46,13 +47,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _prefillData() async {
-    final user = await AuthService.instance.currentUser;
+    final user = AuthService.instance.currentUser;
     if (user != null) {
-      if (user.displayName != null && _nameController.text.isEmpty) {
-        setState(() {
-          _nameController.text = user.displayName!;
-        });
-      }
+      setState(() {
+        _nameController.text = user.displayName ?? '';
+      });
     }
   }
 
@@ -63,34 +62,48 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _plateNumberController.dispose();
     _modelController.dispose();
     _pollutionExpiryController.dispose();
+    _passengersController.dispose();
     super.dispose();
   }
 
-  // File Picker
   Future<void> _pickFile(bool isKyc) async {
     try {
       final result = await FilePicker.platform.pickFiles(
-         type: FileType.custom,
-         allowedExtensions: ['jpg', 'jpeg', 'png', 'pdf'],
+        type: FileType.custom,
+        allowedExtensions: ['jpg', 'jpeg', 'png', 'pdf'],
+        withData: kIsWeb, // Required for bytes on some platforms
       );
 
-      if (result != null && result.files.single.path != null) {
+      if (result != null && result.files.single.bytes != null) {
         setState(() {
           if (isKyc) {
-            _kycFile = File(result.files.single.path!);
+            _kycBytes = result.files.single.bytes;
             _kycFileName = result.files.single.name;
           } else {
-            _licenseFile = File(result.files.single.path!);
+            _licenseBytes = result.files.single.bytes;
+            _licenseFileName = result.files.single.name;
+          }
+        });
+      } else if (result != null && result.files.single.path != null) {
+        // Fallback for mobile if needed
+        final file = File(result.files.single.path!);
+        final bytes = await file.readAsBytes();
+        setState(() {
+          if (isKyc) {
+            _kycBytes = bytes;
+            _kycFileName = result.files.single.name;
+          } else {
+            _licenseBytes = bytes;
             _licenseFileName = result.files.single.name;
           }
         });
       }
     } catch (e) {
-      _showErrorSnackbar('Error picking file: $e');
+      debugPrint('Onboarding: File pick error: $e');
+      _showErrorSnackBar('Error picking file: $e');
     }
   }
 
-  // Date Picker
   Future<void> _pickDate() async {
     final picked = await showDatePicker(
       context: context,
@@ -109,13 +122,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     if (!_formKey.currentState!.validate()) return;
 
     if (_selectedRole == UserRole.driver) {
-      if (_licenseFile == null) {
-        _showErrorSnackbar('Driver License is required');
+      if (_licenseBytes == null) {
+        _showErrorSnackBar('Driver License is required');
         return;
-      }
-      if (_plateNumberController.text.isEmpty || _modelController.text.isEmpty || _pollutionExpiryController.text.isEmpty) {
-         _showErrorSnackbar('All vehicle details are required');
-         return;
       }
     }
 
@@ -123,205 +132,169 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
     try {
       final user = AuthService.instance.currentUser;
-      if (user == null) throw const AuthException('User session expired');
+      if (user == null) throw const AuthException('User not authenticated');
 
       String? kycUrl;
       String? licenseUrl;
 
-      // Upload Files
+      // Upload Files if Driver
       if (_selectedRole == UserRole.driver) {
-         if (_kycFile != null) {
-            kycUrl = await AuthService.instance.uploadFile(
-               _kycFile!,
-               'drivers/${user.uid}/kyc/${DateTime.now().millisecondsSinceEpoch}_$_kycFileName'
-            );
-         }
-         if (_licenseFile != null) {
-            licenseUrl = await AuthService.instance.uploadFile(
-               _licenseFile!,
-               'drivers/${user.uid}/license/${DateTime.now().millisecondsSinceEpoch}_$_licenseFileName'
-            );
-         }
+        if (_kycBytes != null) {
+          kycUrl = await AuthService.instance.uploadBytes(
+            _kycBytes!,
+            'drivers/${user.uid}/kyc/${DateTime.now().millisecondsSinceEpoch}_$_kycFileName',
+          );
+        }
+        if (_licenseBytes != null) {
+          licenseUrl = await AuthService.instance.uploadBytes(
+            _licenseBytes!,
+            'drivers/${user.uid}/license/${DateTime.now().millisecondsSinceEpoch}_$_licenseFileName',
+          );
+        }
       }
 
       await AuthService.instance.createBackendProfile(
         name: _nameController.text.trim(),
         phoneNumber: _phoneController.text.trim(),
         role: _selectedRole,
-        kycUrl: kycUrl,
-        licenseUrl: licenseUrl,
+        kycUrl: kycUrl ?? 'completed',
+        licenseUrl: licenseUrl ?? 'completed',
         plateNumber: _plateNumberController.text.trim().toUpperCase(),
-        model: _modelController.text.trim(),
+        vehicleModel: _modelController.text.trim(),
         isEv: _isEv,
         pollutionExpiry: _pollutionExpiryController.text,
+        passengerCapacity: int.tryParse(_passengersController.text.trim()),
       );
 
-      // Sign out immediately
-       await AuthService.instance.signOut();
-
       if (mounted) {
-         _showSuccessSnackbar('Profile Completed! Please sign in.');
-         // Navigate to Login Screen (clearing stack works best if we came from AuthGate)
-         // But since AuthGate catches the signOut, it will rebuild to Login Screen automatically.
-         // However, in some cases it's better to be explicit if we are inside a navigator.
-         // For OnboardingScreen which is shown by AuthGate, signOut will trigger rebuild.
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Profile Completed! Welcome to Eco-Ride.')),
+        );
       }
     } catch (e) {
-      if (mounted) {
-        _showErrorSnackbar(e.toString());
-      }
+      if (mounted) _showErrorSnackBar(e.toString());
     } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  void _showErrorSnackbar(String message) {
+  void _showErrorSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.red.shade700,
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
-
-   void _showSuccessSnackbar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: AppColors.primary,
-        behavior: SnackBarBehavior.floating,
-      ),
+      SnackBar(content: Text(message), backgroundColor: Colors.red),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
-      body: SafeArea(
+      backgroundColor: sageGreen,
+      body: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const SizedBox(height: 20),
-                Center(
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: AppColors.primary,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.person, size: 32, color: Colors.white),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  'Complete Your Profile',
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.poppins(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Just a few more details to get you started',
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.poppins(
-                    fontSize: 14,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-                const SizedBox(height: 32),
-
-                // Name
-                TextFormField(
-                  controller: _nameController,
-                  decoration: _inputDecoration('Full Name', Icons.person_outline),
-                  validator: (v) => v?.isEmpty ?? true ? 'Name is required' : null,
-                ),
-                const SizedBox(height: 16),
-
-                // Phone
-                TextFormField(
-                  controller: _phoneController,
-                  decoration: _inputDecoration('Phone Number', Icons.phone_outlined),
-                  keyboardType: TextInputType.phone,
-                  validator: (v) => v?.isEmpty ?? true ? 'Phone is required' : null,
-                ),
-                const SizedBox(height: 24),
-
-                // Role Selection
-                Text('I want to join as', style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(child: _buildRoleButton(UserRole.rider, 'Rider', Icons.person_outline)),
-                    const SizedBox(width: 12),
-                    Expanded(child: _buildRoleButton(UserRole.driver, 'Driver', Icons.drive_eta_outlined)),
-                  ],
-                ),
-                const SizedBox(height: 24),
-
-                // Driver Fields
-                if (_selectedRole == UserRole.driver) _buildDriverFields(),
-
-                const SizedBox(height: 32),
-
-                // Submit Button
-                ElevatedButton(
-                  onPressed: _isLoading ? null : _handleSubmit,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    elevation: 0,
-                  ),
-                  child: _isLoading 
-                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : Text(
-                        'Complete Registration',
-                        style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600),
-                      ),
-                ),
-              ],
-            ),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildMainCard(),
+            ],
           ),
         ),
       ),
     );
   }
 
-  Widget _buildRoleButton(UserRole role, String label, IconData icon) {
-    final isSelected = _selectedRole == role;
-    return InkWell(
-      onTap: () => setState(() => _selectedRole = role),
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: isSelected ? AppColors.primary : Colors.white,
-          border: Border.all(color: isSelected ? AppColors.primary : AppColors.lightGrey),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+  Widget _buildMainCard() {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 500),
+      padding: const EdgeInsets.all(32),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Form(
+        key: _formKey,
+        child: Column(
           children: [
-            Icon(icon, color: isSelected ? Colors.white : AppColors.textPrimary, size: 20),
-            const SizedBox(width: 8),
+            // Icon
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2E7D32),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.directions_car, color: Colors.white, size: 32),
+            ),
+            const SizedBox(height: 16),
+            
+            // Title
             Text(
-              label,
+              'Complete Your Profile',
               style: GoogleFonts.poppins(
-                fontWeight: FontWeight.w600,
-                color: isSelected ? Colors.white : AppColors.textPrimary,
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: const Color(0xFF212121),
+              ),
+            ),
+            Text(
+              'Just a few more details to get you started',
+              style: GoogleFonts.poppins(
+                fontSize: 14,
+                color: Colors.grey[600],
+              ),
+            ),
+            const SizedBox(height: 32),
+
+            // Basic Fields
+            _buildTextField(_nameController, 'Full Name', Icons.person_outline),
+            const SizedBox(height: 16),
+            _buildTextField(_phoneController, 'Phone Number', Icons.phone_outlined, keyboardType: TextInputType.phone),
+            const SizedBox(height: 24),
+
+            // Role Selector
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'I want to join as',
+                style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(child: _buildRoleChip(UserRole.rider, '🏃 Rider')),
+                const SizedBox(width: 12),
+                Expanded(child: _buildRoleChip(UserRole.driver, '🚗 Driver')),
+              ],
+            ),
+            const SizedBox(height: 24),
+
+            // Driver Specific Fields
+            if (_selectedRole == UserRole.driver) ...[
+              _buildDriverInformation(),
+              const SizedBox(height: 24),
+            ],
+
+            // Submit Button
+            SizedBox(
+              width: double.infinity,
+              height: 56,
+              child: ElevatedButton(
+                onPressed: _isLoading ? null : _handleSubmit,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: ecoGreen,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  elevation: 0,
+                ),
+                child: _isLoading 
+                  ? const CircularProgressIndicator(color: Colors.white)
+                  : Text('Complete Registration', style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.bold)),
               ),
             ),
           ],
@@ -330,70 +303,102 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  Widget _buildDriverFields() {
+  Widget _buildRoleChip(UserRole role, String label) {
+    final isSelected = _selectedRole == role;
+    return GestureDetector(
+      onTap: () => setState(() => _selectedRole = role),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: isSelected ? ecoGreen : Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: isSelected ? ecoGreen : Colors.grey[300]!),
+        ),
+        child: Text(
+          label,
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.bold,
+            color: isSelected ? Colors.white : Colors.black87,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDriverInformation() {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFF1F8E9), // Light green bg
+        color: const Color(0xFFF9FBE7),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.primary.withOpacity(0.2)),
+        border: Border.all(color: Colors.lime[100]!),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             'Driver Information',
-            style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.primary),
+            style: GoogleFonts.poppins(fontWeight: FontWeight.bold, color: const Color(0xFF689F38)),
           ),
           const SizedBox(height: 16),
-          
-          // KYC Upload
-          _buildFileUpload('KYC Document', _kycFileName, () => _pickFile(true)),
+          _buildFileUpload('KYC Document (PDF,JPEG)', _kycFileName, () => _pickFile(true)),
+          const SizedBox(height: 12),
+          _buildFileUpload('Driver License (PDF,JPEG) *', _licenseFileName, () => _pickFile(false)),
           const SizedBox(height: 16),
-          
-          // License Upload
-          _buildFileUpload('Driver License *', _licenseFileName, () => _pickFile(false)),
-          const SizedBox(height: 16),
-
-          // Plate Number
-          TextFormField(
-            controller: _plateNumberController,
-            decoration: _inputDecoration('Plate Number *', Icons.directions_car_outlined),
-            textCapitalization: TextCapitalization.characters,
-            validator: (v) => _selectedRole == UserRole.driver && (v?.isEmpty ?? true) ? 'Required' : null,
-          ),
-          const SizedBox(height: 16),
-
-          // Model
-          TextFormField(
-            controller: _modelController,
-            decoration: _inputDecoration('Vehicle Model *', Icons.commute_outlined),
-            validator: (v) => _selectedRole == UserRole.driver && (v?.isEmpty ?? true) ? 'Required' : null,
-          ),
-          const SizedBox(height: 16),
-
-          // EV Checkbox
-          CheckboxListTile(
-            value: _isEv,
-            onChanged: (v) => setState(() => _isEv = v ?? false),
-            title: Text('This is an Electric Vehicle (EV)', style: GoogleFonts.poppins(fontSize: 14)),
-            activeColor: AppColors.primary,
-            contentPadding: EdgeInsets.zero,
-            controlAffinity: ListTileControlAffinity.leading,
-          ),
-          
-          // Pollution Expiry
-          InkWell(
-            onTap: _pickDate,
-            child: IgnorePointer(
-              child: TextFormField(
-                controller: _pollutionExpiryController,
-                decoration: _inputDecoration('Pollution Certificate Expiry *', Icons.calendar_today),
-                validator: (v) => _selectedRole == UserRole.driver && (v?.isEmpty ?? true) ? 'Required' : null,
+          _buildTextField(_plateNumberController, 'Plate Number *', Icons.pin_outlined),
+          const SizedBox(height: 12),
+          _buildTextField(_modelController, 'Vehicle Model *', Icons.directions_car_outlined),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Transform.scale(
+                scale: 0.9,
+                child: Checkbox(
+                  value: _isEv,
+                  onChanged: (v) => setState(() => _isEv = v ?? false),
+                  activeColor: ecoGreen,
+                ),
               ),
-            ),
+              Text('This is an Electric Vehicle (EV)', style: GoogleFonts.poppins(fontSize: 13)),
+            ],
           ),
+          const SizedBox(height: 8),
+          const SizedBox(height: 12),
+          _buildTextField(_passengersController, 'Number of Passengers *', Icons.groups_outlined, keyboardType: TextInputType.number),
+          const SizedBox(height: 8),
+          _buildDateField(_pollutionExpiryController, 'Pollution Certificate Expiry *', _pickDate),
         ],
+      ),
+    );
+  }
+
+  Widget _buildTextField(TextEditingController controller, String label, IconData icon, {TextInputType? keyboardType}) {
+    return TextFormField(
+      controller: controller,
+      keyboardType: keyboardType,
+      decoration: InputDecoration(
+        labelText: label,
+        prefixIcon: Icon(icon, size: 20),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      ),
+      validator: (v) => v?.isEmpty ?? true ? 'Required' : null,
+    );
+  }
+
+  Widget _buildDateField(TextEditingController controller, String label, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      child: IgnorePointer(
+        child: TextFormField(
+          controller: controller,
+          decoration: InputDecoration(
+            labelText: label,
+            prefixIcon: const Icon(Icons.calendar_today, size: 20),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
       ),
     );
   }
@@ -402,60 +407,41 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w500)),
-        const SizedBox(height: 8),
+        Text(label, style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w500)),
+        const SizedBox(height: 6),
         InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(12),
           child: Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
-              border: Border.all(color: AppColors.primary.withOpacity(0.5), style: BorderStyle.solid),
+              border: Border.all(color: Colors.grey[300]!, style: BorderStyle.none),
               borderRadius: BorderRadius.circular(12),
               color: Colors.white,
             ),
             child: Row(
               children: [
-                Icon(Icons.upload_file, color: AppColors.primary),
+                OutlinedButton(
+                  onPressed: onTap,
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: const Size(60, 30),
+                  ),
+                  child: const Text('Choose file', style: TextStyle(fontSize: 10)),
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    fileName ?? 'Tap to upload file',
-                    style: GoogleFonts.poppins(
-                      color: fileName != null ? AppColors.textPrimary : AppColors.textSecondary,
-                    ),
+                    fileName ?? 'No file chosen',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                if (fileName != null) const Icon(Icons.check_circle, color: AppColors.primary, size: 18),
               ],
             ),
           ),
         ),
       ],
-    );
-  }
-
-  InputDecoration _inputDecoration(String label, IconData icon) {
-    return InputDecoration(
-      labelText: label,
-      prefixIcon: Icon(icon, color: AppColors.primary, size: 20),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.lightGrey),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.lightGrey),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.primary, width: 2),
-      ),
-      filled: true,
-      fillColor: Colors.white,
-      contentPadding: const EdgeInsets.all(16),
     );
   }
 }

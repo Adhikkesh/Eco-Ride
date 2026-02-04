@@ -52,46 +52,69 @@ class _HomeScreenState extends State<HomeScreen> {
     bool serviceEnabled;
     PermissionStatus permissionGranted;
 
-    serviceEnabled = await _location.serviceEnabled();
-    if (!serviceEnabled) {
-      serviceEnabled = await _location.requestService();
-      if (!serviceEnabled) return;
-    }
+    try {
+      debugPrint('HomeScreen: Checking location services...');
+      serviceEnabled = await _location.serviceEnabled();
+      if (!serviceEnabled) {
+        serviceEnabled = await _location.requestService();
+        if (!serviceEnabled) {
+          debugPrint('HomeScreen: Location service disabled');
+          setState(() => _isLoading = false);
+          return;
+        }
+      }
 
-    permissionGranted = await _location.hasPermission();
-    if (permissionGranted == PermissionStatus.denied) {
-      permissionGranted = await _location.requestPermission();
-      if (permissionGranted != PermissionStatus.granted) return;
-    }
+      debugPrint('HomeScreen: Checking location permissions...');
+      permissionGranted = await _location.hasPermission();
+      if (permissionGranted == PermissionStatus.denied) {
+        permissionGranted = await _location.requestPermission();
+        if (permissionGranted != PermissionStatus.granted) {
+          debugPrint('HomeScreen: Location permission denied');
+          setState(() => _isLoading = false);
+          // Show a subtle toast or banner instead of crashing
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Location permission denied. Showing default view.')),
+            );
+          }
+          return;
+        }
+      }
 
-    final locationData = await _location.getLocation();
-    setState(() {
-      _currentPosition = LatLng(locationData.latitude!, locationData.longitude!);
-      _isLoading = false;
-    });
+      debugPrint('HomeScreen: Fetching current location...');
+      final locationData = await _location.getLocation().timeout(const Duration(seconds: 10));
+      
+      if (mounted) {
+        setState(() {
+          _currentPosition = LatLng(locationData.latitude!, locationData.longitude!);
+          _isLoading = false;
+        });
 
-    if (_currentPosition != null) {
-      final controller = await _controller.future;
-      controller.animateCamera(CameraUpdate.newCameraPosition(
-        CameraPosition(target: _currentPosition!, zoom: 15),
-      ));
+        if (_currentPosition != null) {
+          final controller = await _controller.future;
+          controller.animateCamera(CameraUpdate.newCameraPosition(
+            CameraPosition(target: _currentPosition!, zoom: 15),
+          ));
+        }
+      }
+    } catch (e) {
+      debugPrint('HomeScreen: !!! Geolocation Error: $e');
+      if (mounted) {
+        setState(() => _isLoading = false);
+        // Don't show confusing technical errors to the user, just fallback
+      }
     }
   }
 
   Future<void> _handleLogout() async {
     try {
       await AuthService.instance.signOut();
+    } catch (e) {
       if (mounted) {
-        // Navigate to Login Screen
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const LoginScreen()),
-          (route) => false,
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error logging out: $e')),
         );
       }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error logging out: $e')),
-      );
     }
   }
 
