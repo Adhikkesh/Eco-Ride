@@ -1,8 +1,26 @@
 /**
  * Unit Tests for User Controller - Validation Logic
  *
- * This file contains unit tests for user input validation.
- * Since the controller relies on Firebase, we test the validation logic separately.
+ * TESTING APPROACH:
+ * These are pure unit tests that test validation logic in isolation.
+ * The validation functions below are extracted/mirrored from the actual controller
+ * to test the business logic WITHOUT requiring Firebase or database connections.
+ *
+ * WHY NO DATABASE MOCKING?
+ * - Faster test execution (no async DB calls)
+ * - Simpler test setup (no mock configuration)
+ * - Tests focus purely on input validation rules
+ *
+ * WHAT IS TESTED:
+ * - Authentication validation (is user logged in?)
+ * - Required field validation (name, phone, role)
+ * - Driver-specific field validation (license, plate, model, pollution expiry)
+ * - Data structure verification for riders and drivers
+ *
+ * WHAT IS NOT TESTED:
+ * - Actual Firestore read/write operations
+ * - Express request/response handling
+ * - User creation/update in database
  *
  * @author Team Member 2 - User Module
  * @date 2026-02-03
