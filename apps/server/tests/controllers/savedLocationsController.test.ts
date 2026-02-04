@@ -1,8 +1,26 @@
 /**
  * Unit Tests for Saved Locations Controller - Validation Logic
  *
- * This file contains unit tests for saved locations validation.
- * Tests cover type validation, location format validation, and authentication.
+ * TESTING APPROACH:
+ * These are pure unit tests that test validation logic in isolation.
+ * The validation functions below are extracted/mirrored from the actual controller
+ * to test the business logic WITHOUT requiring Firebase or database connections.
+ *
+ * WHY NO DATABASE MOCKING?
+ * - Faster test execution (no async DB calls)
+ * - Simpler test setup (no mock configuration)
+ * - Tests focus purely on input validation rules
+ *
+ * WHAT IS TESTED:
+ * - Authentication validation (is user logged in?)
+ * - Location type validation (home/work/favourite only)
+ * - Location format validation (lat/lng/name structure)
+ * - Helper functions for Firestore paths and messages
+ *
+ * WHAT IS NOT TESTED:
+ * - Actual Firestore read/write operations
+ * - Express request/response handling
+ * - Error handling from database failures
  *
  * @author Team Member 5 - Saved Locations Module
  * @date 2026-02-03
