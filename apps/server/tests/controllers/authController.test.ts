@@ -27,6 +27,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /**
  * Mock response helper
  */
+/**
+ * Creates a mock Express response object.
+ * Supports chainable methods like .status().json().
+ * Includes helper methods _getData() and _getStatusCode() for assertions.
+ */
 const createMockResponse = () => {
   let statusCode = 200;
   let data: any = null;
@@ -49,6 +54,10 @@ const createMockResponse = () => {
 
 /**
  * Mock request helper
+ */
+/**
+ * Creates a mock Express request object.
+ * @param overrides - Optional properties to override default request shape
  */
 const createMockRequest = (overrides: any = {}) => ({
   body: {},
@@ -168,6 +177,25 @@ describe("Auth Controller", () => {
 
         // Assert
         expect(res._getData().user.picture).toBe("https://lh3.googleusercontent.com/photo.jpg");
+      });
+    });
+
+    describe("Edge Cases", () => {
+      it("should handle partial user object gracefully", async () => {
+        // Arrange
+        const mockUser = { uid: "partial-user" }; // Missing email, name, etc.
+        const req = createMockRequest({ user: mockUser });
+        const res = createMockResponse();
+        const next = vi.fn();
+
+        // Act
+        await VerifyTokenController(req as any, res as any, next);
+
+        // Assert
+        expect(res._getStatusCode()).toBe(200);
+        expect(res._getData().valid).toBe(true);
+        expect(res._getData().user.uid).toBe("partial-user");
+        expect(res._getData().user.email).toBeUndefined();
       });
     });
   });

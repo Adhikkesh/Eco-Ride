@@ -37,6 +37,11 @@ import { describe, expect, it } from "vitest";
 const ADMIN_UID = "dq8zZsXXsldH9yVcrB4B7qbHzgB2";
 
 // Check if user is authenticated
+/**
+ * Validates if the user object exists (simulating auth middleware check).
+ * @param user - The user object from the request
+ * @returns Object with validity status and message
+ */
 const validateAuth = (user: any) => {
   if (!user) {
     return { message: "Unauthorized", valid: false };
@@ -45,7 +50,12 @@ const validateAuth = (user: any) => {
 };
 
 // Check if user is admin
-const isAdmin = (userUid: string) => {
+/**
+ * Checks if the given UID matches the admin UID.
+ * @param userUid - The UID to check
+ * @returns True if admin, false otherwise
+ */
+const isAdmin = (userUid: string | undefined) => {
   return userUid === ADMIN_UID;
 };
 
@@ -118,11 +128,14 @@ describe("Admin Controller - Business Logic", () => {
     });
 
     it("should return false for similar but different UID", () => {
-      expect(isAdmin(ADMIN_UID + "1")).toBe(false);
+      expect(isAdmin(`${ADMIN_UID}1`)).toBe(false);
     });
 
     it("should return false for partial match", () => {
       expect(isAdmin(ADMIN_UID.substring(0, 10))).toBe(false);
+    });
+    it("should return false for undefined UID", () => {
+      expect(isAdmin(undefined)).toBe(false);
     });
   });
 
