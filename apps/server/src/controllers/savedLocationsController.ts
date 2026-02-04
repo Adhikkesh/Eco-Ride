@@ -1,25 +1,53 @@
+/**
+ * @fileoverview Saved Locations Controller
+ * @description Manages user's saved locations (home, work, favourite) for quick access
+ *              during ride booking. Provides CRUD operations for location preferences.
+ * @module controllers/savedLocationsController
+ */
+
 import type { RequestHandler } from "express";
 import status from "http-status";
 import { db } from "../config/firebase.js";
 
-// Types for saved locations
+/**
+ * Interface representing a single saved location.
+ * @interface SavedLocation
+ * @property {number} lat - Latitude of the saved location
+ * @property {number} lng - Longitude of the saved location
+ * @property {string} name - Human-readable name/address of the location
+ */
 interface SavedLocation {
   lat: number;
   lng: number;
   name: string;
 }
 
+/**
+ * Interface representing all saved locations for a user.
+ * @interface SavedLocations
+ * @property {SavedLocation|null} home - User's home address
+ * @property {SavedLocation|null} work - User's work address
+ * @property {SavedLocation|null} favourite - User's favourite/frequent location
+ */
 interface SavedLocations {
   home: SavedLocation | null;
   work: SavedLocation | null;
   favourite: SavedLocation | null;
 }
 
+/**
+ * Valid location type values.
+ * @typedef {"home"|"work"|"favourite"} LocationType
+ */
 type LocationType = "home" | "work" | "favourite";
 
 /**
- * Get user's saved locations
- * GET /user/saved-locations
+ * Get Saved Locations Controller
+ * @description Retrieves all saved locations for the authenticated user.
+ *              Returns home, work, and favourite locations from Firestore.
+ * @route GET /user/saved-locations
+ * @access Authenticated users
+ * @returns {Object} JSON response with savedLocations object
  */
 export const getSavedLocations: RequestHandler = async (req, res) => {
   const firebaseUser = req.user;
@@ -55,9 +83,16 @@ export const getSavedLocations: RequestHandler = async (req, res) => {
 };
 
 /**
- * Update a saved location
- * PUT /user/saved-locations
- * Body: { type: "home" | "work" | "favourite", location: { lat, lng, name } | null }
+ * Update Saved Location Controller
+ * @description Updates or deletes a specific saved location for the user.
+ *              Supports home, work, and favourite location types.
+ *              Pass null as location to delete a saved location.
+ * @route PUT /user/saved-locations
+ * @access Authenticated users
+ * @param {Object} req.body - Request body
+ * @param {LocationType} req.body.type - Type of location to update
+ * @param {SavedLocation|null} req.body.location - New location data or null to delete
+ * @returns {Object} JSON response with update status
  */
 export const updateSavedLocation: RequestHandler = async (req, res) => {
   const firebaseUser = req.user;
