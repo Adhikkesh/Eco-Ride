@@ -1,3 +1,11 @@
+/**
+ * @fileoverview API Routes Configuration
+ * @description Defines all API endpoints for the Eco-Ride backend.
+ *              Organizes routes by feature area: auth, user, rides, payments, and admin.
+ *              All protected routes use the verifyToken middleware for authentication.
+ * @module routes/index
+ */
+
 import express, { type Router } from "express";
 import {
   GetUnverifiedDriversController,
@@ -18,28 +26,80 @@ import { getSavedLocations, updateSavedLocation } from "../controllers/savedLoca
 import { CreateUserController, GetDriverStatusController } from "../controllers/userController.js";
 import { verifyToken } from "../middleware/authMiddleware.js";
 
+/**
+ * Express Router instance for API v1 routes.
+ * All routes are prefixed with /api/v1 in app.ts.
+ * @type {Router}
+ */
 export const router: Router = express.Router();
 
+// ============================================================================
+// Health Check & Authentication Routes
+// ============================================================================
+
+/** Health check endpoint - no auth required */
 router.get("/health", HealthCheckController);
+
+/** Verify Firebase token and return user info */
 router.get("/auth/verify", verifyToken, VerifyTokenController);
+
+/** Get current authenticated user info */
 router.get("/getme", verifyToken, GetMeController);
+
+// ============================================================================
+// User Routes
+// ============================================================================
+
+/** Create new user account (rider or driver) */
 router.post("/user", verifyToken, CreateUserController);
+
+/** Get driver KYC verification status */
 router.get("/user/driver-status", verifyToken, GetDriverStatusController);
 
-// Saved locations routes
+/** Get user's saved locations (home, work, favourite) */
 router.get("/user/saved-locations", verifyToken, getSavedLocations);
+
+/** Update a saved location */
 router.put("/user/saved-locations", verifyToken, updateSavedLocation);
 
-// Ride routes
+// ============================================================================
+// Ride Routes
+// ============================================================================
+
+/** Request a new ride - matches with nearest available driver */
 router.post("/ride/request", verifyToken, requestRide);
+
+/** Get current active ride for authenticated user */
 router.get("/ride/active", verifyToken, getActiveRide);
+
+/** Cancel an active ride request */
 router.post("/ride/cancel", verifyToken, cancelRide);
+
+/** Start ride after OTP verification */
 router.post("/ride/start", verifyToken, startRide);
+
+/** Complete a ride at destination */
 router.post("/ride/complete", verifyToken, completeRide);
+
+/** Calculate fare estimate for a route */
 router.post("/ride/estimate", verifyToken, calculateFare);
+
+// ============================================================================
+// Payment Routes
+// ============================================================================
+
+/** Create Stripe payment intent for ride payment */
 router.post("/payment/create-intent", verifyToken, createPaymentIntent);
+
+/** Confirm successful payment and update ride status */
 router.post("/ride/confirm-payment", verifyToken, confirmPayment);
 
-// Admin routes
+// ============================================================================
+// Admin Routes
+// ============================================================================
+
+/** Get all drivers pending KYC verification (admin only) */
 router.get("/admin/drivers/unverified", verifyToken, GetUnverifiedDriversController);
+
+/** Approve or decline driver verification (admin only) */
 router.post("/admin/drivers/verify", verifyToken, VerifyDriverController);
