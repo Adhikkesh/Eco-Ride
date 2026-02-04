@@ -1,8 +1,22 @@
 /**
  * Unit Tests for Auth Controller
  *
- * This file contains unit tests for authentication functionality.
- * Tests cover token verification and user session handling.
+ * TESTING APPROACH:
+ * Unlike other test files, this one IMPORTS and tests the actual controller.
+ * We mock Express request/response objects to test the controller behavior.
+ *
+ * WHY THIS WORKS WITHOUT DATABASE:
+ * The VerifyTokenController only checks `req.user` which is set by middleware.
+ * It doesn't make any database calls itself - it just returns user info.
+ *
+ * WHAT IS TESTED:
+ * - Returns 401 when no user is attached (token invalid/missing)
+ * - Returns 200 with user info when token is valid
+ * - User information extraction (email, name, picture, emailVerified)
+ *
+ * WHAT IS NOT TESTED:
+ * - Firebase token verification (handled by middleware)
+ * - Actual authentication flow with Firebase Auth
  *
  * @author Team Member 2 - User & Auth Module
  * @date 2026-02-03
