@@ -87,17 +87,9 @@ const createMockUser = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+import { VerifyTokenController } from "../../src/controllers/authController";
+
 describe("Auth Controller", () => {
-  let VerifyTokenController: (req: Request, res: Response, next: NextFunction) => Promise<void>;
-
-  beforeEach(async () => {
-    vi.resetModules();
-
-    // Import the module
-    const authModule = await import("../../src/controllers/authController.js");
-    VerifyTokenController = authModule.VerifyTokenController;
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
   });
