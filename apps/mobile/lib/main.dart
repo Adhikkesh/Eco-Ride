@@ -2,6 +2,8 @@
 /// Entry point with Firebase initialization, theming, and auth routing.
 library;
 
+import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +15,8 @@ import 'core/services/auth_service.dart';
 import 'features/auth/screens/login_screen.dart';
 import 'features/onboarding/screens/onboarding_screen.dart';
 import 'features/home/screens/home_screen.dart';
+import 'features/home/screens/driver_home_screen.dart';
+import 'core/models/user_model.dart';
 import 'firebase_options.dart';
 
 /// Global flag to indicate if Firebase is available
@@ -279,10 +283,38 @@ class EcoRideApp extends StatelessWidget {
   }
 }
 
-/// Authentication Gate Widget
-/// Listens to auth state and navigates accordingly
-class AuthGate extends StatelessWidget {
+class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
+
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  Timer? _pollingTimer;
+  User? _lastUser;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastUser = FirebaseAuth.instance.currentUser;
+    // Proactive polling for web/mobile to catch auth state changes if stream hangs
+    _pollingTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (mounted && currentUser?.uid != _lastUser?.uid) {
+        debugPrint('AuthGate: Poller detected change (${_lastUser?.uid} -> ${currentUser?.uid})');
+        setState(() {
+          _lastUser = currentUser;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _pollingTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -294,36 +326,51 @@ class AuthGate extends StatelessWidget {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
-        // Show loading while waiting for auth state
+        // Use synchronous currentUser as fallback if snapshot is empty but user exists
+        final user = snapshot.data ?? FirebaseAuth.instance.currentUser;
+        
+        if (user != null) {
+          // Use StreamBuilder for real-time profile updates (handling onboarding transition)
+          return StreamBuilder<DocumentSnapshot>(
+            stream: FirebaseFirestore.instance.collection('users').doc(user.uid).snapshots(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return _buildLoadingScreen('Verifying your account...');
+              }
+
+              if (snapshot.hasError) {
+                debugPrint('AuthGate: Profile stream error: ${snapshot.error}');
+                return _buildLoadingScreen('Error loading account. Retrying...');
+              }
+
+              if (!snapshot.hasData || !snapshot.data!.exists) {
+                debugPrint('AuthGate: No profile found in Firestore. Routing to Onboarding...');
+                return const OnboardingScreen();
+              }
+
+              final profile = UserModel.fromFirestore(snapshot.data!);
+              
+              // If onboarding not completed, go to onboarding
+              if (!profile.isOnboarded) {
+                debugPrint('AuthGate: Onboarding incomplete. Routing to Onboarding...');
+                return const OnboardingScreen();
+              }
+
+              // All good, route to role-based home
+              debugPrint('AuthGate: Profile ready. Role: ${profile.role.value}. Routing to Home...');
+              if (profile.role == UserRole.driver) {
+                return const DriverHomeScreen();
+              } else {
+                return const HomeScreen();
+              }
+            },
+          );
+        }
+
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
             backgroundColor: AppColors.background,
             body: Center(child: CircularProgressIndicator(color: AppColors.primary)),
-          );
-        }
-
-        // User is signed in
-        if (snapshot.hasData && snapshot.data != null) {
-          final user = snapshot.data!;
-          // Check if user profile exists in Firestore
-          return FutureBuilder<bool>(
-            future: AuthService.instance.userExists(user.uid),
-            builder: (context, profileSnapshot) {
-              if (profileSnapshot.connectionState == ConnectionState.waiting) {
-                return const Scaffold(
-                  backgroundColor: AppColors.background,
-                  body: Center(child: CircularProgressIndicator(color: AppColors.primary)),
-                );
-              }
-
-              if (profileSnapshot.hasData && profileSnapshot.data == true) {
-                // TODO: Check user role here if needed to separate Rider/Driver dashboards
-                return const HomeScreen();
-              }
-
-              // No profile found - go to onboarding
-              return const OnboardingScreen();
-            },
           );
         }
 
@@ -332,6 +379,64 @@ class AuthGate extends StatelessWidget {
       },
     );
   }
+
+  Widget _buildLoadingScreen([String message = 'Verifying your account...']) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const CircularProgressIndicator(color: AppColors.primary),
+              const SizedBox(height: 24),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 48),
+              TextButton.icon(
+                onPressed: () => AuthService.instance.signOut(),
+                icon: const Icon(Icons.logout),
+                label: const Text('Cancel / Sign Out'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorScreen(BuildContext context, String error) {
+    final isBlocked = error.contains('Brave') || error.contains('ad-blocker');
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(isBlocked ? Icons.shield_outlined : Icons.error_outline, size: 80, color: AppColors.error),
+              const SizedBox(height: 24),
+              Text(isBlocked ? 'Connection Blocked' : 'Error loading profile', 
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              Text(error, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.textSecondary)),
+              const SizedBox(height: 40),
+              ElevatedButton.icon(
+                onPressed: () => (context as Element).markNeedsBuild(),
+                icon: const Icon(Icons.refresh),
+                label: const Text('Try Again'),
+              ),
+              const SizedBox(height: 12),
+              TextButton(onPressed: () => AuthService.instance.signOut(), child: const Text('Back to Login')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
-
-

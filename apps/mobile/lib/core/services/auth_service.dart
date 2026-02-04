@@ -96,9 +96,9 @@ class AuthService {
   // Backend URL (Use 10.0.2.2 for Android Emulator, localhost for iOS Simulator/Web)
   // TODO: Use better config management
   String get _backendUrl {
-     if (kIsWeb) return 'http://localhost:3001';
-     if (Platform.isAndroid) return 'http://10.0.2.2:3001';
-     return 'http://localhost:3001';
+     if (kIsWeb) return 'http://localhost:3001/api/v1';
+     if (Platform.isAndroid) return 'http://10.0.2.2:3001/api/v1';
+     return 'http://localhost:3001/api/v1';
   }
 
   // Collection reference
@@ -177,6 +177,20 @@ class AuthService {
       throw AuthException('Failed to create account: ${e.toString()}');
     }
   }
+  /// Update user's role in Firestore
+  Future<void> updateUserRole(String uid, UserRole role) async {
+    try {
+      debugPrint('AuthService: Updating role to ${role.value} for $uid');
+      await _usersCollection.doc(uid).update({
+        'role': role.value,
+        'last_updated': FieldValue.serverTimestamp(),
+      }).timeout(const Duration(seconds: 5));
+      debugPrint('AuthService: Role update SUCCESS');
+    } catch (e) {
+      debugPrint('AuthService: Role update FAILED: $e');
+      throw AuthException('Failed to update account role: ${e.toString()}');
+    }
+  }
 
   // ==========================================================================
   // SIGN IN
@@ -189,31 +203,47 @@ class AuthService {
   ///
   /// Returns the [UserModel] from Firestore on success
   /// Throws [AuthException] on failure
-  Future<UserModel?> signIn({
+  Future<void> signIn({
     required String email,
     required String password,
   }) async {
     try {
+      final cleanEmail = email.trim();
+      debugPrint('AuthService: >>> SIGN-IN START for $cleanEmail');
+      
+      debugPrint('AuthService: Calling Firebase signInWithEmailAndPassword...');
       final userCredential = await _auth.signInWithEmailAndPassword(
-        email: email.trim(),
+        email: cleanEmail,
         password: password,
-      );
+      ).timeout(const Duration(seconds: 15), onTimeout: () {
+        debugPrint('AuthService: !!! Firebase sign-in TIMED OUT (15s)');
+        throw const AuthException('Sign-in timed out. Please check your internet or try again.');
+      });
 
       final firebaseUser = userCredential.user;
       if (firebaseUser == null) {
-        throw const AuthException('Failed to sign in.');
+        debugPrint('AuthService: !!! Firebase sign-in returned null user');
+        throw const AuthException('Failed to sign in: User is null.');
       }
 
-      // Update last login timestamp
-      await _usersCollection.doc(firebaseUser.uid).update({
-        'last_login': FieldValue.serverTimestamp(),
-      });
+      debugPrint('AuthService: Firebase sign-in SUCCESS. UID: ${firebaseUser.uid}');
 
-      // Fetch and return user data
-      return await getUserData(firebaseUser.uid);
+      // Update last login timestamp in background
+      debugPrint('AuthService: Triggering async last_login update...');
+      _usersCollection.doc(firebaseUser.uid).update({
+        'last_login': FieldValue.serverTimestamp(),
+      }).timeout(const Duration(seconds: 5)).then((_) {
+        debugPrint('AuthService: Async last_login update SUCCESS');
+      }).catchError((e) {
+        debugPrint('AuthService: Async last_login update FAILED (ignoring): $e');
+      });
+      
+      debugPrint('AuthService: <<< SIGN-IN COMPLETE');
     } on FirebaseAuthException catch (e) {
+      debugPrint('AuthService: !!! FirebaseAuthException: code=${e.code}, message=${e.message}');
       throw AuthException.fromFirebase(e);
     } catch (e) {
+      debugPrint('AuthService: !!! UNEXPECTED ERROR during sign-in: $e');
       if (e is AuthException) rethrow;
       throw AuthException('Failed to sign in: ${e.toString()}');
     }
@@ -311,10 +341,25 @@ class AuthService {
   /// Returns [UserModel] if found, null otherwise
   Future<UserModel?> getUserData(String uid) async {
     try {
-      final doc = await _usersCollection.doc(uid).get();
-      if (!doc.exists) return null;
+      debugPrint('AuthService: Fetching user data for $uid...');
+      // Aggressive timeout for web to detect ad-blockers early
+      final doc = await _usersCollection.doc(uid).get().timeout(
+        const Duration(seconds: kIsWeb ? 5 : 10),
+        onTimeout: () {
+          debugPrint('AuthService: !!! Firestore GET timed out for $uid. Possibly blocked by ad-blocker.');
+          throw const AuthException('Connection timed out. If you use Brave or an ad-blocker, please disable it for this site.');
+        },
+      );
+      
+      if (!doc.exists) {
+        debugPrint('AuthService: User document does not exist for $uid');
+        return null;
+      }
+      debugPrint('AuthService: User document found for $uid. Data: ${doc.data()}');
       return UserModel.fromFirestore(doc);
     } catch (e) {
+      debugPrint('AuthService: Error fetching user data for $uid: $e');
+      if (e is AuthException) rethrow;
       throw AuthException('Failed to fetch user data: ${e.toString()}');
     }
   }
@@ -385,6 +430,18 @@ class AuthService {
     }
   }
 
+  /// Upload raw bytes to Firebase Storage (Web compatible)
+  /// Returns download URL
+  Future<String> uploadBytes(Uint8List bytes, String path) async {
+    try {
+      final ref = _storage.ref().child(path);
+      await ref.putData(bytes);
+      return await ref.getDownloadURL();
+    } catch (e) {
+      throw AuthException('Failed to upload file bytes: ${e.toString()}');
+    }
+  }
+
   /// Create user profile via Backend API
   /// This ensures consistency with the web onboarding flow
   Future<void> createBackendProfile({
@@ -395,9 +452,10 @@ class AuthService {
     String? kycUrl,
     String? licenseUrl,
     String? plateNumber,
-    String? model,
+    String? vehicleModel,
     bool? isEv,
     String? pollutionExpiry,
+    int? passengerCapacity,
   }) async {
     try {
       final user = currentUser;
@@ -409,7 +467,8 @@ class AuthService {
       final Map<String, dynamic> body = {
         'name': name,
         'phone_number': phoneNumber,
-        'role': role.toString().split('.').last, // 'rider' or 'driver'
+        'role': role.value,
+        'is_onboarded': true,
       };
 
       if (role == UserRole.driver) {
@@ -417,12 +476,33 @@ class AuthService {
           'kyc_url': kycUrl,
           'license_url': licenseUrl,
           'plate_number': plateNumber,
-          'model': model,
+          'vehicle_model': vehicleModel,
           'is_ev': isEv ?? false,
           'pollution_expiry': pollutionExpiry,
+          'passenger_capacity': passengerCapacity,
         });
       }
 
+      // 2. Local Firestore Update (Proactive)
+      // This allows AuthGate to immediately pick up the onboarded status
+      await _usersCollection.doc(user.uid).update({
+        'name': name,
+        'phone_number': phoneNumber,
+        'role': role.value,
+        'is_onboarded': true,
+        if (role == UserRole.driver) ...{
+          'kyc_url': kycUrl,
+          'license_url': licenseUrl,
+          'plate_number': plateNumber,
+          'vehicle_model': vehicleModel,
+          'is_ev': isEv ?? false,
+          'pollution_expiry': pollutionExpiry,
+          'passenger_capacity': passengerCapacity,
+        },
+        'updated_at': FieldValue.serverTimestamp(),
+      });
+
+      // 3. Call Backend API
       final response = await http.post(
         Uri.parse('$_backendUrl/user'),
         headers: {
@@ -430,15 +510,16 @@ class AuthService {
           'Content-Type': 'application/json',
         },
         body: jsonEncode(body),
-      );
+      ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode != 201 && response.statusCode != 200) {
-        final error = jsonDecode(response.body);
-        throw AuthException(error['message'] ?? 'Failed to create profile');
+        // We log backend errors but don't fail the mobile flow if Firestore is updated
+        debugPrint('AuthService: Backend API returned ${response.statusCode}: ${response.body}');
       }
     } catch (e) {
+      debugPrint('AuthService: Profile creation error: $e');
       if (e is AuthException) rethrow;
-      throw AuthException('Backend error: ${e.toString()}');
+      throw AuthException('Failed to complete setup: ${e.toString()}');
     }
   }
 }

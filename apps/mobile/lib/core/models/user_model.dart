@@ -17,6 +17,18 @@ class UserModel {
   final List<Map<String, dynamic>>? savedLocations;
   final DateTime? createdAt;
   final DateTime? lastLogin;
+  
+  // Onboarding Status
+  final bool isOnboarded;
+
+  // Driver Specific Fields
+  final String? kycUrl;
+  final String? licenseUrl;
+  final String? plateNumber;
+  final String? vehicleModel;
+  final bool isEv;
+  final String? pollutionExpiry;
+  final int? passengerCapacity;
 
   const UserModel({
     required this.uid,
@@ -30,6 +42,14 @@ class UserModel {
     this.savedLocations,
     this.createdAt,
     this.lastLogin,
+    this.isOnboarded = false,
+    this.kycUrl,
+    this.licenseUrl,
+    this.plateNumber,
+    this.vehicleModel,
+    this.isEv = false,
+    this.pollutionExpiry,
+    this.passengerCapacity,
   });
 
   /// Create UserModel from Firestore document
@@ -48,6 +68,14 @@ class UserModel {
           ?.cast<Map<String, dynamic>>(),
       createdAt: (data['created_at'] as Timestamp?)?.toDate(),
       lastLogin: (data['last_login'] as Timestamp?)?.toDate(),
+      isOnboarded: data['is_onboarded'] as bool? ?? false,
+      kycUrl: data['kyc_url'] as String?,
+      licenseUrl: data['license_url'] as String?,
+      plateNumber: data['plate_number'] as String?,
+      vehicleModel: data['vehicle_model'] as String?,
+      isEv: data['is_ev'] as bool? ?? false,
+      pollutionExpiry: data['pollution_expiry'] as String?,
+      passengerCapacity: (data['passenger_capacity'] as num?)?.toInt(),
     );
   }
 
@@ -65,6 +93,14 @@ class UserModel {
       'saved_locations': savedLocations,
       'created_at': createdAt != null ? Timestamp.fromDate(createdAt!) : FieldValue.serverTimestamp(),
       'last_login': FieldValue.serverTimestamp(),
+      'is_onboarded': isOnboarded,
+      'kyc_url': kycUrl,
+      'license_url': licenseUrl,
+      'plate_number': plateNumber,
+      'vehicle_model': vehicleModel,
+      'is_ev': isEv,
+      'pollution_expiry': pollutionExpiry,
+      'passenger_capacity': passengerCapacity,
     };
   }
 
@@ -81,6 +117,14 @@ class UserModel {
     List<Map<String, dynamic>>? savedLocations,
     DateTime? createdAt,
     DateTime? lastLogin,
+    bool? isOnboarded,
+    String? kycUrl,
+    String? licenseUrl,
+    String? plateNumber,
+    String? vehicleModel,
+    bool? isEv,
+    String? pollutionExpiry,
+    int? passengerCapacity,
   }) {
     return UserModel(
       uid: uid ?? this.uid,
@@ -94,11 +138,19 @@ class UserModel {
       savedLocations: savedLocations ?? this.savedLocations,
       createdAt: createdAt ?? this.createdAt,
       lastLogin: lastLogin ?? this.lastLogin,
+      isOnboarded: isOnboarded ?? this.isOnboarded,
+      kycUrl: kycUrl ?? this.kycUrl,
+      licenseUrl: licenseUrl ?? this.licenseUrl,
+      plateNumber: plateNumber ?? this.plateNumber,
+      vehicleModel: vehicleModel ?? this.vehicleModel,
+      isEv: isEv ?? this.isEv,
+      pollutionExpiry: pollutionExpiry ?? this.pollutionExpiry,
+      passengerCapacity: passengerCapacity ?? this.passengerCapacity,
     );
   }
 
   @override
   String toString() {
-    return 'UserModel(uid: $uid, email: $email, name: $name, role: ${role.value})';
+    return 'UserModel(uid: $uid, email: $email, name: $name, role: ${role.value}, isOnboarded: $isOnboarded)';
   }
 }
