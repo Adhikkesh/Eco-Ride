@@ -1,11 +1,27 @@
+/**
+ * @fileoverview Firebase Client Configuration
+ * @description Initializes and exports Firebase client SDK services for the web application.
+ *              Provides access to Authentication, Firestore, Realtime Database, and Storage.
+ *              Handles client-side only initialization to prevent SSR issues in Next.js.
+ * @module lib/firebase
+ */
+
 import { getApp, getApps, initializeApp } from "firebase/app";
 import { GoogleAuthProvider, getAuth } from "firebase/auth";
 import { getDatabase } from "firebase/database";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
+/**
+ * Google Authentication Provider instance.
+ * Used for sign-in with Google OAuth flow.
+ */
 export const googleProvider = new GoogleAuthProvider();
 
+/**
+ * Firebase configuration object.
+ * All values are loaded from environment variables (NEXT_PUBLIC_ prefix for client access).
+ */
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
@@ -16,7 +32,11 @@ const firebaseConfig = {
   storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
 };
 
-// Only initialize Firebase on the client side
+/**
+ * Firebase app instance.
+ * Only initialized on client-side (window exists) to prevent SSR errors.
+ * Reuses existing app if already initialized to avoid duplicate app errors.
+ */
 const app =
   typeof window !== "undefined"
     ? !getApps().length
@@ -24,10 +44,32 @@ const app =
       : getApp()
     : null;
 
-// These will be null on server-side, but that's fine for "use client" components
+/**
+ * Firebase Authentication instance.
+ * Used for user sign-in, sign-up, and session management.
+ * @type {Auth}
+ */
 export const auth = app ? getAuth(app) : (null as unknown as ReturnType<typeof getAuth>);
+
+/**
+ * Firestore database instance.
+ * Used for reading user data and ride information.
+ * @type {Firestore}
+ */
 export const db = app ? getFirestore(app) : (null as unknown as ReturnType<typeof getFirestore>);
+
+/**
+ * Firebase Cloud Storage instance.
+ * Used for uploading KYC documents and profile images.
+ * @type {FirebaseStorage}
+ */
 export const storage = app ? getStorage(app) : (null as unknown as ReturnType<typeof getStorage>);
+
+/**
+ * Firebase Realtime Database instance.
+ * Used for real-time driver location tracking and ride status updates.
+ * @type {Database}
+ */
 export const rtdb = app ? getDatabase(app) : (null as unknown as ReturnType<typeof getDatabase>);
 
 export default app;
