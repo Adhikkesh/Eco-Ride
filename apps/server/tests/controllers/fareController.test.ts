@@ -44,6 +44,10 @@ const createMockResponse = () => {
 /**
  * Mock request helper
  */
+/**
+ * Creates a mock Express request object with a body.
+ * @param body - The request body
+ */
 const createMockRequest = (body: any = {}) => ({
   body,
 });
@@ -407,6 +411,36 @@ describe("Fare Controller", () => {
         expect(res._getStatusCode()).toBe(200);
         // Long fare: 40 + 100*12 + 120*1.5 = 40 + 1200 + 180 = 1420
         expect(res._getData().fare).toBe(1420);
+      });
+      it("should return 200 with base fare when pickup and drop are identical", async () => {
+        // Arrange
+        const mockRouteResponse = {
+          routes: [
+            {
+              distanceMeters: 0,
+              duration: "0s",
+              polyline: { encodedPolyline: "" },
+            },
+          ],
+        };
+
+        mockFetch.mockResolvedValueOnce({
+          json: () => Promise.resolve(mockRouteResponse),
+          ok: true,
+        });
+
+        const req = createMockRequest({
+          drop: mockLocations.pickup, // Drop = Pickup
+          pickup: mockLocations.pickup,
+        });
+        const res = createMockResponse();
+
+        // Act
+        await calculateFare(req as any, res as any);
+
+        // Assert
+        expect(res._getStatusCode()).toBe(200);
+        expect(res._getData().fare).toBe(PRICING.BASE_FARE); // Minimum fare
       });
     });
   });

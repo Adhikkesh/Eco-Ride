@@ -15,6 +15,10 @@ import { describe, expect, it } from "vitest";
  */
 
 // Validate rideId for payment
+/**
+ * Validates the payment init request body.
+ * @param body - Request body containing rideId
+ */
 const validatePaymentRequest = (body: any) => {
   if (!body.rideId) {
     return { message: "Missing rideId", valid: false };
@@ -23,6 +27,10 @@ const validatePaymentRequest = (body: any) => {
 };
 
 // Convert INR to paise for Stripe
+/**
+ * Converts INR to paise (atomic unit) for Stripe.
+ * @param amountInRupees - Amount in INR
+ */
 const convertToPaise = (amountInRupees: number) => {
   return Math.round(amountInRupees * 100);
 };
@@ -106,6 +114,10 @@ describe("Payment Controller - Business Logic", () => {
 
     it("should handle large amounts", () => {
       expect(convertToPaise(10000)).toBe(1000000);
+    });
+
+    it("should handle negative amounts (refunds)", () => {
+      expect(convertToPaise(-100)).toBe(-10000);
     });
   });
 
