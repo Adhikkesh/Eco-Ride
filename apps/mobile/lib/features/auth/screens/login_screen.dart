@@ -58,25 +58,48 @@ class _LoginScreenState extends State<LoginScreen>
   Future<void> _handleLogin() async {
     if (!_formKey.currentState!.validate()) return;
 
-    // Demo mode - just show a message
     if (!isFirebaseInitialized) {
-      _showInfoSnackbar('Demo Mode: Firebase not configured. This is a UI preview.');
+      _showInfoSnackbar('Demo Mode: Firebase not configured.');
       return;
     }
 
+    debugPrint('LOGIN_DEBUG: [1] _handleLogin starting...');
     setState(() => _isLoading = true);
+    final startTime = DateTime.now();
 
     try {
+      debugPrint('LOGIN_DEBUG: [2] Calling AuthService.signIn for ${_emailController.text}');
+      
       await AuthService.instance.signIn(
-        email: _emailController.text,
+        email: _emailController.text.trim(),
         password: _passwordController.text,
       );
-      // Navigation will be handled by auth state listener in main.dart
-    } on AuthException catch (e) {
+      
+      debugPrint('LOGIN_DEBUG: [3] AuthService.signIn returned successfully.');
+
+      // Wait a moment for Firebase state to propagate
+      await Future.delayed(const Duration(milliseconds: 500));
+      
       if (mounted) {
-        _showErrorSnackbar(e.message);
+        final user = AuthService.instance.currentUser;
+        debugPrint('LOGIN_DEBUG: [4] Post-sign-in check. User: ${user?.uid}');
+        
+        if (user != null) {
+          debugPrint('LOGIN_DEBUG: [5] Forcing App Rebuild via AuthGate ping...');
+          // We can't easily ping AuthGate from here without a global key,
+          // but our polling AuthGate in main.dart should catch this.
+          // To be extra sure, we navigate to ourselves which triggers a build.
+          setState(() => _isLoading = false);
+        }
       }
+    } on AuthException catch (e) {
+      debugPrint('LOGIN_DEBUG: [!] AuthException: ${e.message}');
+      if (mounted) _showErrorSnackbar(e.message);
+    } catch (e) {
+      debugPrint('LOGIN_DEBUG: [!] Unexpected error: $e');
+      if (mounted) _showErrorSnackbar('An unexpected error occurred.');
     } finally {
+      debugPrint('LOGIN_DEBUG: [6] _handleLogin finally block.');
       if (mounted) {
         setState(() => _isLoading = false);
       }

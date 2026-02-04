@@ -81,28 +81,39 @@ class _SignUpScreenState extends State<SignUpScreen>
         role: _selectedRole,
       );
 
-      // Sign out immediately so user can log in
-      await AuthService.instance.signOut();
-
-      // Show success message
+      // Show success message and pop to reveal OnboardingScreen (via AuthGate)
       if (mounted) {
-        _showSuccessSnackbar('Account created! Please sign in.');
-        _navigateToLogin(); 
+        _showSuccessSnackbar('Account created!');
+        Navigator.of(context).pop(); 
       }
     } on AuthException catch (e) {
-      // Smart Registration: If email exists, try to log in
+      // PROACTIVE FIX: If email exists, check and update role
       if (e.code == 'email-already-in-use') {
         try {
+          debugPrint('SignUp: Email exists. Checking for role mismatch...');
+          // 1. Attempt to sign in to verify credentials
           await AuthService.instance.signIn(
             email: _emailController.text,
             password: _passwordController.text,
           );
-          // If successful, AuthGate will handle navigation to Home
+          
+          final user = AuthService.instance.currentUser;
+          if (user != null) {
+            // 2. Fetch current profile
+            final profile = await AuthService.instance.getUserData(user.uid);
+            if (profile != null && profile.role != _selectedRole) {
+              debugPrint('SignUp: Role mismatch detected (${profile.role} -> $_selectedRole). Updating...');
+              await AuthService.instance.updateUserRole(user.uid, _selectedRole);
+              if (mounted) _showInfoSnackbar('Welcome! Your account has been updated to ${_selectedRole.displayName}.');
+            } else {
+              if (mounted) _showInfoSnackbar('Welcome back!');
+            }
+          }
           return;
-        } catch (_) {
-          // If login fails (wrong password), fall through to show simple error
+        } catch (signInError) {
+          debugPrint('SignUp: Sign-in/Role update failed: $signInError');
           if (mounted) {
-             _showErrorSnackbar('Account exists. Please sign in.');
+             _showErrorSnackbar('Account exists with this email. Please sign in with the correct password.');
           }
           return;
         }
@@ -276,11 +287,6 @@ class _SignUpScreenState extends State<SignUpScreen>
 
                     const SizedBox(height: 32),
 
-                    // Role Selection
-                    _buildRoleSelector(),
-
-                    const SizedBox(height: 24),
-
                     // Form Fields
                     _buildForm(),
 
@@ -356,90 +362,6 @@ class _SignUpScreenState extends State<SignUpScreen>
             color: AppColors.textSecondary,
             fontWeight: FontWeight.w400,
           ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildRoleSelector() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          AppStrings.selectRole,
-          style: GoogleFonts.poppins(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
-          ),
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: UserRole.values.map((role) {
-            final isSelected = _selectedRole == role;
-            return Expanded(
-              child: Padding(
-                padding: EdgeInsets.only(
-                  right: role != UserRole.values.last ? 8 : 0,
-                ),
-                child: GestureDetector(
-                  onTap: _isLoading ? null : () {
-                    setState(() => _selectedRole = role);
-                  },
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    padding: const EdgeInsets.symmetric(
-                      vertical: 16,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? AppColors.primary
-                          : AppColors.offWhite,
-                      borderRadius: BorderRadius.circular(AppDimens.radiusMD),
-                      border: Border.all(
-                        color: isSelected
-                            ? AppColors.primary
-                            : AppColors.lightGrey,
-                        width: isSelected ? 2 : 1,
-                      ),
-                      boxShadow: isSelected
-                          ? [
-                              BoxShadow(
-                                color: AppColors.primary.withValues(alpha: 0.3),
-                                blurRadius: 8,
-                                offset: const Offset(0, 4),
-                              ),
-                            ]
-                          : null,
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          role.icon,
-                          size: 28,
-                          color: isSelected
-                              ? AppColors.white
-                              : AppColors.textSecondary,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          role.displayName,
-                          style: GoogleFonts.poppins(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: isSelected
-                                ? AppColors.white
-                                : AppColors.textPrimary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            );
-          }).toList(),
         ),
       ],
     );
