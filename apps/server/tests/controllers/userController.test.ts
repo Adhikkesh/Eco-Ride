@@ -38,7 +38,7 @@ import { describe, expect, it } from "vitest";
  * Validates required common fields for all users.
  * @param body - Request body
  */
-const validateUserFields = (body: any) => {
+const validateUserFields = (body: Record<string, unknown>) => {
   const { name, phone_number, role } = body;
 
   if (!name || !role || !phone_number) {
@@ -56,7 +56,7 @@ const validateUserFields = (body: any) => {
  * Validates specific fields required for drivers.
  * @param body - Request body
  */
-const validateDriverFields = (body: any) => {
+const validateDriverFields = (body: Record<string, unknown>) => {
   const { role, license_url, plate_number, model, pollution_expiry } = body;
 
   if (role === "driver") {
@@ -73,7 +73,7 @@ const validateDriverFields = (body: any) => {
 };
 
 // Check if user is authenticated
-const validateAuthentication = (user: any) => {
+const validateAuthentication = (user: Record<string, unknown> | null | undefined) => {
   if (!user) {
     return { message: "Unauthorized: User not authenticated", valid: false };
   }

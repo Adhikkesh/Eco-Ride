@@ -8,7 +8,8 @@
  * @date 2026-02-03
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Request, Response } from "express";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 // Pricing constants (should match fareController.ts)
 const PRICING = {
@@ -21,24 +22,30 @@ const PRICING = {
 /**
  * Mock response helper
  */
-const createMockResponse = () => {
-  let statusCode = 200;
-  let data: any = null;
+interface MockResponse extends Partial<Response> {
+  _getData: () => unknown;
+  _getStatusCode: () => number;
+}
 
-  const res: any = {
+const createMockResponse = (): MockResponse => {
+  let statusCode = 200;
+  let data: unknown = null;
+
+  // valid response structure that fulfills the partial requirement
+  const res: Partial<Response> & { _getData: () => unknown; _getStatusCode: () => number } = {
     _getData: () => data,
     _getStatusCode: () => statusCode,
-    json: vi.fn((responseData: any) => {
+    json: vi.fn((responseData: unknown) => {
       data = responseData;
-      return res;
+      return res as Response;
     }),
     status: vi.fn((code: number) => {
       statusCode = code;
-      return res;
+      return res as Response;
     }),
   };
 
-  return res;
+  return res as MockResponse;
 };
 
 /**
@@ -48,7 +55,7 @@ const createMockResponse = () => {
  * Creates a mock Express request object with a body.
  * @param body - The request body
  */
-const createMockRequest = (body: any = {}) => ({
+const createMockRequest = (body: Record<string, unknown> = {}): Partial<Request> => ({
   body,
 });
 
@@ -59,8 +66,9 @@ const mockLocations = {
 };
 
 describe("Fare Controller", () => {
-  let mockFetch: any;
-  let calculateFare: any;
+  let mockFetch: Mock;
+  // Use generic Promise<unknown> to accommodate void or response return
+  let calculateFare: (req: Request, res: Response) => Promise<unknown>;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -91,11 +99,13 @@ describe("Fare Controller", () => {
         const res = createMockResponse();
 
         // Act
-        await calculateFare(req as any, res as any);
+        await calculateFare(req as Request, res as Response);
 
         // Assert
         expect(res._getStatusCode()).toBe(400);
+        // @ts-expect-error
         expect(res._getData().message).toBe("Invalid pickup or drop coordinates");
+        // @ts-expect-error
         expect(res._getData().success).toBe(false);
       });
 
@@ -107,10 +117,11 @@ describe("Fare Controller", () => {
         const res = createMockResponse();
 
         // Act
-        await calculateFare(req as any, res as any);
+        await calculateFare(req as Request, res as Response);
 
         // Assert
         expect(res._getStatusCode()).toBe(400);
+        // @ts-expect-error
         expect(res._getData().message).toBe("Invalid pickup or drop coordinates");
       });
 
@@ -123,7 +134,7 @@ describe("Fare Controller", () => {
         const res = createMockResponse();
 
         // Act
-        await calculateFare(req as any, res as any);
+        await calculateFare(req as Request, res as Response);
 
         // Assert
         expect(res._getStatusCode()).toBe(400);
@@ -141,10 +152,11 @@ describe("Fare Controller", () => {
         const res = createMockResponse();
 
         // Act
-        await calculateFare(req as any, res as any);
+        await calculateFare(req as Request, res as Response);
 
         // Assert
         expect(res._getStatusCode()).toBe(500);
+        // @ts-expect-error
         expect(res._getData().message).toBe("Server configuration error");
       });
     });
@@ -175,16 +187,21 @@ describe("Fare Controller", () => {
         const res = createMockResponse();
 
         // Act
-        await calculateFare(req as any, res as any);
+        await calculateFare(req as Request, res as Response);
 
         // Assert
         expect(res._getStatusCode()).toBe(200);
+        // @ts-expect-error
         expect(res._getData().success).toBe(true);
+        // @ts-expect-error
         expect(res._getData().currency).toBe("INR");
+        // @ts-expect-error
         expect(res._getData().distance_km).toBe("5.0");
+        // @ts-expect-error
         expect(res._getData().eta_min).toBe(10);
 
         // Calculate expected fare: 40 (base) + 5*12 (distance) + 10*1.5 (time) = 40 + 60 + 15 = 115
+        // @ts-expect-error
         expect(res._getData().fare).toBe(115);
       });
 
@@ -213,11 +230,12 @@ describe("Fare Controller", () => {
         const res = createMockResponse();
 
         // Act
-        await calculateFare(req as any, res as any);
+        await calculateFare(req as Request, res as Response);
 
         // Assert
         expect(res._getStatusCode()).toBe(200);
         // Standard fare would be 115, with 20% discount: 115 * 0.8 = 92
+        // @ts-expect-error
         expect(res._getData().fare).toBe(92);
       });
 
@@ -245,10 +263,11 @@ describe("Fare Controller", () => {
         const res = createMockResponse();
 
         // Act
-        await calculateFare(req as any, res as any);
+        await calculateFare(req as Request, res as Response);
 
         // Assert
         // CO2 saved = 10 km * 192 g/km = 1920g
+        // @ts-expect-error
         expect(res._getData().co2_saved_g).toBe(1920);
       });
 
@@ -277,9 +296,10 @@ describe("Fare Controller", () => {
         const res = createMockResponse();
 
         // Act
-        await calculateFare(req as any, res as any);
+        await calculateFare(req as Request, res as Response);
 
         // Assert
+        // @ts-expect-error
         expect(res._getData().polyline).toBe(expectedPolyline);
       });
     });
@@ -299,10 +319,11 @@ describe("Fare Controller", () => {
         const res = createMockResponse();
 
         // Act
-        await calculateFare(req as any, res as any);
+        await calculateFare(req as Request, res as Response);
 
         // Assert
         expect(res._getStatusCode()).toBe(404);
+        // @ts-expect-error
         expect(res._getData().message).toBe("No route found between these locations");
       });
 
@@ -322,10 +343,11 @@ describe("Fare Controller", () => {
         const res = createMockResponse();
 
         // Act
-        await calculateFare(req as any, res as any);
+        await calculateFare(req as Request, res as Response);
 
         // Assert
         expect(res._getStatusCode()).toBe(403);
+        // @ts-expect-error
         expect(res._getData().success).toBe(false);
       });
 
@@ -340,10 +362,11 @@ describe("Fare Controller", () => {
         const res = createMockResponse();
 
         // Act
-        await calculateFare(req as any, res as any);
+        await calculateFare(req as Request, res as Response);
 
         // Assert
         expect(res._getStatusCode()).toBe(500);
+        // @ts-expect-error
         expect(res._getData().message).toBe("Internal server error");
       });
     });
@@ -373,11 +396,12 @@ describe("Fare Controller", () => {
         const res = createMockResponse();
 
         // Act
-        await calculateFare(req as any, res as any);
+        await calculateFare(req as Request, res as Response);
 
         // Assert
         expect(res._getStatusCode()).toBe(200);
         // Base fare should still apply: 40 + 0.1*12 + 1*1.5 ≈ 43
+        // @ts-expect-error
         expect(res._getData().fare).toBeGreaterThanOrEqual(40);
       });
 
@@ -405,11 +429,12 @@ describe("Fare Controller", () => {
         const res = createMockResponse();
 
         // Act
-        await calculateFare(req as any, res as any);
+        await calculateFare(req as Request, res as Response);
 
         // Assert
         expect(res._getStatusCode()).toBe(200);
         // Long fare: 40 + 100*12 + 120*1.5 = 40 + 1200 + 180 = 1420
+        // @ts-expect-error
         expect(res._getData().fare).toBe(1420);
       });
       it("should return 200 with base fare when pickup and drop are identical", async () => {
@@ -436,10 +461,11 @@ describe("Fare Controller", () => {
         const res = createMockResponse();
 
         // Act
-        await calculateFare(req as any, res as any);
+        await calculateFare(req as Request, res as Response);
 
         // Assert
         expect(res._getStatusCode()).toBe(200);
+        // @ts-expect-error
         expect(res._getData().fare).toBe(PRICING.BASE_FARE); // Minimum fare
       });
     });

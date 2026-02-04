@@ -22,17 +22,23 @@
  * @date 2026-02-03
  */
 
+import type { NextFunction, Request, Response } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * Mock response helper
  */
+interface MockResponse extends Partial<Response> {
+  _getData: () => any;
+  _getStatusCode: () => number;
+}
+
 /**
  * Creates a mock Express response object.
  * Supports chainable methods like .status().json().
  * Includes helper methods _getData() and _getStatusCode() for assertions.
  */
-const createMockResponse = () => {
+const createMockResponse = (): MockResponse => {
   let statusCode = 200;
   let data: any = null;
 
@@ -49,7 +55,7 @@ const createMockResponse = () => {
     }),
   };
 
-  return res;
+  return res as MockResponse;
 };
 
 /**
@@ -59,11 +65,12 @@ const createMockResponse = () => {
  * Creates a mock Express request object.
  * @param overrides - Optional properties to override default request shape
  */
-const createMockRequest = (overrides: any = {}) => ({
+const createMockRequest = (overrides: Record<string, unknown> = {}): Partial<Request> => ({
   body: {},
   headers: {},
   params: {},
   query: {},
+  // @ts-expect-error - 'user' is often added by middleware
   user: undefined,
   ...overrides,
 });
@@ -71,7 +78,7 @@ const createMockRequest = (overrides: any = {}) => ({
 /**
  * Create mock Firebase user
  */
-const createMockUser = (overrides: any = {}) => ({
+const createMockUser = (overrides: Record<string, unknown> = {}) => ({
   email: "test@ecoride.com",
   email_verified: true,
   name: "Test User",
@@ -81,7 +88,7 @@ const createMockUser = (overrides: any = {}) => ({
 });
 
 describe("Auth Controller", () => {
-  let VerifyTokenController: any;
+  let VerifyTokenController: (req: Request, res: Response, next: NextFunction) => Promise<void>;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -106,7 +113,7 @@ describe("Auth Controller", () => {
         const next = vi.fn();
 
         // Act
-        await VerifyTokenController(req as any, res as any, next);
+        await VerifyTokenController(req as Request, res as Response, next);
 
         // Assert
         expect(res._getStatusCode()).toBe(401);
@@ -124,7 +131,7 @@ describe("Auth Controller", () => {
         const next = vi.fn();
 
         // Act
-        await VerifyTokenController(req as any, res as any, next);
+        await VerifyTokenController(req as Request, res as Response, next);
 
         // Assert
         expect(res._getStatusCode()).toBe(200);
@@ -143,7 +150,7 @@ describe("Auth Controller", () => {
         const next = vi.fn();
 
         // Act
-        await VerifyTokenController(req as any, res as any, next);
+        await VerifyTokenController(req as Request, res as Response, next);
 
         // Assert
         expect(res._getData().user.emailVerified).toBe(true);
@@ -157,7 +164,7 @@ describe("Auth Controller", () => {
         const next = vi.fn();
 
         // Act
-        await VerifyTokenController(req as any, res as any, next);
+        await VerifyTokenController(req as Request, res as Response, next);
 
         // Assert
         expect(res._getData().user.name).toBe("John Doe");
@@ -173,7 +180,7 @@ describe("Auth Controller", () => {
         const next = vi.fn();
 
         // Act
-        await VerifyTokenController(req as any, res as any, next);
+        await VerifyTokenController(req as Request, res as Response, next);
 
         // Assert
         expect(res._getData().user.picture).toBe("https://lh3.googleusercontent.com/photo.jpg");
@@ -189,7 +196,7 @@ describe("Auth Controller", () => {
         const next = vi.fn();
 
         // Act
-        await VerifyTokenController(req as any, res as any, next);
+        await VerifyTokenController(req as Request, res as Response, next);
 
         // Assert
         expect(res._getStatusCode()).toBe(200);

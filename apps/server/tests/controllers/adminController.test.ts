@@ -36,13 +36,38 @@ import { describe, expect, it } from "vitest";
 // Admin UID (should match the actual admin UID in production)
 const ADMIN_UID = "dq8zZsXXsldH9yVcrB4B7qbHzgB2";
 
+// Interfaces for type safety
+interface VerifyDriverRequest {
+  driver_uid?: string;
+  verified?: boolean;
+}
+
+interface DriverProfile {
+  driver_uid: string;
+  kyc_url?: string | null;
+  license_url?: string | null;
+}
+
+interface UserData {
+  email?: string;
+  name?: string;
+  phone_number?: string;
+}
+
+interface VehicleData {
+  is_ev?: boolean;
+  model?: string;
+  plate_number?: string;
+  pollution_expiry?: string | null;
+}
+
 // Check if user is authenticated
 /**
  * Validates if the user object exists (simulating auth middleware check).
  * @param user - The user object from the request
  * @returns Object with validity status and message
  */
-const validateAuth = (user: any) => {
+const validateAuth = (user: Record<string, unknown> | null | undefined) => {
   if (!user) {
     return { message: "Unauthorized", valid: false };
   }
@@ -60,7 +85,7 @@ const isAdmin = (userUid: string | undefined) => {
 };
 
 // Validate driver verification request
-const validateVerifyDriverRequest = (body: any) => {
+const validateVerifyDriverRequest = (body: VerifyDriverRequest) => {
   if (!body.driver_uid) {
     return { message: "driver_uid is required", valid: false };
   }
@@ -68,7 +93,11 @@ const validateVerifyDriverRequest = (body: any) => {
 };
 
 // Format driver data for response
-const formatDriverData = (driverProfile: any, userData: any, vehicleData: any) => {
+const formatDriverData = (
+  driverProfile: DriverProfile,
+  userData: UserData | null,
+  vehicleData: VehicleData | null,
+) => {
   return {
     email: userData?.email || "Unknown",
     kyc_url: driverProfile.kyc_url || null,
