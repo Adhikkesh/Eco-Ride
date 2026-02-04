@@ -1,8 +1,27 @@
 /**
  * Unit Tests for Admin Controller - Business Logic
  *
- * This file contains unit tests for admin functionality.
- * Tests cover admin authorization, driver verification, and data handling.
+ * TESTING APPROACH:
+ * These are pure unit tests that test business logic in isolation.
+ * The functions below are extracted/mirrored from the actual controller
+ * to test the logic WITHOUT requiring Firebase or database connections.
+ *
+ * WHY NO DATABASE MOCKING?
+ * - Faster test execution (no async DB calls)
+ * - Simpler test setup (no mock configuration)
+ * - Tests focus purely on authorization and data formatting logic
+ *
+ * WHAT IS TESTED:
+ * - Authentication validation (is user logged in?)
+ * - Admin authorization (is user the admin UID?)
+ * - Driver verification request validation
+ * - Driver data formatting for API responses
+ * - Verification success/decline message generation
+ *
+ * WHAT IS NOT TESTED:
+ * - Actual Firestore read/write operations
+ * - Express request/response handling
+ * - Driver verification updates in database
  *
  * @author Team Member 5 - Admin Module
  * @date 2026-02-03
