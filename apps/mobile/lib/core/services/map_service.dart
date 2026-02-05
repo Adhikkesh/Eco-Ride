@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import '../../../core/services/auth_service.dart';
 import '../constants/app_constants.dart';
 
 class MapService {
@@ -257,6 +258,101 @@ class MapService {
     }
 
     return null;
+  }
+
+  static Future<Map<String, dynamic>?> getRideEstimate(LatLng pickup, LatLng drop) async {
+    try {
+      final token = await AuthService.instance.getIdToken();
+      if (token == null) {
+        debugPrint('MapService: User not authenticated for estimate');
+        return null;
+      }
+
+      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.estimateRide}');
+      debugPrint('MapService: Requesting estimate from $url');
+
+      final response = await http.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: json.encode({
+          'pickup': {'lat': pickup.latitude, 'lng': pickup.longitude},
+          'drop': {'lat': drop.latitude, 'lng': drop.longitude},
+          'isPooled': false, // Default for now
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true) {
+          debugPrint('MapService: Estimate received: ${data['fare']} ${data['currency']}');
+          return data;
+        } else {
+          debugPrint('MapService: Backend returned error: ${data['message']}');
+        }
+      } else {
+        debugPrint('MapService: Estimate API error: ${response.statusCode} - ${response.body}');
+      }
+    } catch (e) {
+      debugPrint('MapService: Fatal error getting estimate: $e');
+    }
+    return null;
+  }
+
+  static Future<Map<String, dynamic>?> requestRide({
+    required LatLng pickup,
+    required LatLng drop,
+    required double fare,
+    required double distance,
+    required double duration,
+    required String polyline,
+  }) async {
+    try {
+      final token = await AuthService.instance.getIdToken();
+      if (token == null) {
+        debugPrint('MapService: User not authenticated for request');
+        return null; // Force auth check
+      }
+
+      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.requestRide}');
+      debugPrint('MapService: Requesting ride at $url');
+
+      final response = await http.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: json.encode({
+          'pickup': {'lat': pickup.latitude, 'lng': pickup.longitude},
+          'drop': {'lat': drop.latitude, 'lng': drop.longitude},
+          'fare': fare,
+          'distance': distance,
+          'duration': duration,
+          'polyline': polyline,
+          'vehicleType': 'auto', // Default for now
+        }),
+      );
+
+      debugPrint('MapService: Request ride status: ${response.statusCode}');
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return data;
+      } else {
+        debugPrint('MapService: Request ride failed: ${response.body}');
+        return null;
+      }
+    } catch (e) {
+      debugPrint('MapService: Error requesting ride: $e');
+      return null;
+    }
+  }
+
+
+  static List<LatLng> decodePolyline(String encoded) {
+    return _decodePolyline(encoded);
   }
 
   static List<LatLng> _decodePolyline(String encoded) {
