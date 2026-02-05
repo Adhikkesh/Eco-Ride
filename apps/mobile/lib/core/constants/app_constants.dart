@@ -116,7 +116,9 @@ class ApiConfig {
 
   // Endpoints
   static const String verifyToken = '/api/auth/verify';
-  static const String createUser = '/api/user';
+  static const String createUser = '/api/v1/user';
+  static const String estimateRide = '/api/v1/ride/estimate';
+  static const String requestRide = '/api/v1/ride/request';
   
   // Google Maps API
   static const String googleMapsApiKey = 'AIzaSyD5ucfXDiTYX9T7Nirz_de1vz2qgwbNJXo';

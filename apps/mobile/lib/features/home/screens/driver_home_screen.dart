@@ -7,6 +7,7 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/services/auth_service.dart';
+import '../../../core/services/map_service.dart';
 import '../../auth/screens/login_screen.dart';
 
 class DriverHomeScreen extends StatefulWidget {
@@ -32,6 +33,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   LatLng? _currentPosition;
   double _currentHeading = 0.0;
   StreamSubscription<LocationData>? _locationSubscription;
+  StreamSubscription<DatabaseEvent>? _rideSubscription; // ADDED THIS LINE
+  Map<dynamic, dynamic>? _currentRide; // Data for incoming/active ride
+  bool _isNavigating = false;
+  Set<Marker> _markers = {};
+  Set<Polyline> _polylines = {};
   
   String? _userName;
   String? _userPhoto;
@@ -138,6 +144,33 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         _updateFirebaseLocation(newPos, heading);
         _updateCamera(newPos);
       });
+
+      // Listen for ride assignments
+      final userId = _auth.currentUser?.uid;
+      if (userId != null) {
+        debugPrint('DriverHome: Listening for rides at rides-assigned/$userId');
+        _rideSubscription = _rtdb.ref('rides-assigned/$userId').onValue.listen((event) {
+          final data = event.snapshot.value as Map<dynamic, dynamic>?;
+          if (data != null) {
+             debugPrint('DriverHome: NEW RIDE RECEIVED! $data');
+             setState(() {
+               _currentRide = data;
+             });
+             // TODO: Trigger notification sound/vibration
+          } else {
+             // Ride removed/cancelled
+            if (_currentRide != null) {
+               debugPrint('DriverHome: Ride assignment removed.');
+               setState(() {
+                 _currentRide = null; 
+                 _isNavigating = false;
+                 _polylines.clear();
+                 _markers.clear();
+               });
+            }
+          }
+        });
+      }
     } catch (e) {
       debugPrint('DriverHome: !!! Geolocation Error going online: $e');
       if (mounted) {
@@ -149,9 +182,108 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     }
   }
 
+  Future<void> _acceptRide() async {
+    if (_currentRide == null || _currentPosition == null) return;
+
+    final rideData = _currentRide!;
+    final pickupData = rideData['pickup'];
+    final dropData = rideData['drop'];
+
+    final LatLng pickup = LatLng(
+      (pickupData['lat'] as num).toDouble(),
+      (pickupData['lng'] as num).toDouble(),
+    );
+    final LatLng drop = LatLng(
+      (dropData['lat'] as num).toDouble(),
+      (dropData['lng'] as num).toDouble(),
+    );
+
+    setState(() => _isLoading = true);
+
+    try {
+      // 1. Leg 1: Driver to Pickup (BLUE)
+      final directionsToPickup = await MapService.getDirections(_currentPosition!, pickup);
+      
+      // 2. Leg 2: Pickup to Drop (GREEN)
+      final directionsToDrop = await MapService.getDirections(pickup, drop);
+
+      if (mounted) {
+        setState(() {
+          _isNavigating = true;
+          _isLoading = false;
+          
+          _markers.clear();
+          _markers.add(Marker(
+            markerId: const MarkerId('pickup'),
+            position: pickup,
+            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+            infoWindow: const InfoWindow(title: 'Pickup Location'),
+          ));
+          _markers.add(Marker(
+            markerId: const MarkerId('dropoff'),
+            position: drop,
+            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+            infoWindow: const InfoWindow(title: 'Destination'),
+          ));
+
+          _polylines.clear();
+          if (directionsToPickup != null) {
+            _polylines.add(Polyline(
+              polylineId: const PolylineId('to_pickup'),
+              points: directionsToPickup['points'],
+              color: Colors.blue,
+              width: 5,
+            ));
+          }
+          if (directionsToDrop != null) {
+            _polylines.add(Polyline(
+              polylineId: const PolylineId('to_dropoff'),
+              points: directionsToDrop['points'],
+              color: Colors.green,
+              width: 5,
+            ));
+          }
+        });
+
+        // Zoom to fit both legs
+        final controller = await _controller.future;
+        final bounds = _getBounds([_currentPosition!, pickup, drop]);
+        controller.animateCamera(CameraUpdate.newLatLngBounds(bounds, 100));
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Navigation started!')),
+        );
+      }
+    } catch (e) {
+      debugPrint('DriverHome: Error accepting ride: $e');
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  LatLngBounds _getBounds(List<LatLng> points) {
+    double minLat = points[0].latitude;
+    double maxLat = points[0].latitude;
+    double minLng = points[0].longitude;
+    double maxLng = points[0].longitude;
+
+    for (var p in points) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+
+    return LatLngBounds(
+      southwest: LatLng(minLat, minLng),
+      northeast: LatLng(maxLat, maxLng),
+    );
+  }
+
   Future<void> _goOffline() async {
     await _locationSubscription?.cancel();
     _locationSubscription = null;
+    await _rideSubscription?.cancel();
+    _rideSubscription = null;
 
     final userId = _auth.currentUser?.uid;
     if (userId != null) {
@@ -213,6 +345,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             onMapCreated: (GoogleMapController controller) {
               _controller.complete(controller);
             },
+            markers: _markers,
+            polylines: _polylines,
           ),
 
           // 2. Header and Status Toggle
@@ -231,6 +365,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               ),
             ),
           ),
+          
+          // 3. Incoming Ride Sheet
+          if (_currentRide != null) 
+             Align(alignment: Alignment.bottomCenter, child: _buildIncomingRideSheet()),
         ],
       ),
     );
@@ -393,6 +531,106 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               fontSize: 12,
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIncomingRideSheet() {
+    if (_currentRide == null) return const SizedBox.shrink();
+    
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        boxShadow: [
+           BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 20, offset: const Offset(0, -5)),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                _isNavigating ? 'Active Trip' : 'New Ride Request!', 
+                style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black)
+              ),
+              if (!_isNavigating)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(20)),
+                  child: Text('2 min away', style: GoogleFonts.poppins(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // Route Details
+          Row(children: [
+             const Icon(Icons.my_location, color: Colors.green),
+             const SizedBox(width: 12),
+             Expanded(child: Text('Pickup Location', style: GoogleFonts.poppins(fontSize: 14))),
+          ]),
+          Padding(
+            padding: const EdgeInsets.only(left: 11, top: 4, bottom: 4),
+            child: Container(height: 20, width: 2, color: Colors.grey.withOpacity(0.3)),
+          ),
+          Row(children: [
+             const Icon(Icons.location_on, color: Colors.red),
+             const SizedBox(width: 12),
+             Expanded(child: Text('Drop Location', style: GoogleFonts.poppins(fontSize: 14))),
+          ]),
+          
+          const SizedBox(height: 24),
+          
+          if (!_isNavigating)
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () {
+                       // Reject logic
+                       setState(() => _currentRide = null); 
+                    },
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      side: BorderSide(color: Colors.red.withOpacity(0.5)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: Text('Decline', style: GoogleFonts.poppins(color: Colors.red)),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _acceptRide,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                       padding: const EdgeInsets.symmetric(vertical: 16),
+                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: Text('Accept Ride', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            )
+          else
+            ElevatedButton(
+              onPressed: () {
+                // Next step: Start Ride
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Arrived at Pickup!')));
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                minimumSize: const Size(double.infinity, 54),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: Text('Arrived at Pickup', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
         ],
       ),
     );
