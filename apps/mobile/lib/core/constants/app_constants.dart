@@ -117,6 +117,9 @@ class ApiConfig {
   // Endpoints
   static const String verifyToken = '/api/auth/verify';
   static const String createUser = '/api/user';
+  
+  // Google Maps API
+  static const String googleMapsApiKey = 'AIzaSyD5ucfXDiTYX9T7Nirz_de1vz2qgwbNJXo';
 }
 
 // =============================================================================
