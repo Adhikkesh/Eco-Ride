@@ -43,6 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _userName;
   String? _userEmail;
   String? _userPhoto;
+  bool _ignoreSearchChange = false;
 
   @override
   void initState() {
@@ -54,6 +55,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _onSearchChanged({required bool isPickup}) {
+    if (_ignoreSearchChange) return;
     final controller = isPickup ? _pickupController : _searchController;
     
     if (_debounce?.isActive ?? false) _debounce!.cancel();
@@ -102,6 +104,7 @@ class _HomeScreenState extends State<HomeScreen> {
     
     if (mounted) {
       setState(() {
+        _ignoreSearchChange = true;
         if (isPickup) {
           _pickupController.text = description;
           _pickupSuggestions = [];
@@ -109,6 +112,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _searchController.text = description;
           _suggestions = [];
         }
+        _ignoreSearchChange = false;
         FocusScope.of(context).unfocus();
       });
     }
@@ -274,13 +278,28 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadUserData() async {
-    final user = await AuthService.instance.currentUser;
-    if (user != null && mounted) {
-      setState(() {
-        _userName = user.displayName ?? 'User';
-        _userEmail = user.email;
-        _userPhoto = user.photoURL;
-      });
+    try {
+      final userModel = await AuthService.instance.getCurrentUserData();
+      if (userModel != null && mounted) {
+        setState(() {
+          // Priority: 1. Full Name, 2. Email Prefix, 3. 'User'
+          _userName = userModel.name ?? userModel.email.split('@')[0];
+          _userEmail = userModel.email;
+          _userPhoto = null; // We can add storage photo support later
+        });
+        debugPrint('HomeScreen: Loaded profile for $_userName');
+      } else {
+        // Fallback for basic info if Firestore is slow/blocked
+        final user = AuthService.instance.currentUser;
+        if (user != null && mounted) {
+          setState(() {
+            _userName = user.displayName ?? user.email?.split('@')[0] ?? 'User';
+            _userEmail = user.email;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('HomeScreen: Error loading user data: $e');
     }
   }
 
