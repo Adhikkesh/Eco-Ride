@@ -24,12 +24,18 @@ interface DriverMatch {
 
 export const requestRide = async (req: Request, res: Response) => {
   try {
-    const { riderId, pickupLat, pickupLng, dropLat, dropLng, fare } = req.body;
+    const { pickup, drop, fare } = req.body;
+    const riderId = req.user?.uid;
+
+    const pickupLat = pickup?.lat;
+    const pickupLng = pickup?.lng;
+    const dropLat = drop?.lat;
+    const dropLng = drop?.lng;
 
     // Validate required fields
     if (!riderId || !pickupLat || !pickupLng || !dropLat || !dropLng) {
       return res.status(400).json({
-        message: "Missing required fields: riderId, pickupLat, pickupLng, dropLat, dropLng",
+        message: "Missing required fields: riderId, pickup coordinates, or drop coordinates",
         success: false,
       });
     }

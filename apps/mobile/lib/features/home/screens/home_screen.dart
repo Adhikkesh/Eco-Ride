@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -43,15 +44,135 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _userName;
   String? _userEmail;
   String? _userPhoto;
-  bool _ignoreSearchChange = false;
+    bool _ignoreSearchChange = false;
+    // State for estimates
+    Map<String, dynamic>? _estimateData;
+  bool _isSearchingForDriver = false; // NEW state for ride request
 
-  @override
+    @override
   void initState() {
     super.initState();
     _loadUserData();
     _getCurrentLocation();
     _pickupController.addListener(() => _onSearchChanged(isPickup: true));
     _searchController.addListener(() => _onSearchChanged(isPickup: false));
+  }
+
+  Future<void> _useCurrentLocationForPickup() async {
+    // 1. Check Permissions & Get Location if needed
+    if (_currentPosition == null) {
+      await _getCurrentLocation(); 
+    }
+    
+    if (_currentPosition != null && mounted) {
+      setState(() {
+        _pickupPosition = _currentPosition;
+        _pickupController.text = "Current Location";
+        _pickupSuggestions = []; // Clear suggestions
+        _ignoreSearchChange = true; // Prevent search trigger
+        
+        // Add marker
+        _markers.removeWhere((m) => m.markerId.value == 'pickup');
+        _markers.add(
+          Marker(
+            markerId: const MarkerId('pickup'),
+            position: _pickupPosition!,
+            infoWindow: const InfoWindow(title: 'Pickup: Current Location'),
+            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+          ),
+        );
+      });
+      
+      // Reset flag after small delay to allow typing again if user wants to change
+      Future.delayed(const Duration(milliseconds: 500), () => _ignoreSearchChange = false);
+
+      _updateCamera();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to fetch current location.')),
+      );
+    }
+  }
+
+  Future<void> _handleRequestRide() async {
+    if (_estimateData == null || _pickupPosition == null || _destinationPosition == null) return;
+
+    setState(() => _isSearchingForDriver = true);
+
+    final result = await MapService.requestRide(
+      pickup: _pickupPosition!,
+      drop: _destinationPosition!,
+      fare: (_estimateData!['fare'] as num).toDouble(),
+      distance: _estimateData!['distance_value'] is int ? (_estimateData!['distance_value'] as int) / 1000 : 0.0, // approx
+      duration: _estimateData!['duration_value'] is int ? (_estimateData!['duration_value'] as int) / 60 : 0.0, // approx
+      polyline: _estimateData!['polyline'] ?? '',
+    );
+
+    if (mounted) {
+      if (result != null) {
+        // In a real app, we'd now listen to Firestore for driver acceptance.
+        // For this demo/MVP, we'll simulate a "Driver Found" after a delay or just keep showing searching.
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Ride Requested! Waiting for drivers...')),
+        );
+      } else {
+        setState(() => _isSearchingForDriver = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to request ride. Please try again.')),
+        );
+      }
+    }
+  }
+
+  Widget _buildSearchingSheet() {
+    return Align(
+        alignment: Alignment.bottomCenter,
+        child: Container(
+          width: double.infinity,
+          margin: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              const CircularProgressIndicator(),
+              const SizedBox(height: 24),
+              Text(
+                'Contacting nearby drivers...',
+                style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Please wait while we find you a ride.',
+                style: GoogleFonts.poppins(color: Colors.grey),
+              ),
+              const SizedBox(height: 24),
+              OutlinedButton(
+                onPressed: () {
+                   // Cancel request logic would go here
+                   setState(() => _isSearchingForDriver = false);
+                },
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(double.infinity, 50),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: const Text('Cancel Request'),
+              ),
+            ],
+          ),
+        ),
+    );
   }
 
   void _onSearchChanged({required bool isPickup}) {
@@ -203,8 +324,40 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     setState(() => _isLoading = true);
+    setState(() => _estimateData = null); // Clear previous estimate
 
     try {
+      // 1. Try Backend Estimation FIRST (More features: Price, CO2, Accurate Route)
+      final estimate = await MapService.getRideEstimate(_pickupPosition!, _destinationPosition!);
+
+      if (estimate != null && mounted) {
+        debugPrint('HomeScreen: Backend estimate received!');
+        
+        final encodedPolyline = estimate['polyline'];
+        final List<LatLng> points = MapService.decodePolyline(encodedPolyline);
+
+        setState(() {
+          _estimateData = estimate;
+          _polylines = {
+            Polyline(
+              polylineId: const PolylineId('route'),
+              points: points,
+              color: AppColors.primary,
+              width: 5,
+              jointType: JointType.round,
+              startCap: Cap.roundCap,
+              endCap: Cap.roundCap,
+            ),
+          };
+          _isLoading = false;
+        });
+
+        _updateCamera();
+        return;
+      }
+      
+      // 2. Fallback to Google Directions API Direct (Visual only, no price)
+      debugPrint('HomeScreen: Backend estimate failed. Falling back to direct directions...');
       final result = await MapService.getDirections(_pickupPosition!, _destinationPosition!);
       
       if (mounted && result != null) {
@@ -412,97 +565,100 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
 
-          // 3. Bottom Panel (Draggable Sheet)
-          DraggableScrollableSheet(
+          // 3. Bottom Panel (Draggable Sheet) or Estimate Sheet
+          if (_isSearchingForDriver)
+             _buildSearchingSheet(), // NEW searching UI
+
+          if (!_isSearchingForDriver && _estimateData != null)
+             _buildEstimateSheet(),
+          
+          if (!_isSearchingForDriver && _estimateData == null)
+            DraggableScrollableSheet(
             initialChildSize: 0.4,
             minChildSize: 0.35,
             maxChildSize: 0.85,
             builder: (context, scrollController) {
-              return Container(
-                decoration: BoxDecoration(
-                  color: AppColors.surface, // Dark background
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.2),
-                      blurRadius: 10,
-                      offset: const Offset(0, -5),
-                    ),
-                  ],
-                ),
-                child: SingleChildScrollView(
-                  controller: scrollController,
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // Drag Handle
-                      Center(
-                        child: Container(
-                          width: 40,
-                          height: 4,
-                          margin: const EdgeInsets.only(bottom: 20),
-                          decoration: BoxDecoration(
-                            color: Colors.grey[600],
-                            borderRadius: BorderRadius.circular(2),
+              return Listener(
+                onPointerSignal: (event) {
+                  if (event is PointerScrollEvent) {
+                    // Consume the event to prevent map zoom on web
+                  }
+                },
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.2),
+                        blurRadius: 10,
+                        offset: const Offset(0, -5),
+                      ),
+                    ],
+                  ),
+                  child: SingleChildScrollView(
+                    controller: scrollController,
+                    physics: const BouncingScrollPhysics(),
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 40,
+                            height: 4,
+                            margin: const EdgeInsets.only(bottom: 20),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[600],
+                              borderRadius: BorderRadius.circular(2),
+                            ),
                           ),
                         ),
-                      ),
-                      
-                      // Action Buttons
-                      _buildMainActions(),
-                      
-                      const SizedBox(height: 24),
-                      
-                      // Quick Actions Section
-                      Text(
-                        'Quick Actions',
-                        style: GoogleFonts.poppins(
-                          color: AppColors.textPrimary, // White text
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
+                        _buildMainActions(),
+                        const SizedBox(height: 24),
+                        Text(
+                          'Quick Actions',
+                          style: GoogleFonts.poppins(
+                            color: AppColors.textPrimary,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 12),
-                      _buildQuickActionCards(),
-
-                      const SizedBox(height: 24),
-
-                      // Impact Stats
-                      Text(
-                        'Your Impact 🌍',
-                        style: GoogleFonts.poppins(
-                          color: AppColors.primary, // Green text
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
+                        const SizedBox(height: 12),
+                        _buildQuickActionCards(),
+                        const SizedBox(height: 24),
+                        Text(
+                          'Your Impact 🌍',
+                          style: GoogleFonts.poppins(
+                            color: AppColors.primary,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 12),
-                      _buildImpactStats(),
-
-                       const SizedBox(height: 24),
-
-                      // Nearby Drivers
-                      Text(
-                        'Nearby Drivers',
-                        style: GoogleFonts.poppins(
-                           color: AppColors.textPrimary,
-                           fontSize: 16,
-                           fontWeight: FontWeight.w600,
+                        const SizedBox(height: 12),
+                        _buildImpactStats(),
+                        const SizedBox(height: 24),
+                        Text(
+                          'Nearby Drivers',
+                          style: GoogleFonts.poppins(
+                             color: AppColors.textPrimary,
+                             fontSize: 16,
+                             fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 12),
-                      _buildNearbyDrivers(),
-                    ],
+                        const SizedBox(height: 12),
+                        _buildNearbyDrivers(),
+                      ],
+                    ),
                   ),
                 ),
               );
             },
           ),
-        ],
-      ),
-    );
-  }
+      ],
+    ),
+  );
+}
 
   Widget _buildTopBar() {
     return Row(
@@ -674,10 +830,23 @@ class _HomeScreenState extends State<HomeScreen> {
           child: ListView.separated(
             shrinkWrap: true,
             padding: EdgeInsets.zero,
-            itemCount: suggestions.length,
+            itemCount: suggestions.length + (isPickup ? 1 : 0),
             separatorBuilder: (context, index) => Divider(color: Colors.grey.withOpacity(0.1), height: 1),
             itemBuilder: (context, index) {
-              final suggestion = suggestions[index];
+              // Show "Use Current Location" as first item for Pickup
+              if (isPickup && index == 0) {
+                 return ListTile(
+                  leading: const Icon(Icons.my_location, color: Colors.blue, size: 20),
+                  title: Text(
+                    'Use Current Location',
+                    style: GoogleFonts.poppins(color: Colors.blue, fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  dense: true,
+                  onTap: _useCurrentLocationForPickup,
+                );
+              }
+              
+              final suggestion = isPickup ? suggestions[index - 1] : suggestions[index];
               return ListTile(
                 leading: const Icon(Icons.location_on, color: Colors.grey, size: 18),
                 title: Text(
@@ -707,6 +876,210 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildEstimateSheet() {
+      return Align(
+        alignment: Alignment.bottomCenter,
+        child: Listener(
+          onPointerSignal: (event) {
+            if (event is PointerScrollEvent) {
+               // Consume scroll event
+            }
+          },
+          child: Container(
+            margin: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Handle Drag Indicator
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // Title
+              Text(
+                'Ride Estimate',
+                style: GoogleFonts.poppins(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // Fare Row
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                   Row(
+                     children: [
+                       Container(
+                         padding: const EdgeInsets.all(12),
+                         decoration: BoxDecoration(
+                           color: AppColors.primary.withOpacity(0.1),
+                           borderRadius: BorderRadius.circular(12),
+                         ),
+                         child: const Icon(Icons.currency_rupee, color: AppColors.primary),
+                       ),
+                       const SizedBox(width: 12),
+                       Column(
+                         crossAxisAlignment: CrossAxisAlignment.start,
+                         children: [
+                           Text(
+                             'Estimated Fare',
+                             style: GoogleFonts.poppins(
+                               color: AppColors.textSecondary,
+                               fontSize: 12,
+                             ),
+                           ),
+                           Text(
+                             '₹${_estimateData!['fare']}',
+                             style: GoogleFonts.poppins(
+                               color: AppColors.textPrimary,
+                               fontSize: 24,
+                               fontWeight: FontWeight.bold,
+                             ),
+                           ),
+                         ],
+                       ),
+                     ],
+                   ),
+                   
+                   // ETA
+                   Container(
+                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                     decoration: BoxDecoration(
+                       color: AppColors.offWhite,
+                       borderRadius: BorderRadius.circular(20),
+                     ),
+                     child: Row(
+                       children: [
+                         const Icon(Icons.timer_outlined, size: 16, color: Colors.blue),
+                         const SizedBox(width: 4),
+                         Text(
+                           '${_estimateData!['eta_min']} min',
+                           style: GoogleFonts.poppins(
+                             fontWeight: FontWeight.w600,
+                             fontSize: 14,
+                           ),
+                         ),
+                       ],
+                     ),
+                   ),
+                ],
+              ),
+              
+              const SizedBox(height: 16),
+              
+              // CO2 Saved Badge
+               Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Colors.green[50]!, Colors.green[100]!],
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.green[200]!),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.eco, color: AppColors.primary),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Green Choice',
+                            style: GoogleFonts.poppins(
+                              color: AppColors.primaryDark,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
+                          ),
+                          Text(
+                            'You save ${_estimateData!['co2_saved_g']}g of CO2 with this Eco-Ride!',
+                            style: GoogleFonts.poppins(
+                              color: AppColors.primary,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 24),
+
+              // Action Buttons
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () {
+                         setState(() {
+                           _estimateData = null;
+                           _polylines = {};
+                           _markers.removeWhere((m) => m.markerId.value == 'pickup' || m.markerId.value == 'destination');
+                           _pickupController.clear();
+                           _searchController.clear();
+                           _pickupPosition = null;
+                           _destinationPosition = null;
+                         });
+                      },
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        side: const BorderSide(color: Colors.grey),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: Text('Cancel', style: GoogleFonts.poppins(color: Colors.black)),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: _handleRequestRide,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                         elevation: 0,
+                      ),
+                      child: Text('Request Ride', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
   
