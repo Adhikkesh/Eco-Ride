@@ -220,3 +220,49 @@ mark {
     @apply bg-background text-foreground;
   }
 }
+
+/* Google Maps Autocomplete Styles */
+.pac-container {
+  z-index: 9999 !important;
+  background-color: #1e293b !important;
+  border: 1px solid rgba(71, 85, 105, 0.5) !important;
+  border-top: none !important;
+  border-bottom-left-radius: 12px !important;
+  border-bottom-right-radius: 12px !important;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5) !important;
+  font-family: inherit !important;
+  margin-top: 4px !important;
+}
+
+.pac-item {
+  border-top: 1px solid rgba(71, 85, 105, 0.2) !important;
+  padding: 10px 14px !important;
+  cursor: pointer !important;
+  display: flex !important;
+  align-items: center !important;
+  color: #94a3b8 !important;
+}
+
+.pac-item:hover {
+  background-color: rgba(34, 197, 94, 0.1) !important;
+}
+
+.pac-item-query {
+  color: #f8fafc !important;
+  font-size: 14px !important;
+  margin-right: 4px !important;
+}
+
+.pac-icon {
+  filter: invert(1) brightness(2) !important;
+  margin-right: 10px !important;
+}
+
+.pac-matched {
+  color: #22c55e !important;
+  font-weight: 600 !important;
+}
+
+.hdpi .pac-icon {
+  filter: invert(1) brightness(2) !important;
+}
