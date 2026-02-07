@@ -189,6 +189,12 @@ export class SimulationEngine {
       return;
     }
 
+    // Validate required position data
+    if (typeof data.lat !== "number" || typeof data.lng !== "number") {
+      console.log(`  ⚠️  Skipping ${driverId}: missing lat/lng (driver may be initializing)`);
+      return;
+    }
+
     // Create initial position from RTDB data
     const initialPosition: Coordinate = {
       lat: data.lat,
@@ -384,6 +390,7 @@ export class SimulationEngine {
     for (const [driverId, agent] of this.agents) {
       const state = agent.getState();
       const modeIcon = {
+        AWAITING_PAYMENT: "💳",
         IDLE: "🚗",
         PICKUP: "🏃",
         TRIP: "🚀",
