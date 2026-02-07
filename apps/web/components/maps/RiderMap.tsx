@@ -45,6 +45,7 @@ interface DriverMarker extends DriverLocation {
   id: string;
   animatedLat?: number;
   animatedLng?: number;
+  animatedHeading?: number; // For smooth rotation
 }
 
 interface UserStats {
@@ -196,6 +197,23 @@ const mapContainerStyle = {
 const defaultCenter = {
   lat: 11.0168,
   lng: 76.9558,
+};
+
+// Helper function to create rotated car icon SVG
+const createRotatedCarIcon = (
+  heading: number,
+  color: string = "#22c55e",
+  size: number = 45,
+): string => {
+  // Car SVG that points upward (north) by default
+  const carSvg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24">
+      <g transform="rotate(${heading}, 12, 12)">
+        <path fill="${color}" d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/>
+      </g>
+    </svg>
+  `;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(carSvg)}`;
 };
 
 // ---------------------------------------------------------
@@ -602,34 +620,91 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     selectedDestination,
   ]);
 
-  // Animate driver markers
+  // Animate driver markers with smooth position and heading interpolation
+  // Use a ref to store animated values and only update state at reduced rate
+  const animatedDriversRef = useRef<Map<string, { lat: number; lng: number; heading: number }>>(
+    new Map(),
+  );
+  const lastAnimationUpdateRef = useRef<number>(0);
+
   useEffect(() => {
-    const animate = () => {
-      setDrivers((prevDrivers) => {
-        const updatedDrivers = new Map(prevDrivers);
-        let hasChanges = false;
-
-        updatedDrivers.forEach((driver, id) => {
-          const targetLat = driver.lat;
-          const targetLng = driver.lng;
-          const currentLat = driver.animatedLat ?? driver.lat;
-          const currentLng = driver.animatedLng ?? driver.lng;
-
-          const lerp = 0.15;
-          const newLat = currentLat + (targetLat - currentLat) * lerp;
-          const newLng = currentLng + (targetLng - currentLng) * lerp;
-
-          if (
-            Math.abs(newLat - currentLat) > 0.000001 ||
-            Math.abs(newLng - currentLng) > 0.000001
-          ) {
-            updatedDrivers.set(id, { ...driver, animatedLat: newLat, animatedLng: newLng });
-            hasChanges = true;
-          }
-        });
-
-        return hasChanges ? updatedDrivers : prevDrivers;
+    const animate = (timestamp: number) => {
+      // Initialize animated positions from driver state
+      drivers.forEach((driver, id) => {
+        if (!animatedDriversRef.current.has(id)) {
+          animatedDriversRef.current.set(id, {
+            heading: driver.heading,
+            lat: driver.lat,
+            lng: driver.lng,
+          });
+        }
       });
+
+      // Clean up removed drivers
+      animatedDriversRef.current.forEach((_, id) => {
+        if (!drivers.has(id)) {
+          animatedDriversRef.current.delete(id);
+        }
+      });
+
+      // Interpolate positions in ref (no React state update)
+      let hasSignificantChange = false;
+      animatedDriversRef.current.forEach((animated, id) => {
+        const driver = drivers.get(id);
+        if (!driver) return;
+
+        const targetLat = driver.lat;
+        const targetLng = driver.lng;
+        const targetHeading = driver.heading;
+
+        // Smooth position interpolation
+        const posLerp = 0.12;
+        const newLat = animated.lat + (targetLat - animated.lat) * posLerp;
+        const newLng = animated.lng + (targetLng - animated.lng) * posLerp;
+
+        // Smooth heading interpolation (handle wrap-around)
+        let headingDiff = targetHeading - animated.heading;
+        if (headingDiff > 180) headingDiff -= 360;
+        if (headingDiff < -180) headingDiff += 360;
+        const headingLerp = 0.15;
+        let newHeading = animated.heading + headingDiff * headingLerp;
+        if (newHeading < 0) newHeading += 360;
+        if (newHeading >= 360) newHeading -= 360;
+
+        // Check for significant change
+        if (
+          Math.abs(newLat - animated.lat) > 0.00001 ||
+          Math.abs(newLng - animated.lng) > 0.00001 ||
+          Math.abs(newHeading - animated.heading) > 0.5
+        ) {
+          hasSignificantChange = true;
+        }
+
+        animated.lat = newLat;
+        animated.lng = newLng;
+        animated.heading = newHeading;
+      });
+
+      // Only trigger React state update every 100ms (10 FPS) to reduce re-renders
+      const timeSinceLastUpdate = timestamp - lastAnimationUpdateRef.current;
+      if (hasSignificantChange && timeSinceLastUpdate > 100) {
+        lastAnimationUpdateRef.current = timestamp;
+        setDrivers((prev) => {
+          const updated = new Map(prev);
+          animatedDriversRef.current.forEach((animated, id) => {
+            const driver = prev.get(id);
+            if (driver) {
+              updated.set(id, {
+                ...driver,
+                animatedHeading: animated.heading,
+                animatedLat: animated.lat,
+                animatedLng: animated.lng,
+              });
+            }
+          });
+          return updated;
+        });
+      }
 
       animationFrameRef.current = requestAnimationFrame(animate);
     };
@@ -641,7 +716,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, []);
+  }, [drivers]);
 
   const onLoad = useCallback((map: google.maps.Map) => {
     mapRef.current = map;
@@ -1368,15 +1443,15 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                     <Marker
                       position={assignedDriverLocation}
                       icon={{
-                        anchor: new google.maps.Point(22, 22),
+                        anchor: new google.maps.Point(25, 25),
                         scaledSize: new google.maps.Size(50, 50),
-                        url: "/car-icon.svg",
+                        url: createRotatedCarIcon(0, "#3b82f6", 50), // Blue for assigned driver
                       }}
                       title="Your Driver"
                     />
                   )}
 
-                  {/* Other Driver Markers (when not matched) */}
+                  {/* Other Driver Markers (when not matched) - with smooth rotation */}
                   {rideStatus !== "matched" &&
                     driverArray.map((driver) => (
                       <Marker
@@ -1388,7 +1463,11 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                         icon={{
                           anchor: new google.maps.Point(22, 22),
                           scaledSize: new google.maps.Size(45, 45),
-                          url: "/car-icon.svg",
+                          url: createRotatedCarIcon(
+                            driver.animatedHeading ?? driver.heading,
+                            driver.status === "AVAILABLE" ? "#22c55e" : "#f59e0b",
+                            45,
+                          ),
                         }}
                         title={`Driver (${driver.status})`}
                       />
