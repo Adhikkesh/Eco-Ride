@@ -29,6 +29,22 @@
 import { describe, expect, it } from "vitest";
 
 /**
+ * User object interface for authentication validation
+ */
+interface AuthUser {
+  uid: string;
+}
+
+/**
+ * Location object interface for saved locations
+ */
+interface SavedLocation {
+  lat: number;
+  lng: number;
+  name: string;
+}
+
+/**
  * Validation functions for saved locations
  */
 
@@ -37,7 +53,7 @@ import { describe, expect, it } from "vitest";
  * Validates authentication status.
  * @param user - The user object from request
  */
-const validateAuth = (user: any) => {
+const validateAuth = (user: AuthUser | null | undefined) => {
   if (!user) {
     return { message: "Unauthorized", valid: false };
   }
@@ -49,7 +65,7 @@ const validateAuth = (user: any) => {
  * Validates if the location type is supported.
  * @param type - Location type (home, work, favourite)
  */
-const validateLocationType = (type: string) => {
+const validateLocationType = (type: string | undefined) => {
   const validTypes = ["home", "work", "favourite"];
   if (!type || !validTypes.includes(type)) {
     return {
@@ -61,7 +77,8 @@ const validateLocationType = (type: string) => {
 };
 
 // Validate location structure
-const validateLocationFormat = (location: any) => {
+// Using Record<string, unknown> to allow testing invalid inputs
+const validateLocationFormat = (location: Record<string, unknown> | null) => {
   if (location === null) {
     return { valid: true }; // null is valid (for deleting)
   }

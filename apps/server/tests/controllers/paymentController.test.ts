@@ -11,6 +11,14 @@
 import { describe, expect, it } from "vitest";
 
 /**
+ * Payment request body interface
+ */
+interface PaymentRequestBody {
+  rideId?: string;
+  amount?: number;
+}
+
+/**
  * Payment validation functions
  */
 
@@ -19,7 +27,7 @@ import { describe, expect, it } from "vitest";
  * Validates the payment init request body.
  * @param body - Request body containing rideId
  */
-const validatePaymentRequest = (body: any) => {
+const validatePaymentRequest = (body: PaymentRequestBody) => {
   if (!body.rideId) {
     return { message: "Missing rideId", valid: false };
   }
@@ -62,7 +70,7 @@ const formatPaymentMetadata = (rideId: string, riderId: string) => {
 };
 
 // Validate payment confirmation request
-const validateConfirmPayment = (body: any) => {
+const validateConfirmPayment = (body: PaymentRequestBody) => {
   if (!body.rideId) {
     return { message: "Missing rideId", valid: false };
   }
