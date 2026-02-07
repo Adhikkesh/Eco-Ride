@@ -395,7 +395,7 @@ export default function RiderMap({
 
       try {
         const token = await user.getIdToken();
-        const response = await fetch(`${backendUrl}/user/saved-locations`, {
+        const response = await fetch(`${backendUrl}/api/v1/user/saved-locations`, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -488,7 +488,7 @@ export default function RiderMap({
       try {
         console.log("DEBUG: Checking active ride via Backend API...");
         const token = await user.getIdToken();
-        const response = await fetch(`${backendUrl}/ride/active`, {
+        const response = await fetch(`${backendUrl}/api/v1/ride/active`, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -532,7 +532,7 @@ export default function RiderMap({
     if (rideId && auth.currentUser) {
       try {
         const token = await auth.currentUser.getIdToken();
-        await fetch(`${backendUrl}/ride/confirm-payment`, {
+        await fetch(`${backendUrl}/api/v1/ride/confirm-payment`, {
           body: JSON.stringify({
             amount: paymentAmount,
             rideId,
@@ -595,7 +595,7 @@ export default function RiderMap({
           const user = auth?.currentUser;
           if (user) {
             user.getIdToken().then((token) => {
-              fetch(`${backendUrl}/payment/create-intent`, {
+              fetch(`${backendUrl}/api/v1/payment/create-intent`, {
                 body: JSON.stringify({ rideId }),
                 headers: {
                   Authorization: `Bearer ${token}`,
@@ -988,7 +988,7 @@ export default function RiderMap({
 
       const token = await user.getIdToken();
 
-      const response = await fetch(`${backendUrl}/ride/request`, {
+      const response = await fetch(`${backendUrl}/api/v1/ride/request`, {
         body: JSON.stringify({
           dropLat: selectedDestination.lat,
           dropLng: selectedDestination.lng,
@@ -1035,7 +1035,7 @@ export default function RiderMap({
       const user = auth?.currentUser;
       const token = await user?.getIdToken();
 
-      await fetch(`${backendUrl}/ride/cancel`, {
+      await fetch(`${backendUrl}/api/v1/ride/cancel`, {
         body: JSON.stringify({ rideId }),
         headers: {
           Authorization: `Bearer ${token}`,
@@ -1084,7 +1084,7 @@ export default function RiderMap({
     setSavingLocation(true);
     try {
       const token = await user.getIdToken();
-      const response = await fetch(`${backendUrl}/user/saved-locations`, {
+      const response = await fetch(`${backendUrl}/api/v1/user/saved-locations`, {
         body: JSON.stringify({
           location: {
             lat: selectedDestination.lat,
@@ -1151,7 +1151,7 @@ export default function RiderMap({
     setSavingLocation(true);
     try {
       const token = await user.getIdToken();
-      const response = await fetch(`${backendUrl}/user/saved-locations`, {
+      const response = await fetch(`${backendUrl}/api/v1/user/saved-locations`, {
         body: JSON.stringify({
           location: null, // Setting to null clears the location
           type,

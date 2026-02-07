@@ -32,7 +32,7 @@ export const useTripEstimator = () => {
         throw new Error("User not authenticated");
       }
 
-      const response = await fetch(`${backendUrl}/ride/estimate`, {
+      const response = await fetch(`${backendUrl}/api/v1/ride/estimate`, {
         body: JSON.stringify({ drop, isPooled: false, pickup }), // Default to not pooled for estimation base
         headers: {
           Authorization: `Bearer ${token}`,
