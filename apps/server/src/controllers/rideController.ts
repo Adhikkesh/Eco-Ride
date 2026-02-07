@@ -4,16 +4,9 @@ import { FieldValue } from "firebase-admin/firestore";
 import * as geofire from "geofire-common";
 import { db, rtdb } from "../config/firebase.js";
 import { calculateGreenPoints, type VehicleType } from "../utils/greenPoints.js";
+import { type DriverLocation, matchDriver } from "../utils/matchingEngine.js";
 
-interface DriverLocation {
-  lat: number;
-  lng: number;
-  heading: number;
-  status: "AVAILABLE" | "BUSY" | "RESERVED";
-  lastUpdated: number;
-  vehicleType?: string;
-  geohash?: string;
-}
+// Removed local DriverLocation interface in favor of the one from matchingEngine
 
 interface DriverMatch {
   driverId: string;
@@ -35,9 +28,8 @@ export const requestRide = async (req: Request, res: Response) => {
       });
     }
 
-    const center: [number, number] = [pickupLat, pickupLng];
-    const radiusIncrement = 5; // 5km increments
-    const maxRadius = 100; // Maximum search radius to prevent infinite loops
+    const pickupLocation = { lat: pickupLat, lng: pickupLng };
+    const dropLocation = { lat: dropLat, lng: dropLng };
 
     // ---------------------------------------------------------
     // STEP 1: FETCH ALL ONLINE DRIVERS FROM RTDB
@@ -52,103 +44,98 @@ export const requestRide = async (req: Request, res: Response) => {
       });
     }
 
-    // ---------------------------------------------------------
-    // STEP 2: FILTER BY DISTANCE AND STATUS (WITH EXPANDING RADIUS)
-    // ---------------------------------------------------------
-    const matchingDrivers: DriverMatch[] = [];
-    let currentRadius = radiusIncrement;
-
-    console.log("=== RIDE REQUEST DEBUG ===");
-    console.log("Total drivers online:", Object.keys(driversData).length);
-
-    // Keep expanding radius until we find drivers or hit max radius
-    while (matchingDrivers.length === 0 && currentRadius <= maxRadius) {
-      console.log(`Searching within ${currentRadius}km radius...`);
-
-      for (const [driverId, locationData] of Object.entries(driversData)) {
-        const driver = locationData as DriverLocation;
-
-        console.log(
-          `Driver ${driverId}: status=${driver.status}, lat=${driver.lat}, lng=${driver.lng}`,
-        );
-
-        // Only consider AVAILABLE drivers
-        if (driver.status !== "AVAILABLE") {
-          console.log(`  -> Skipping: status is ${driver.status}, not AVAILABLE`);
-          continue;
-        }
-
-        // Calculate distance from pickup location
-        const distanceInKm = geofire.distanceBetween([driver.lat, driver.lng], center);
-        console.log(`  -> Distance: ${distanceInKm.toFixed(2)} km`);
-
-        if (distanceInKm <= currentRadius) {
-          matchingDrivers.push({
-            distance: distanceInKm,
-            driverId,
-            lat: driver.lat,
-            lng: driver.lng,
-            status: driver.status,
-          });
-          console.log(`  -> ADDED to matching drivers`);
-        } else {
-          console.log(`  -> Skipping: outside ${currentRadius}km radius`);
-        }
-      }
-
-      if (matchingDrivers.length === 0) {
-        console.log(`No drivers found within ${currentRadius}km, expanding radius...`);
-        currentRadius += radiusIncrement;
-      }
+    // Convert object to Map for the matching engine
+    const driversMap = new Map<string, DriverLocation>();
+    for (const [key, value] of Object.entries(driversData)) {
+      driversMap.set(key, value as DriverLocation);
     }
 
-    // Sort by distance (nearest first)
-    matchingDrivers.sort((a, b) => a.distance - b.distance);
+    // ---------------------------------------------------------
+    // STEP 2: EXECUTE INTELLIGENT MATCHING PIPELINE
+    // ---------------------------------------------------------
+    console.log(`Starting matching for rider ${riderId}`);
 
-    console.log(`Final search radius: ${currentRadius}km`);
-    console.log("Matching drivers count:", matchingDrivers.length);
+    const matchResult = matchDriver(driversMap, {
+      destination: dropLocation,
+      origin: pickupLocation,
+    });
 
-    if (matchingDrivers.length === 0) {
+    console.log("Matching result:", matchResult.message);
+    console.log("Candidates per phase:", matchResult.candidatesPerPhase);
+
+    if (!matchResult.driver) {
       return res.status(404).json({
-        message: `No available drivers found within ${maxRadius}km of your location`,
+        debug: {
+          candidatesPerPhase: matchResult.candidatesPerPhase,
+        },
+        message: matchResult.message || "No suitable drivers found",
         success: false,
       });
     }
 
+    const assignedDriverCandidate = matchResult.driver;
+    const isPooledRide = assignedDriverCandidate.isPooled ?? false;
+
     // ---------------------------------------------------------
-    // STEP 3: RESERVE THE NEAREST DRIVER (Direct Update)
+    // STEP 3: RESERVE OR JOIN THE SELECTED DRIVER
     // ---------------------------------------------------------
-    // Note: For production, consider using transactions for race condition handling
-    let assignedDriver: DriverMatch | null = null;
+    // For pooled rides, we update passenger count instead of changing status
+    let successfulReservation = false;
 
-    for (const driver of matchingDrivers) {
-      console.log(`Attempting to reserve driver: ${driver.driverId}`);
-      const driverRef = rtdb.ref(`drivers-online/${driver.driverId}`);
+    console.log(
+      `Attempting to ${isPooledRide ? "join pooled ride with" : "reserve"} driver: ${assignedDriverCandidate.driverId}`,
+    );
+    const driverRef = rtdb.ref(`drivers-online/${assignedDriverCandidate.driverId}`);
 
-      try {
-        // Re-check current status before updating
-        const snapshot = await driverRef.once("value");
-        const currentData = snapshot.val() as DriverLocation | null;
+    try {
+      const snapshot = await driverRef.once("value");
+      const currentData = snapshot.val() as DriverLocation | null;
 
-        console.log(`Current data for ${driver.driverId}:`, currentData);
+      if (isPooledRide) {
+        // Pooled ride: driver should be ON_TRIP with capacity
+        if (currentData && currentData.status === "ON_TRIP") {
+          const currentPassengers = currentData.currentPassengers ?? 1;
+          const maxPassengers = currentData.maxPassengers ?? 4;
 
-        if (currentData && currentData.status === "AVAILABLE") {
-          // Update status to RESERVED
-          await driverRef.update({ status: "RESERVED" });
-          assignedDriver = driver;
-          console.log(`Successfully reserved driver: ${driver.driverId}`);
-          break;
-        } else {
-          console.log(`Driver ${driver.driverId} not available, status: ${currentData?.status}`);
+          if (currentPassengers < maxPassengers) {
+            // Add new passenger to pooled ride
+            await driverRef.update({
+              currentPassengers: currentPassengers + 1,
+            });
+            successfulReservation = true;
+            console.log(
+              `Successfully joined pooled ride: ${assignedDriverCandidate.driverId} (passengers: ${currentPassengers + 1})`,
+            );
+          } else {
+            console.log(`Driver ${assignedDriverCandidate.driverId} at capacity`);
+          }
         }
-      } catch (err) {
-        console.error(`Error reserving driver ${driver.driverId}:`, err);
+      } else {
+        // Fresh ride: driver should be AVAILABLE
+        if (currentData && currentData.status === "AVAILABLE") {
+          // Update status to ON_TRIP (not RESERVED, since we're starting the trip flow)
+          await driverRef.update({
+            currentPassengers: 1,
+            destination: { lat: dropLat, lng: dropLng },
+            status: "ON_TRIP",
+          });
+          successfulReservation = true;
+          console.log(`Successfully reserved driver: ${assignedDriverCandidate.driverId}`);
+        } else {
+          console.log(
+            `Driver ${assignedDriverCandidate.driverId} no longer available, status: ${currentData?.status}`,
+          );
+        }
       }
+    } catch (err) {
+      console.error(`Error reserving driver ${assignedDriverCandidate.driverId}:`, err);
     }
 
-    if (!assignedDriver) {
+    if (!successfulReservation) {
       return res.status(409).json({
-        message: "All nearby drivers are currently busy. Please try again.",
+        message: isPooledRide
+          ? "The pooled ride is no longer available. Please try again."
+          : "The matched driver became unavailable. Please try again.",
         success: false,
       });
     }
@@ -156,10 +143,9 @@ export const requestRide = async (req: Request, res: Response) => {
     // ---------------------------------------------------------
     // STEP 4: CREATE RIDE DOCUMENT IN FIRESTORE
     // ---------------------------------------------------------
-    // Fetch driver name from Firestore BEFORE creating the ride
     let driverName = "Unknown Driver";
     try {
-      const userDoc = await db.collection("users").doc(assignedDriver.driverId).get();
+      const userDoc = await db.collection("users").doc(assignedDriverCandidate.driverId).get();
       if (userDoc.exists) {
         driverName = userDoc.data()?.name || "Unknown Driver";
       }
@@ -169,12 +155,20 @@ export const requestRide = async (req: Request, res: Response) => {
 
     const rideData = {
       createdAt: FieldValue.serverTimestamp(),
-      driverId: assignedDriver.driverId,
+      driverId: assignedDriverCandidate.driverId,
       driverName,
       drop: { lat: dropLat, lng: dropLng },
       fare: fare || null,
+      isPooled: isPooledRide,
       matchedAt: FieldValue.serverTimestamp(),
-      otp: Math.floor(1000 + Math.random() * 9000).toString(), // Generate 4-digit OTP
+      matchingMetadata: {
+        cost: assignedDriverCandidate.cost,
+        detourMinutes: assignedDriverCandidate.detourMinutes,
+        isPooled: isPooledRide,
+        phase: matchResult.phase,
+        pickUpDist: assignedDriverCandidate.distance,
+      },
+      otp: Math.floor(1000 + Math.random() * 9000).toString(),
       pickup: { lat: pickupLat, lng: pickupLng },
       riderId,
       status: "MATCHED",
@@ -183,39 +177,165 @@ export const requestRide = async (req: Request, res: Response) => {
     const rideRef = await db.collection("rides").add(rideData);
 
     // ---------------------------------------------------------
-    // STEP 4.1: WRITE RIDE ASSIGNMENT TO RTDB FOR DRIVER
+    // STEP 4.1: WRITE/UPDATE RIDE ASSIGNMENT TO RTDB FOR DRIVER
     // ---------------------------------------------------------
-    // This allows the driver to listen in real-time for assigned rides
-    const assignedRideData = {
-      drop: { lat: dropLat, lng: dropLng },
-      pickup: { lat: pickupLat, lng: pickupLng },
-      rideId: rideRef.id,
-      riderId,
-      timestamp: Date.now(),
-    };
+    // ---------------------------------------------------------
+    // STEP 4.1: WRITE/UPDATE RIDE ASSIGNMENT TO RTDB FOR DRIVER
+    // ---------------------------------------------------------
 
-    await rtdb.ref(`rides-assigned/${assignedDriver.driverId}`).set(assignedRideData);
-    console.log(`Ride assignment published to RTDB for driver: ${assignedDriver.driverId}`);
+    // Import optimization utility (ensure this import exists at top of file)
+    // import { optimizeRoute, type RoutePoint } from "../utils/matchingEngine.js";
+
+    let waypoints: any[] = [];
+    let scheduledRiders = [];
+
+    if (isPooledRide) {
+      // For pooled rides, get existing assignments and optimize
+      const existingAssignment = await rtdb
+        .ref(`rides-assigned/${assignedDriverCandidate.driverId}`)
+        .once("value");
+      const existingData = existingAssignment.val();
+
+      let pooledRiders = [];
+      if (existingData) {
+        if (Array.isArray(existingData.riders)) {
+          pooledRiders = existingData.riders;
+        } else if (existingData.rideId) {
+          pooledRiders = [
+            {
+              drop: existingData.drop,
+              pickup: existingData.pickup,
+              rideId: existingData.rideId,
+              riderId: existingData.riderId,
+            },
+          ];
+        }
+      }
+
+      // Add new rider
+      pooledRiders.push({
+        drop: { lat: dropLat, lng: dropLng },
+        pickup: { lat: pickupLat, lng: pickupLng },
+        rideId: rideRef.id,
+        riderId,
+      });
+      scheduledRiders = pooledRiders;
+
+      // Construct pending waypoints for optimization
+      const pendingWaypoints: any[] = []; // Using any to avoid import issues for now, strictly RoutePoint
+
+      // 1. Fetch status of ALL riders in the pool to decide if we need to PICKUP or just DROP
+      // We need to know who is already on board.
+      for (const rider of pooledRiders) {
+        // Fetch ride doc status
+        const rDoc = await db.collection("rides").doc(rider.rideId).get();
+        const rStatus = rDoc.exists ? rDoc.data()?.status : "MATCHED";
+
+        if (rStatus === "MATCHED" || rStatus === "SEARCHING") {
+          // Needs pickup
+          pendingWaypoints.push({
+            lat: rider.pickup.lat,
+            lng: rider.pickup.lng,
+            riderId: rider.riderId,
+            type: "PICKUP",
+          });
+        }
+
+        // Everyone needs drop (unless COMPLETED, but they shouldn't be in the active pool then)
+        if (rStatus !== "COMPLETED" && rStatus !== "CANCELLED") {
+          pendingWaypoints.push({
+            lat: rider.drop.lat,
+            lng: rider.drop.lng,
+            riderId: rider.riderId,
+            type: "DROP",
+          });
+        }
+      }
+
+      // Optimize route starting from driver's current location
+      const { optimizeRoute } = await import("../utils/matchingEngine.js");
+      waypoints = optimizeRoute(
+        { lat: assignedDriverCandidate.location.lat, lng: assignedDriverCandidate.location.lng },
+        pendingWaypoints,
+      );
+
+      await rtdb.ref(`rides-assigned/${assignedDriverCandidate.driverId}`).update({
+        isPooled: true,
+        riders: pooledRiders,
+        timestamp: Date.now(),
+        waypoints: waypoints,
+      });
+      console.log(
+        `Updated pooled assignment for driver ${assignedDriverCandidate.driverId} with ${waypoints.length} stops`,
+      );
+    } else {
+      // Fresh ride: simple 2-stop route
+      scheduledRiders = [
+        {
+          drop: { lat: dropLat, lng: dropLng },
+          pickup: { lat: pickupLat, lng: pickupLng },
+          rideId: rideRef.id,
+          riderId,
+        },
+      ];
+
+      waypoints = [
+        { lat: pickupLat, lng: pickupLng, order: 1, riderId, type: "PICKUP" },
+        { lat: dropLat, lng: dropLng, order: 2, riderId, type: "DROP" },
+      ];
+
+      const assignedRideData = {
+        drop: { lat: dropLat, lng: dropLng },
+        isPooled: false,
+        pickup: { lat: pickupLat, lng: pickupLng },
+        rideId: rideRef.id,
+        riderId,
+        riders: scheduledRiders, // consistent structure
+        route: {
+          drop: { lat: dropLat, lng: dropLng },
+          pickup: { lat: pickupLat, lng: pickupLng },
+        },
+        timestamp: Date.now(),
+        waypoints,
+      };
+
+      await rtdb.ref(`rides-assigned/${assignedDriverCandidate.driverId}`).set(assignedRideData);
+      console.log(
+        `Ride assignment published to RTDB for driver: ${assignedDriverCandidate.driverId}`,
+      );
+    }
 
     // ---------------------------------------------------------
     // STEP 5: RETURN SUCCESS RESPONSE
     // ---------------------------------------------------------
 
     // Estimate ETA based on distance (rough estimate: 2 min per km)
-    const etaMinutes = Math.ceil(assignedDriver.distance * 2);
+    // Or use the more accurate calculation from matching engine if available
+    const etaMinutes = Math.ceil(assignedDriverCandidate.distance * 2);
 
     return res.status(200).json({
-      distance: Math.round(assignedDriver.distance * 1000), // in meters
-      driverId: assignedDriver.driverId,
+      distance: Math.round(assignedDriverCandidate.distance * 1000), // in meters
+      driverId: assignedDriverCandidate.driverId,
       driverLocation: {
-        lat: assignedDriver.lat,
-        lng: assignedDriver.lng,
+        heading: assignedDriverCandidate.location.heading,
+        lat: assignedDriverCandidate.location.lat,
+        lng: assignedDriverCandidate.location.lng,
       },
       driverName,
       eta: `${etaMinutes} min`,
-      message: "Driver matched successfully!",
-      otp: rideData.otp, // Return OTP to rider
+      isPooled: isPooledRide,
+      message: isPooledRide ? "Joined pooled ride!" : "Driver matched successfully!",
+      otp: rideData.otp,
       rideId: rideRef.id,
+      // Return route points for frontend display
+      route: {
+        driverLocation: {
+          lat: assignedDriverCandidate.location.lat,
+          lng: assignedDriverCandidate.location.lng,
+        },
+        drop: { lat: dropLat, lng: dropLng },
+        pickup: { lat: pickupLat, lng: pickupLng },
+      },
       success: true,
     });
   } catch (error) {
