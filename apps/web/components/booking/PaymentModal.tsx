@@ -1,7 +1,7 @@
 "use client";
 
 import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
-import loadStripe from "@stripe/stripe-js";
+import { loadStripe } from "@stripe/stripe-js";
 import { useState } from "react";
 import { FaCheckCircle, FaExclamationTriangle, FaLock, FaRedo } from "react-icons/fa";
 
