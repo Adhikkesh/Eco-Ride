@@ -1,0 +1,50 @@
+2026-02-07T15:12:58.395Z - createPaymentIntent called. rideId: m4g4onWlug6Ll0SlSHCT, useGreenPoints: false
+2026-02-07T15:12:59.150Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:12:59.213Z - createPaymentIntent called. rideId: m4g4onWlug6Ll0SlSHCT, useGreenPoints: true
+2026-02-07T15:12:59.296Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:12:59.385Z - Available Points: 287, starting finalFare: 264
+2026-02-07T15:12:59.388Z - Initial discountAmount: 264
+2026-02-07T15:12:59.389Z - Updated finalFare: 0 (was 264) - discount: 264
+2026-02-07T15:12:59.450Z - createPaymentIntent called. rideId: m4g4onWlug6Ll0SlSHCT, useGreenPoints: undefined
+2026-02-07T15:12:59.514Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:12:59.948Z - createPaymentIntent called. rideId: m4g4onWlug6Ll0SlSHCT, useGreenPoints: undefined
+2026-02-07T15:13:00.028Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:13:04.383Z - createPaymentIntent called. rideId: m4g4onWlug6Ll0SlSHCT, useGreenPoints: false
+2026-02-07T15:13:04.477Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:13:05.140Z - createPaymentIntent called. rideId: m4g4onWlug6Ll0SlSHCT, useGreenPoints: true
+2026-02-07T15:13:05.223Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:13:05.302Z - Available Points: 287, starting finalFare: 264
+2026-02-07T15:13:05.304Z - Initial discountAmount: 264
+2026-02-07T15:13:05.307Z - Updated finalFare: 0 (was 264) - discount: 264
+2026-02-07T15:13:05.368Z - createPaymentIntent called. rideId: m4g4onWlug6Ll0SlSHCT, useGreenPoints: undefined
+2026-02-07T15:13:05.448Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:13:06.053Z - createPaymentIntent called. rideId: m4g4onWlug6Ll0SlSHCT, useGreenPoints: undefined
+2026-02-07T15:13:06.121Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:13:09.291Z - createPaymentIntent called. rideId: m4g4onWlug6Ll0SlSHCT, useGreenPoints: false
+2026-02-07T15:13:09.361Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:13:09.969Z - createPaymentIntent called. rideId: m4g4onWlug6Ll0SlSHCT, useGreenPoints: undefined
+2026-02-07T15:13:10.039Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:13:58.771Z - createPaymentIntent called. rideId: s655HQ4D0e90wB7E95fz, useGreenPoints: undefined
+2026-02-07T15:13:58.929Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:14:02.547Z - createPaymentIntent called. rideId: s655HQ4D0e90wB7E95fz, useGreenPoints: true
+2026-02-07T15:14:02.622Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:14:02.728Z - Available Points: 398, starting finalFare: 264
+2026-02-07T15:14:02.730Z - Initial discountAmount: 264
+2026-02-07T15:14:02.732Z - Updated finalFare: 0 (was 264) - discount: 264
+2026-02-07T15:14:02.792Z - createPaymentIntent called. rideId: s655HQ4D0e90wB7E95fz, useGreenPoints: undefined
+2026-02-07T15:14:02.848Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:14:03.608Z - createPaymentIntent called. rideId: s655HQ4D0e90wB7E95fz, useGreenPoints: undefined
+2026-02-07T15:14:03.691Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:14:06.111Z - createPaymentIntent called. rideId: s655HQ4D0e90wB7E95fz, useGreenPoints: false
+2026-02-07T15:14:06.167Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:14:06.774Z - createPaymentIntent called. rideId: s655HQ4D0e90wB7E95fz, useGreenPoints: undefined
+2026-02-07T15:14:06.837Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:14:20.067Z - createPaymentIntent called. rideId: s655HQ4D0e90wB7E95fz, useGreenPoints: true
+2026-02-07T15:14:20.139Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:14:20.204Z - Available Points: 398, starting finalFare: 264
+2026-02-07T15:14:20.206Z - Initial discountAmount: 264
+2026-02-07T15:14:20.207Z - Updated finalFare: 0 (was 264) - discount: 264
+2026-02-07T15:14:20.264Z - createPaymentIntent called. rideId: s655HQ4D0e90wB7E95fz, useGreenPoints: undefined
+2026-02-07T15:14:20.322Z - Initial Fare: 264, finalFare: 264
+2026-02-07T15:14:20.901Z - createPaymentIntent called. rideId: s655HQ4D0e90wB7E95fz, useGreenPoints: undefined
+2026-02-07T15:14:20.997Z - Initial Fare: 264, finalFare: 264

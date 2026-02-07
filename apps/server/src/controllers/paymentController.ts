@@ -11,6 +11,8 @@ import { FieldValue } from "firebase-admin/firestore";
 import Stripe from "stripe";
 import { db, rtdb } from "../config/firebase.js";
 
+console.log("------------------ PAYMENT CONTROLLER LOADED ------------------");
+
 /**
  * Singleton instance of the Stripe client.
  * Initialized lazily when first payment operation is requested.
@@ -49,9 +51,15 @@ const getStripe = () => {
  * @param {string} req.body.rideId - The unique identifier of the ride
  * @returns {Object} JSON response with clientSecret, amount, and success status
  */
+import fs from "node:fs/promises";
+import path from "node:path";
 export const createPaymentIntent = async (req: Request, res: Response) => {
   try {
     const { rideId, useGreenPoints } = req.body;
+
+    console.log(
+      `[PaymentDebug] createPaymentIntent called. rideId: ${rideId}, useGreenPoints: ${useGreenPoints}`,
+    );
 
     if (!rideId) {
       return res.status(400).json({
@@ -72,33 +80,53 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
     }
 
     const rideData = rideDoc.data();
-    const fare = rideData?.fare;
+    const fare = Number(rideData?.fare || 0);
     const riderId = rideData?.riderId;
 
     // Fallback for legacy rides (created before fare was saved)
-    let finalFare = fare || 100;
+    let finalFare = fare > 0 ? fare : 100;
     let discountAmount = 0;
     let pointsUsed = 0;
+    let availablePoints = 0;
+
+    console.log(`[PaymentDebug] Initial Fare: ${fare}, finalFare: ${finalFare}`);
 
     // 2. Calculate Green Points Discount
     if (useGreenPoints && riderId) {
       const userDoc = await db.collection("users").doc(riderId).get();
       const userData = userDoc.data();
-      const availablePoints = userData?.green_points || 0;
+      availablePoints = Number(userData?.green_points || 0);
 
       if (availablePoints > 0) {
+        console.log(
+          `[PaymentDebug] Available Points: ${availablePoints}, starting finalFare: ${finalFare}`,
+        );
         // 1 Point = 1 Rupee
         discountAmount = Math.min(finalFare, availablePoints);
+
+        console.log(`[PaymentDebug] Initial discountAmount: ${discountAmount}`);
 
         // Ensure we don't drop below Stripe minimum (₹50) unless we cover the FULL amount
         const remainingAmount = finalFare - discountAmount;
         if (remainingAmount > 0 && remainingAmount < 50) {
           // Adjust discount to leave exactly ₹50 to pay
           discountAmount = Math.max(0, finalFare - 50);
+          console.log(`[PaymentDebug] Adjusted discountAmount (Stripe min): ${discountAmount}`);
         }
 
         pointsUsed = discountAmount;
-        finalFare = finalFare - discountAmount;
+        const prevFare = finalFare;
+
+        // Explicitly handle full coverage to avoid any floating point issues
+        if (discountAmount >= finalFare) {
+          finalFare = 0;
+        } else {
+          finalFare = finalFare - discountAmount;
+        }
+
+        console.log(
+          `[PaymentDebug] Updated finalFare: ${finalFare} (was ${prevFare}) - discount: ${discountAmount}`,
+        );
       }
     }
 
@@ -157,6 +185,12 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
     return res.status(200).json({
       amount: finalFare,
       clientSecret: paymentIntent.client_secret,
+      debug: {
+        availablePoints,
+        calculatedDiscount: discountAmount,
+        finalCalculatedFare: finalFare,
+        originalFareFromDB: fare,
+      },
       discountAmount,
       pointsUsed,
       success: true,

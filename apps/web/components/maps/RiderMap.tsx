@@ -556,6 +556,13 @@ export default function RiderMap({
           method: "POST",
         });
         const data = await response.json();
+        console.log("[PaymentDebug] Payment Intent Response:", data);
+
+        if (data.debug) {
+          alert(
+            `DEBUG INFO:\nOriginal Fare From DB: ${data.debug.originalFareFromDB}\nAvailable Points: ${data.debug.availablePoints}\nCalculated Discount: ${data.debug.calculatedDiscount}\nFinal Fare: ${data.debug.finalCalculatedFare}`,
+          );
+        }
 
         if (data.success) {
           setClientSecret(data.clientSecret);

@@ -455,6 +455,8 @@ export default function DriverLiveMap({
     [userId, status],
   );
 
+  const [greenPointsRedeemed, setGreenPointsRedeemed] = useState(0);
+
   // Listen for payment confirmation
   useEffect(() => {
     if (!finishedRideId || !rtdb) return;
@@ -464,6 +466,7 @@ export default function DriverLiveMap({
       const data = snapshot.val();
       if (data && data.paymentStatus === "PAID") {
         setReceivedAmount(data.paidAmount || 0);
+        setGreenPointsRedeemed(data.greenPointsRedeemed || 0);
         setShowPaymentPopup(true);
       }
     });
@@ -1291,7 +1294,7 @@ export default function DriverLiveMap({
             <p
               style={{ color: "#ffffff", fontSize: "36px", fontWeight: "bold", margin: "0 0 32px" }}
             >
-              ₹{receivedAmount}
+              ₹{receivedAmount + (greenPointsRedeemed || 0)}
             </p>
 
             <button

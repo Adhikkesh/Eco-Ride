@@ -309,6 +309,7 @@ export default function PaymentModal({
                 },
                 clientSecret,
               }}
+              key={clientSecret}
             >
               <CheckoutForm amount={amount} onSuccess={onSuccess} />
             </Elements>
