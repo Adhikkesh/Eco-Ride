@@ -7,6 +7,7 @@
  */
 
 import type { Request, Response } from "express";
+import { FieldValue } from "firebase-admin/firestore";
 import Stripe from "stripe";
 import { db, rtdb } from "../config/firebase.js";
 
@@ -50,7 +51,7 @@ const getStripe = () => {
  */
 export const createPaymentIntent = async (req: Request, res: Response) => {
   try {
-    const { rideId } = req.body;
+    const { rideId, useGreenPoints } = req.body;
 
     if (!rideId) {
       return res.status(400).json({
@@ -72,9 +73,46 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
 
     const rideData = rideDoc.data();
     const fare = rideData?.fare;
+    const riderId = rideData?.riderId;
 
     // Fallback for legacy rides (created before fare was saved)
     let finalFare = fare || 100;
+    let discountAmount = 0;
+    let pointsUsed = 0;
+
+    // 2. Calculate Green Points Discount
+    if (useGreenPoints && riderId) {
+      const userDoc = await db.collection("users").doc(riderId).get();
+      const userData = userDoc.data();
+      const availablePoints = userData?.green_points || 0;
+
+      if (availablePoints > 0) {
+        // 1 Point = 1 Rupee
+        discountAmount = Math.min(finalFare, availablePoints);
+
+        // Ensure we don't drop below Stripe minimum (₹50) unless we cover the FULL amount
+        const remainingAmount = finalFare - discountAmount;
+        if (remainingAmount > 0 && remainingAmount < 50) {
+          // Adjust discount to leave exactly ₹50 to pay
+          discountAmount = Math.max(0, finalFare - 50);
+        }
+
+        pointsUsed = discountAmount;
+        finalFare = finalFare - discountAmount;
+      }
+    }
+
+    // 3. Handle 100% Discount (No Stripe Payment Needed)
+    if (finalFare === 0) {
+      return res.status(200).json({
+        amount: 0,
+        clientSecret: null,
+        discountAmount,
+        message: "Ride fully covered by Green Points",
+        pointsUsed,
+        success: true,
+      });
+    }
 
     // Stripe India minimum amount is ₹50
     if (finalFare < 50) {
@@ -86,7 +124,7 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
     // Assuming fare is in INR integers (Rupees), convert to paise
     const amountInPaise = Math.round(finalFare * 100);
 
-    // 2. Create Payment Intent
+    // 4. Create Payment Intent
     const stripe = getStripe();
     if (!stripe) {
       console.error("❌ Stripe is not initialized. Missing API Key.");
@@ -97,7 +135,9 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
       });
     }
 
-    console.log(`Creating payment intent for ride: ${rideId}, amount: ${finalFare}`);
+    console.log(
+      `Creating payment intent for ride: ${rideId}, amount: ${finalFare}, points used: ${pointsUsed}`,
+    );
 
     const paymentIntent = await stripe.paymentIntents.create({
       amount: amountInPaise,
@@ -106,8 +146,9 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
       },
       currency: "inr",
       metadata: {
+        pointsUsed: pointsUsed.toString(),
         rideId,
-        riderId: rideData?.riderId || "unknown",
+        riderId: riderId || "unknown",
       },
     });
 
@@ -116,6 +157,8 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
     return res.status(200).json({
       amount: finalFare,
       clientSecret: paymentIntent.client_secret,
+      discountAmount,
+      pointsUsed,
       success: true,
     });
   } catch (error) {
@@ -140,7 +183,7 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
  */
 export const confirmPayment = async (req: Request, res: Response) => {
   try {
-    const { rideId, amount } = req.body;
+    const { rideId, amount, pointsUsed } = req.body;
 
     if (!rideId) {
       return res.status(400).json({
@@ -149,19 +192,41 @@ export const confirmPayment = async (req: Request, res: Response) => {
       });
     }
 
-    console.log(`Confirming payment for ride: ${rideId}, amount: ${amount}`);
+    console.log(
+      `Confirming payment for ride: ${rideId}, amount: ${amount}, points used: ${pointsUsed}`,
+    );
+
+    const updates: any = {
+      paidAmount: amount,
+      paymentStatus: "PAID",
+    };
+
+    if (pointsUsed) {
+      updates.greenPointsRedeemed = pointsUsed;
+    }
 
     // Update RTDB to notify driver
-    await rtdb.ref(`rides/${rideId}`).update({
-      paidAmount: amount,
-      paymentStatus: "PAID",
-    });
+    await rtdb.ref(`rides/${rideId}`).update(updates);
 
-    // Update Firestore
-    await db.collection("rides").doc(rideId).update({
-      paidAmount: amount,
-      paymentStatus: "PAID",
-    });
+    // Update Firestore Ride Doc
+    const rideRef = db.collection("rides").doc(rideId);
+    await rideRef.update(updates);
+
+    // Deduct points from User if used
+    if (pointsUsed && pointsUsed > 0) {
+      const rideDoc = await rideRef.get();
+      const riderId = rideDoc.data()?.riderId;
+
+      if (riderId) {
+        await db
+          .collection("users")
+          .doc(riderId)
+          .update({
+            green_points: FieldValue.increment(-pointsUsed),
+          });
+        console.log(`Deducted ${pointsUsed} green points from user ${riderId}`);
+      }
+    }
 
     return res.status(200).json({
       message: "Payment confirmed",
