@@ -36,15 +36,6 @@ interface AuthUser {
 }
 
 /**
- * Location object interface for saved locations
- */
-interface SavedLocation {
-  lat: number;
-  lng: number;
-  name: string;
-}
-
-/**
  * Validation functions for saved locations
  */
 
@@ -162,7 +153,7 @@ describe("Saved Locations Controller - Validation Logic", () => {
     });
 
     it("should reject undefined type", () => {
-      const result = validateLocationType(undefined as any);
+      const result = validateLocationType(undefined as unknown as string);
       expect(result.valid).toBe(false);
     });
 

@@ -41,7 +41,13 @@ import { describe, expect, it } from "vitest";
  * Checks for existence of riderId and all coordinate fields.
  * @param body - The request body
  */
-const validateRideRequest = (body: any) => {
+const validateRideRequest = (body: {
+  riderId?: string;
+  pickupLat?: number;
+  pickupLng?: number;
+  dropLat?: number;
+  dropLng?: number;
+}) => {
   const { riderId, pickupLat, pickupLng, dropLat, dropLng } = body;
 
   if (!riderId || !pickupLat || !pickupLng || !dropLat || !dropLng) {
@@ -55,7 +61,7 @@ const validateRideRequest = (body: any) => {
 };
 
 // Validate rideId for operations
-const validateRideId = (body: any) => {
+const validateRideId = (body: { rideId?: string }) => {
   if (!body.rideId) {
     return { message: "Missing rideId", valid: false };
   }
@@ -63,7 +69,7 @@ const validateRideId = (body: any) => {
 };
 
 // Validate OTP
-const validateOTP = (body: any) => {
+const validateOTP = (body: { otp?: string }) => {
   if (!body.otp) {
     return { message: "Missing OTP", valid: false };
   }
@@ -91,18 +97,24 @@ const calculateETA = (distanceKm: number) => {
   return Math.ceil(distanceKm * 2);
 };
 
+interface Driver {
+  id: string;
+  status: string;
+  distance?: number;
+}
+
 // Filter available drivers
-const filterAvailableDrivers = (drivers: any[]) => {
+const filterAvailableDrivers = (drivers: Driver[]) => {
   return drivers.filter((d) => d.status === "AVAILABLE");
 };
 
 // Sort drivers by distance
-const sortDriversByDistance = (drivers: any[]) => {
+const sortDriversByDistance = (drivers: Required<Driver>[]) => {
   return [...drivers].sort((a, b) => a.distance - b.distance);
 };
 
 // Check if driver can be matched
-const canMatchDriver = (driver: any) => {
+const canMatchDriver = (driver: { status: string }) => {
   return driver.status === "AVAILABLE";
 };
 
@@ -278,9 +290,9 @@ describe("Ride Controller - Business Logic", () => {
   describe("sortDriversByDistance", () => {
     it("should sort drivers by distance ascending", () => {
       const drivers = [
-        { distance: 5, id: "1" },
-        { distance: 2, id: "2" },
-        { distance: 8, id: "3" },
+        { distance: 5, id: "1", status: "AVAILABLE" },
+        { distance: 2, id: "2", status: "AVAILABLE" },
+        { distance: 8, id: "3", status: "AVAILABLE" },
       ];
       const result = sortDriversByDistance(drivers);
       expect(result[0].distance).toBe(2);
@@ -290,8 +302,8 @@ describe("Ride Controller - Business Logic", () => {
 
     it("should handle drivers with same distance", () => {
       const drivers = [
-        { distance: 5, id: "1" },
-        { distance: 5, id: "2" },
+        { distance: 5, id: "1", status: "AVAILABLE" },
+        { distance: 5, id: "2", status: "AVAILABLE" },
       ];
       const result = sortDriversByDistance(drivers);
       expect(result.length).toBe(2);
@@ -299,8 +311,8 @@ describe("Ride Controller - Business Logic", () => {
 
     it("should not modify original array", () => {
       const drivers = [
-        { distance: 5, id: "1" },
-        { distance: 2, id: "2" },
+        { distance: 5, id: "1", status: "AVAILABLE" },
+        { distance: 2, id: "2", status: "AVAILABLE" },
       ];
       sortDriversByDistance(drivers);
       expect(drivers[0].distance).toBe(5);

@@ -12,7 +12,14 @@ import {
 } from "@react-google-maps/api";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { onValue, ref } from "firebase/database";
-import { doc, getDoc, onSnapshot } from "firebase/firestore";
+import {
+  type DocumentData,
+  type DocumentSnapshot,
+  doc,
+  type FirestoreError,
+  getDoc,
+  onSnapshot,
+} from "firebase/firestore";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FaBriefcase,
@@ -288,6 +295,9 @@ export default function RiderMap({
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentAmount, setPaymentAmount] = useState<number>(0);
   const [showPayment, setShowPayment] = useState(false);
+  const [isGreenPointsUsed, setIsGreenPointsUsed] = useState(false);
+  const [discountAmount, setDiscountAmount] = useState(0);
+  const [pointsUsed, setPointsUsed] = useState(0);
 
   // Estimation State
   const { getEstimate, estimate, loading: estimating, clearEstimate } = useTripEstimator();
@@ -357,7 +367,7 @@ export default function RiderMap({
           // Real-time listener for user stats
           unsubscribeSnapshot = onSnapshot(
             doc(db, "users", user.uid),
-            (docSnapshot: any) => {
+            (docSnapshot: DocumentSnapshot<DocumentData>) => {
               if (docSnapshot.exists()) {
                 const data = docSnapshot.data() as UserData;
                 setUserStats((prev) => ({
@@ -367,7 +377,7 @@ export default function RiderMap({
                 }));
               }
             },
-            (error: any) => {
+            (error: FirestoreError) => {
               console.error("Error listening to user stats:", error);
             },
           );
@@ -527,6 +537,38 @@ export default function RiderMap({
     return () => unsubscribe();
   }, []);
 
+  const handleGreenPointsToggle = async (usePoints: boolean) => {
+    setIsGreenPointsUsed(usePoints);
+
+    // Refresh payment intent with new setting
+    if (rideId && auth.currentUser) {
+      try {
+        const token = await auth.currentUser.getIdToken();
+        const response = await fetch(`${backendUrl}/api/v1/payment/create-intent`, {
+          body: JSON.stringify({
+            rideId,
+            useGreenPoints: usePoints,
+          }),
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        });
+        const data = await response.json();
+
+        if (data.success) {
+          setClientSecret(data.clientSecret);
+          setPaymentAmount(data.amount);
+          setDiscountAmount(data.discountAmount || 0);
+          setPointsUsed(data.pointsUsed || 0);
+        }
+      } catch (error) {
+        console.error("Error updating payment intent:", error);
+      }
+    }
+  };
+
   const handlePaymentSuccess = useCallback(async () => {
     // Notify backend about payment success so driver gets the popup
     if (rideId && auth.currentUser) {
@@ -535,6 +577,7 @@ export default function RiderMap({
         await fetch(`${backendUrl}/api/v1/ride/confirm-payment`, {
           body: JSON.stringify({
             amount: paymentAmount,
+            pointsUsed,
             rideId,
           }),
           headers: {
@@ -570,10 +613,13 @@ export default function RiderMap({
     setSearchDestination("");
     setManualPickupMode(false);
     setErrorMessage(null);
+    setIsGreenPointsUsed(false);
+    setDiscountAmount(0);
+    setPointsUsed(0);
 
     // Nice success message could go here or in the modal close
     // alert("Payment Successful! Thank you for riding with EcoRide.");
-  }, [rideId, paymentAmount]);
+  }, [rideId, paymentAmount, pointsUsed]);
 
   // Listen for ride status changes (Start/Complete) via RTDB (Bypasses Firestore permissions)
   useEffect(() => {
@@ -2623,12 +2669,16 @@ export default function RiderMap({
       `}</style>
 
       {/* Payment Modal */}
-      {showPayment && clientSecret && (
+      {showPayment && clientSecret !== undefined && (
         <PaymentModal
-          clientSecret={clientSecret}
           amount={paymentAmount}
-          onSuccess={handlePaymentSuccess}
+          clientSecret={clientSecret}
+          greenPointsBalance={userStats.greenPoints}
+          isPointsUsed={isGreenPointsUsed}
+          onTogglePoints={handleGreenPointsToggle}
+          discountAmount={discountAmount}
           onClose={() => setShowPayment(false)}
+          onSuccess={handlePaymentSuccess}
         />
       )}
     </div>
