@@ -1,6 +1,17 @@
 /**
- * Dark Mode Map Styles (Uber/Ola-like aesthetic)
- * Apply this to Google Maps for a professional night-time look
+ * @fileoverview Google Maps Styling Configuration
+ * @description Provides custom map styles for light and dark themes.
+ *              Creates a professional Uber/Ola-like aesthetic for the ride-sharing app.
+ *              These styles are applied to Google Maps instances throughout the application.
+ * @module lib/mapStyles
+ */
+
+/**
+ * Dark Mode Map Styles
+ * @description Custom styling for Google Maps in dark theme.
+ *              Features a night-time aesthetic with muted colors.
+ *              Suitable for evening/night usage and reduces eye strain.
+ * @type {google.maps.MapTypeStyle[]}
  */
 export const darkMapStyles: google.maps.MapTypeStyle[] = [
   { elementType: "geometry", stylers: [{ color: "#242f3e" }] },
@@ -84,17 +95,89 @@ export const darkMapStyles: google.maps.MapTypeStyle[] = [
 ];
 
 /**
- * Light Mode Map Styles (Clean daytime look)
+ * Light Mode Map Styles
+ * @description Custom styling for Google Maps in light theme.
+ *              Features a clean, bright aesthetic suitable for daytime usage.
+ *              Provides good contrast and readability in sunny conditions.
+ * @type {google.maps.MapTypeStyle[]}
  */
 export const lightMapStyles: google.maps.MapTypeStyle[] = [
+  { elementType: "geometry", stylers: [{ color: "#f5f5f5" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#f5f5f5" }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#616161" }] },
   {
-    elementType: "labels",
-    featureType: "poi",
-    stylers: [{ visibility: "off" }],
+    elementType: "labels.text.fill",
+    featureType: "administrative.locality",
+    stylers: [{ color: "#505050" }],
   },
   {
-    elementType: "labels",
+    elementType: "labels.text.fill",
+    featureType: "poi",
+    stylers: [{ color: "#507fa0" }],
+  },
+  {
+    elementType: "geometry",
+    featureType: "poi.park",
+    stylers: [{ color: "#d5e8d0" }],
+  },
+  {
+    elementType: "labels.text.fill",
+    featureType: "poi.park",
+    stylers: [{ color: "#2d7d32" }],
+  },
+  {
+    elementType: "geometry",
+    featureType: "road",
+    stylers: [{ color: "#ffffff" }],
+  },
+  {
+    elementType: "geometry.stroke",
+    featureType: "road",
+    stylers: [{ color: "#e0e0e0" }],
+  },
+  {
+    elementType: "labels.text.fill",
+    featureType: "road",
+    stylers: [{ color: "#505050" }],
+  },
+  {
+    elementType: "geometry",
+    featureType: "road.highway",
+    stylers: [{ color: "#f9f9f9" }],
+  },
+  {
+    elementType: "geometry.stroke",
+    featureType: "road.highway",
+    stylers: [{ color: "#d0d0d0" }],
+  },
+  {
+    elementType: "labels.text.fill",
+    featureType: "road.highway",
+    stylers: [{ color: "#505050" }],
+  },
+  {
+    elementType: "geometry",
     featureType: "transit",
-    stylers: [{ visibility: "off" }],
+    stylers: [{ color: "#e8e8e8" }],
+  },
+  {
+    elementType: "labels.text.fill",
+    featureType: "transit.station",
+    stylers: [{ color: "#505050" }],
+  },
+  {
+    elementType: "geometry",
+    featureType: "water",
+    stylers: [{ color: "#b3e5fc" }],
+  },
+  {
+    elementType: "labels.text.fill",
+    featureType: "water",
+    stylers: [{ color: "#0288d1" }],
+  },
+  {
+    elementType: "labels.text.stroke",
+    featureType: "water",
+    stylers: [{ color: "#b3e5fc" }],
   },
 ];

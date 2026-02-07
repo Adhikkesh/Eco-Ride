@@ -5,10 +5,11 @@ import { doc, getDoc } from "firebase/firestore";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { FaSignOutAlt, FaUser } from "react-icons/fa";
+import { FaMoon, FaShieldAlt, FaSignOutAlt, FaSun, FaUser } from "react-icons/fa";
 import DriverLiveMap from "@/components/maps/DriverLiveMap";
 import RiderMap from "@/components/maps/RiderMap";
 import { Button } from "@/components/ui/button";
+import { backendUrl } from "@/config";
 import { auth, db } from "@/lib/firebase";
 
 // Prevent static generation - this page requires Firebase auth
@@ -19,6 +20,8 @@ export default function Dashboard(): React.ReactNode {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<"rider" | "driver" | null>(null);
+  const [kycVerified, setKycVerified] = useState(false);
+  const [darkMode, setDarkMode] = useState(true);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -36,6 +39,30 @@ export default function Dashboard(): React.ReactNode {
           if (userDoc.exists()) {
             const userData = userDoc.data();
             setUserRole(userData?.role || "rider");
+            // Check KYC status for drivers (default to false if not present)
+            if (userData?.role === "driver") {
+              try {
+                // Fetch latest status from backend API to ensure accuracy (bypass Firestore cache/sync issues)
+                const token = await currentUser.getIdToken();
+                const statusRes = await fetch(`${backendUrl}/user/driver-status`, {
+                  headers: {
+                    Authorization: `Bearer ${token}`,
+                  },
+                });
+
+                if (statusRes.ok) {
+                  const statusData = await statusRes.json();
+                  console.log("Driver API Status:", statusData);
+                  setKycVerified(statusData.kyc_verified);
+                } else {
+                  console.error("Failed to fetch driver status, defaulting to Firestore");
+                  setKycVerified(userData?.kyc_verified || false);
+                }
+              } catch (err) {
+                console.error("Error fetching driver status from API:", err);
+                setKycVerified(userData?.kyc_verified || false);
+              }
+            }
           } else {
             // User not in Firestore, redirect to onboarding
             router.push("/onboarding");
@@ -129,20 +156,26 @@ export default function Dashboard(): React.ReactNode {
   return (
     <div
       style={{
-        background: "linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)",
+        background: darkMode
+          ? "linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)"
+          : "linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 50%, #f0f9ff 100%)",
         minHeight: "100vh",
+        transition: "background 0.3s ease",
       }}
     >
       {/* Header/Navbar */}
       <header
         style={{
           backdropFilter: "blur(12px)",
-          background: "rgba(30, 41, 59, 0.95)",
-          borderBottom: "1px solid rgba(71, 85, 105, 0.5)",
-          boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
+          background: darkMode ? "rgba(30, 41, 59, 0.95)" : "rgba(255, 255, 255, 0.95)",
+          borderBottom: darkMode
+            ? "1px solid rgba(71, 85, 105, 0.5)"
+            : "1px solid rgba(203, 213, 225, 0.5)",
+          boxShadow: darkMode ? "0 4px 20px rgba(0,0,0,0.3)" : "0 4px 20px rgba(0,0,0,0.1)",
           padding: "12px 24px",
           position: "sticky",
           top: 0,
+          transition: "all 0.3s ease",
           zIndex: 100,
         }}
       >
@@ -157,31 +190,62 @@ export default function Dashboard(): React.ReactNode {
         >
           {/* Logo */}
           <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
-            <div
+            <Image
+              src="/logo.png"
+              alt="EcoRide Logo"
+              width={150}
+              height={50}
               style={{
-                alignItems: "center",
-                background: "linear-gradient(135deg, #22c55e, #10b981)",
-                borderRadius: "12px",
-                boxShadow: "0 4px 12px rgba(34, 197, 94, 0.3)",
-                display: "flex",
-                fontSize: "20px",
+                filter: darkMode
+                  ? "brightness(1.2) contrast(1.2) invert(1) hue-rotate(180deg)"
+                  : "none",
                 height: "44px",
-                justifyContent: "center",
-                width: "44px",
+                mixBlendMode: darkMode ? "screen" : "normal",
+                objectFit: "contain",
+                width: "auto",
               }}
-            >
-              🚗
-            </div>
-            <div style={{ display: "flex", flexDirection: "column" }}>
-              <span style={{ color: "white", fontSize: "20px", fontWeight: "bold" }}>EcoRide</span>
-              <span style={{ color: "#94a3b8", fontSize: "12px" }}>
-                {userRole === "driver" ? "Driver Dashboard" : "Rider Dashboard"}
-              </span>
-            </div>
+              priority
+            />
           </div>
 
           {/* User Info & Logout */}
           <div style={{ alignItems: "center", display: "flex", gap: "16px" }}>
+            {/* Dark Mode Toggle */}
+            <button
+              type="button"
+              onClick={() => setDarkMode(!darkMode)}
+              style={{
+                alignItems: "center",
+                background: darkMode ? "rgba(59, 130, 246, 0.2)" : "rgba(79, 70, 229, 0.1)",
+                border: "1px solid",
+                borderColor: darkMode ? "rgba(59, 130, 246, 0.3)" : "rgba(79, 70, 229, 0.2)",
+                borderRadius: "12px",
+                color: darkMode ? "#60a5fa" : "#4f46e5",
+                cursor: "pointer",
+                display: "flex",
+                height: "40px",
+                justifyContent: "center",
+                transition: "all 0.3s ease",
+                width: "40px",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = darkMode
+                  ? "rgba(59, 130, 246, 0.3)"
+                  : "rgba(79, 70, 229, 0.15)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = darkMode
+                  ? "rgba(59, 130, 246, 0.2)"
+                  : "rgba(79, 70, 229, 0.1)";
+              }}
+            >
+              {darkMode ? (
+                <FaSun style={{ fontSize: "16px" }} />
+              ) : (
+                <FaMoon style={{ fontSize: "16px" }} />
+              )}
+            </button>
+
             {/* Role Badge */}
             <div
               style={{
@@ -199,18 +263,19 @@ export default function Dashboard(): React.ReactNode {
                 textTransform: "capitalize",
               }}
             >
-              {userRole === "driver" ? "🚗 Driver" : "🚶 Rider"}
+              {userRole === "driver" ? "Driver" : "Rider"}
             </div>
 
             {/* Profile */}
             <div
               style={{
                 alignItems: "center",
-                background: "rgba(15, 23, 42, 0.5)",
+                background: darkMode ? "rgba(15, 23, 42, 0.5)" : "rgba(203, 213, 225, 0.2)",
                 borderRadius: "12px",
                 display: "flex",
                 gap: "12px",
                 padding: "8px 16px",
+                transition: "all 0.3s ease",
               }}
             >
               {user?.photoURL ? (
@@ -242,10 +307,25 @@ export default function Dashboard(): React.ReactNode {
                 </div>
               )}
               <div style={{ display: "flex", flexDirection: "column" }}>
-                <span style={{ color: "white", fontSize: "14px", fontWeight: "500" }}>
+                <span
+                  style={{
+                    color: darkMode ? "white" : "#1e293b",
+                    fontSize: "14px",
+                    fontWeight: "500",
+                    transition: "color 0.3s ease",
+                  }}
+                >
                   {user?.displayName || user?.email?.split("@")[0] || "User"}
                 </span>
-                <span style={{ color: "#94a3b8", fontSize: "11px" }}>{user?.email}</span>
+                <span
+                  style={{
+                    color: darkMode ? "#94a3b8" : "#64748b",
+                    fontSize: "11px",
+                    transition: "color 0.3s ease",
+                  }}
+                >
+                  {user?.email}
+                </span>
               </div>
             </div>
 
@@ -256,21 +336,28 @@ export default function Dashboard(): React.ReactNode {
               style={{
                 alignItems: "center",
                 background: "transparent",
-                border: "1px solid rgba(239, 68, 68, 0.3)",
+                border: "1px solid",
+                borderColor: darkMode ? "rgba(239, 68, 68, 0.3)" : "rgba(239, 68, 68, 0.4)",
                 borderRadius: "10px",
-                color: "#f87171",
+                color: darkMode ? "#f87171" : "#dc2626",
                 display: "flex",
                 gap: "8px",
                 padding: "10px 16px",
                 transition: "all 0.2s ease",
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "rgba(239, 68, 68, 0.1)";
-                e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.5)";
+                e.currentTarget.style.background = darkMode
+                  ? "rgba(239, 68, 68, 0.1)"
+                  : "rgba(239, 68, 68, 0.08)";
+                e.currentTarget.style.borderColor = darkMode
+                  ? "rgba(239, 68, 68, 0.5)"
+                  : "rgba(239, 68, 68, 0.6)";
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "transparent";
-                e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.3)";
+                e.currentTarget.style.borderColor = darkMode
+                  ? "rgba(239, 68, 68, 0.3)"
+                  : "rgba(239, 68, 68, 0.4)";
               }}
             >
               <FaSignOutAlt />
@@ -282,8 +369,94 @@ export default function Dashboard(): React.ReactNode {
 
       {/* Main Content - Render based on role */}
       <main style={{ paddingTop: "0" }}>
-        {userRole === "driver" ? <DriverLiveMap embedded /> : <RiderMap embedded />}
+        {userRole === "driver" ? (
+          <DriverLiveMap embedded darkMode={darkMode} />
+        ) : (
+          <RiderMap embedded darkMode={darkMode} />
+        )}
       </main>
+
+      {/* KYC Verification Pending Popup - Only for drivers who are not verified */}
+      {userRole === "driver" && !kycVerified && (
+        <div
+          style={{
+            alignItems: "center",
+            backdropFilter: "blur(8px)",
+            background: "rgba(0, 0, 0, 0.5)",
+            bottom: 0,
+            display: "flex",
+            justifyContent: "center",
+            left: 0,
+            position: "fixed",
+            right: 0,
+            top: 0,
+            zIndex: 90,
+          }}
+        >
+          <div
+            style={{
+              background: darkMode ? "#1e293b" : "white",
+              border: "1px solid",
+              borderColor: darkMode ? "rgba(255, 255, 255, 0.1)" : "rgba(0, 0, 0, 0.1)",
+              borderRadius: "16px",
+              boxShadow:
+                "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)",
+              maxWidth: "400px",
+              padding: "32px",
+              textAlign: "center",
+              width: "90%",
+            }}
+          >
+            <div
+              style={{
+                alignItems: "center",
+                background: "rgba(34, 197, 94, 0.2)",
+                borderRadius: "50%",
+                color: "#22c55e",
+                display: "inline-flex",
+                height: "64px",
+                justifyContent: "center",
+                marginBottom: "24px",
+                width: "64px",
+              }}
+            >
+              <FaShieldAlt style={{ fontSize: "32px" }} />
+            </div>
+            <h2
+              style={{
+                color: darkMode ? "white" : "#1e293b",
+                fontSize: "24px",
+                fontWeight: "bold",
+                marginBottom: "12px",
+              }}
+            >
+              Verification in Progress
+            </h2>
+            <p
+              style={{
+                color: darkMode ? "#94a3b8" : "#64748b",
+                fontSize: "16px",
+                lineHeight: "1.5",
+                marginBottom: "24px",
+              }}
+            >
+              Please Wait We are Verifying your documents
+            </p>
+            <div
+              style={{
+                background: darkMode ? "rgba(15, 23, 42, 0.5)" : "#f1f5f9",
+                borderRadius: "8px",
+                color: darkMode ? "#cbd5e1" : "#475569",
+                fontSize: "14px",
+                padding: "12px",
+              }}
+            >
+              This process usually takes 24-48 hours. You will be notified once your account is
+              approved.
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

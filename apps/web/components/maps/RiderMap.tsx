@@ -1,11 +1,13 @@
 "use client";
 
+import polylineUtil from "@mapbox/polyline";
 import {
   Autocomplete,
   DirectionsRenderer,
   GoogleMap,
   type Libraries,
   Marker,
+  Polyline,
   useJsApiLoader,
 } from "@react-google-maps/api";
 import { onAuthStateChanged, type User } from "firebase/auth";
@@ -13,21 +15,29 @@ import { onValue, ref } from "firebase/database";
 import { doc, getDoc } from "firebase/firestore";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  FaBriefcase,
   FaCar,
   FaCheckCircle,
+  FaClock,
+  FaEdit,
   FaGift,
+  FaHome,
   FaLeaf,
   FaMapMarkerAlt,
   FaRoute,
   FaSearch,
   FaSpinner,
+  FaStar,
   FaSync,
   FaTimes,
+  FaTrash,
   FaUsers,
 } from "react-icons/fa";
 import { backendUrl } from "@/config";
+import { useTripEstimator } from "@/hooks/useTripEstimator";
 import { auth, db, rtdb } from "@/lib/firebase";
-import { darkMapStyles } from "@/lib/mapStyles";
+import { darkMapStyles, lightMapStyles } from "@/lib/mapStyles";
+import PaymentModal from "../booking/PaymentModal";
 
 // ---------------------------------------------------------
 // Types
@@ -71,6 +81,21 @@ interface RideResponse {
   eta?: string;
   otp?: string;
 }
+
+// Saved locations types
+interface SavedLocation {
+  lat: number;
+  lng: number;
+  name: string;
+}
+
+interface SavedLocations {
+  home: SavedLocation | null;
+  work: SavedLocation | null;
+  favourite: SavedLocation | null;
+}
+
+type LocationType = "home" | "work" | "favourite";
 
 type RideStatus = "idle" | "searching" | "matched" | "on_trip" | "error";
 
@@ -221,9 +246,13 @@ const createRotatedCarIcon = (
 // ---------------------------------------------------------
 interface RiderMapProps {
   embedded?: boolean;
+  darkMode?: boolean;
 }
 
-export default function RiderMap({ embedded = false }: RiderMapProps): React.ReactNode {
+export default function RiderMap({
+  embedded = false,
+  darkMode = true,
+}: RiderMapProps): React.ReactNode {
   const { isLoaded } = useJsApiLoader({
     googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
     id: "google-map-script",
@@ -273,6 +302,25 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
   const [pickupSearchText, setPickupSearchText] = useState("");
   const [manualPickupMode, setManualPickupMode] = useState(false);
 
+  // Payment State
+  const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [paymentAmount, setPaymentAmount] = useState<number>(0);
+  const [showPayment, setShowPayment] = useState(false);
+
+  // Estimation State
+  const { getEstimate, estimate, loading: estimating, clearEstimate } = useTripEstimator();
+  const [decodedPolyline, setDecodedPolyline] = useState<{ lat: number; lng: number }[]>([]);
+
+  // Saved Locations State
+  const [savedLocations, setSavedLocations] = useState<SavedLocations>({
+    favourite: null,
+    home: null,
+    work: null,
+  });
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [savingLocation, setSavingLocation] = useState(false);
+  const [editingLocationType, setEditingLocationType] = useState<LocationType | null>(null);
+
   const mapRef = useRef<google.maps.Map | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
@@ -317,8 +365,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
 
   // Fetch user stats from Firestore when user is authenticated
   useEffect(() => {
-    // Import onAuthStateChanged dynamically
-    const { onAuthStateChanged } = require("firebase/auth");
+    // Use the imported onAuthStateChanged
 
     const unsubscribe = onAuthStateChanged(auth, async (user: { uid: string } | null) => {
       if (user && db) {
@@ -335,6 +382,40 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
         } catch (error) {
           console.error("Error fetching user stats:", error);
         }
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Fetch saved locations on mount
+  useEffect(() => {
+    const fetchSavedLocations = async () => {
+      const user = auth?.currentUser;
+      if (!user) return;
+
+      try {
+        const token = await user.getIdToken();
+        const response = await fetch(`${backendUrl}/user/saved-locations`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.savedLocations) {
+            setSavedLocations(data.savedLocations);
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching saved locations:", error);
+      }
+    };
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        fetchSavedLocations();
       }
     });
 
@@ -379,8 +460,10 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                   if (userDoc.exists()) {
                     setAssignedDriverName(userDoc.data()?.name || "Unknown Driver");
                   }
-                } catch (err) {
-                  console.warn("Permission error fetching driver name (expected for rider):", err);
+                } catch (_err) {
+                  console.log(
+                    "Note: Could not fetch driver name details (expected behavior due to privacy rules). Using default.",
+                  );
                   setAssignedDriverName("Unknown Driver");
                 }
               }
@@ -445,6 +528,54 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     return () => unsubscribe();
   }, []);
 
+  const handlePaymentSuccess = useCallback(async () => {
+    // Notify backend about payment success so driver gets the popup
+    if (rideId && auth.currentUser) {
+      try {
+        const token = await auth.currentUser.getIdToken();
+        await fetch(`${backendUrl}/ride/confirm-payment`, {
+          body: JSON.stringify({
+            amount: paymentAmount,
+            rideId,
+          }),
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        });
+        console.log("Payment confirmed with backend");
+      } catch (err) {
+        console.error("Failed to confirm payment:", err);
+      }
+    }
+
+    setShowPayment(false);
+    setClientSecret(null);
+    localStorage.removeItem("currentRideId");
+
+    // Reset all ride state
+    setRideStatus("idle");
+    setRideId(null);
+    setAssignedDriverId(null);
+    setAssignedDriverName(null);
+    setAssignedDriverLocation(null);
+    setDirectionsToPickup(null);
+    setDirectionsToDestination(null);
+    setDirectionsToPickup(null);
+    setDirectionsToDestination(null);
+    setEta(null);
+    setOtp(null);
+    setPickupLocation(null);
+    setSelectedDestination(null);
+    setSearchDestination("");
+    setManualPickupMode(false);
+    setErrorMessage(null);
+
+    // Nice success message could go here or in the modal close
+    // alert("Payment Successful! Thank you for riding with EcoRide.");
+  }, [rideId, paymentAmount]);
+
   // Listen for ride status changes (Start/Complete) via RTDB (Bypasses Firestore permissions)
   useEffect(() => {
     if (!rideId || !rtdb) return;
@@ -457,33 +588,54 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
 
         if (data.status === "IN_PROGRESS") {
           setRideStatus("on_trip");
-        } else if (data.status === "COMPLETED") {
-          // Trip Completed Logic
-          // Trip Completed Logic
-          setRideStatus("idle");
-          setRideId(null);
-          setAssignedDriverId(null);
-          setAssignedDriverName(null);
-          setAssignedDriverLocation(null);
-          setDirectionsToPickup(null);
-          setDirectionsToDestination(null);
-          setDirectionsToPickup(null);
-          setDirectionsToDestination(null);
-          setEta(null);
-          setOtp(null); // Clear OTP
-          setPickupLocation(null);
-          setSelectedDestination(null);
-          setSearchDestination("");
-          setManualPickupMode(false);
-          setErrorMessage(null);
-          localStorage.removeItem("currentRideId");
-          alert("Your trip has been completed! Thank you for riding with EcoRide.");
+        } else if (data.status === "COMPLETED" && data.paymentStatus !== "PAID") {
+          // Trip Completed Logic - Trigger Payment
+          console.log("Trip completed. Initializing payment...");
+
+          // Fetch payment intent
+          const user = auth?.currentUser;
+          if (user) {
+            user.getIdToken().then((token) => {
+              fetch(`${backendUrl}/payment/create-intent`, {
+                body: JSON.stringify({ rideId }),
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  "Content-Type": "application/json",
+                },
+                method: "POST",
+              })
+                .then((res) => res.json())
+                .then((paymentData) => {
+                  if (paymentData.success && paymentData.clientSecret) {
+                    setClientSecret(paymentData.clientSecret);
+                    setPaymentAmount(paymentData.amount);
+                    setShowPayment(true);
+                  } else {
+                    console.error("Failed to create payment intent", {
+                      fullResponse: paymentData,
+                      message: paymentData.message,
+                      success: paymentData.success,
+                    });
+                    alert(
+                      `Error initializing payment: ${paymentData.message || "Unknown error"}. Please contact support.`,
+                    );
+                    handlePaymentSuccess(); // Fallback to close for now if payment fails initialization
+                  }
+                })
+                .catch((err) => {
+                  console.error("Payment Intent Error", err);
+                  // Fallback for demo if backend fails or not configured
+                  alert("Trip completed! (Payment skipped due to error)");
+                  handlePaymentSuccess();
+                });
+            });
+          }
         }
       }
     });
 
     return () => unsubscribe();
-  }, [rideId]);
+  }, [rideId, handlePaymentSuccess]);
 
   // Listen to online drivers
   useEffect(() => {
@@ -558,13 +710,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
 
   // Calculate and update route when driver location or destination changes
   useEffect(() => {
-    if (
-      !isLoaded ||
-      rideStatus !== "matched" ||
-      !assignedDriverLocation ||
-      !currentLocation ||
-      !selectedDestination
-    ) {
+    if (!isLoaded || (!assignedDriverLocation && !currentLocation) || !selectedDestination) {
       return;
     }
 
@@ -574,43 +720,68 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
 
     const pickup = pickupLocation || currentLocation;
 
-    // Calculate route 1: Driver -> Pickup (BLUE route)
-    directionsServiceRef.current.route(
-      {
-        destination: pickup,
-        origin: assignedDriverLocation,
-        travelMode: google.maps.TravelMode.DRIVING,
-      },
-      (result, status) => {
-        if (status === google.maps.DirectionsStatus.OK && result) {
-          setDirectionsToPickup(result);
+    // CASE 1: MATCHED (Driver coming to pickup)
+    if (rideStatus === "matched" && assignedDriverLocation && pickup) {
+      // Calculate route: Driver -> Pickup
+      directionsServiceRef.current.route(
+        {
+          destination: pickup,
+          origin: assignedDriverLocation,
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          if (status === google.maps.DirectionsStatus.OK && result) {
+            setDirectionsToPickup(result);
 
-          // Extract ETA from driver to pickup
-          const leg = result.routes[0]?.legs[0];
-          if (leg?.duration?.text) {
-            setEta(leg.duration.text);
+            // Extract ETA from driver to pickup
+            const leg = result.routes[0]?.legs[0];
+            if (leg?.duration?.text) {
+              setEta(leg.duration.text);
+            }
+          } else {
+            console.error("Directions to pickup failed:", status);
           }
-        } else {
-          console.error("Directions to pickup failed:", status);
-        }
-      },
-    );
+        },
+      );
 
-    // Calculate route 2: Pickup -> Destination (GREEN route)
-    directionsServiceRef.current.route(
-      {
-        destination: { lat: selectedDestination.lat, lng: selectedDestination.lng },
-        origin: pickup,
-        travelMode: google.maps.TravelMode.DRIVING,
-      },
-      (result, status) => {
-        if (status === google.maps.DirectionsStatus.OK && result) {
-          setDirectionsToDestination(result);
-        } else {
-          console.error("Directions to destination failed:", status);
-        }
-      },
-    );
+      // Also prepare route: Pickup -> Destination for display
+      directionsServiceRef.current.route(
+        {
+          destination: { lat: selectedDestination.lat, lng: selectedDestination.lng },
+          origin: pickup,
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          if (status === google.maps.DirectionsStatus.OK && result) {
+            setDirectionsToDestination(result);
+          }
+        },
+      );
+    }
+
+    // CASE 2: ON TRIP (Driving to Destination)
+    else if (rideStatus === "on_trip" && assignedDriverLocation) {
+      // Calculate route: Driver (Current Loc) -> Destination
+      directionsServiceRef.current.route(
+        {
+          destination: { lat: selectedDestination.lat, lng: selectedDestination.lng },
+          origin: assignedDriverLocation, // Driver's current location is the car location
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          if (status === google.maps.DirectionsStatus.OK && result) {
+            setDirectionsToDestination(result);
+            setDirectionsToPickup(null); // Clear pickup route
+
+            // Extract ETA to destination
+            const leg = result.routes[0]?.legs[0];
+            if (leg?.duration?.text) {
+              setEta(leg.duration.text);
+            }
+          }
+        },
+      );
+    }
   }, [
     isLoaded,
     rideStatus,
@@ -802,6 +973,49 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
     }
   }, []);
 
+  // Handle Get Estimate
+  const handleGetEstimate = async () => {
+    if (!currentLocation || !selectedDestination) {
+      setErrorMessage("Please select a destination first");
+      return;
+    }
+
+    const pickup = pickupLocation || currentLocation;
+    if (!pickup) {
+      setErrorMessage("Please set a pickup location");
+      return;
+    }
+
+    const result = await getEstimate(pickup, {
+      lat: selectedDestination.lat,
+      lng: selectedDestination.lng,
+    });
+
+    if (result?.polyline) {
+      try {
+        const decoded = polylineUtil.decode(result.polyline);
+        const path = decoded.map((p) => ({ lat: p[0], lng: p[1] }));
+        setDecodedPolyline(path);
+
+        // Fit bounds
+        if (mapRef.current) {
+          const bounds = new google.maps.LatLngBounds();
+          path.forEach((p) => {
+            bounds.extend(p);
+          });
+          mapRef.current.fitBounds(bounds);
+        }
+      } catch (e) {
+        console.error("Polyline decode error", e);
+      }
+    }
+  };
+
+  const cancelEstimate = () => {
+    clearEstimate();
+    setDecodedPolyline([]);
+  };
+
   const handleFindRide = async () => {
     if (!currentLocation || !selectedDestination) {
       setErrorMessage("Please select a destination first");
@@ -810,6 +1024,8 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
 
     setRideStatus("searching");
     setErrorMessage(null);
+    clearEstimate(); // Clear estimate UI when searching starts
+    setDecodedPolyline([]);
 
     try {
       // Get auth token
@@ -834,6 +1050,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
         body: JSON.stringify({
           dropLat: selectedDestination.lat,
           dropLng: selectedDestination.lng,
+          fare: estimate?.fare || null,
           pickupLat: pickup.lat,
           pickupLng: pickup.lng,
           riderId: user.uid,
@@ -907,6 +1124,115 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
   const handleViewRewards = () => {
     // TODO: Navigate to rewards page
     alert("Viewing your green rewards...");
+  };
+
+  // Save current destination to a slot
+  const handleSaveLocation = async (type: LocationType) => {
+    if (!selectedDestination) {
+      setErrorMessage("Please select a destination first");
+      return;
+    }
+
+    const user = auth?.currentUser;
+    if (!user) {
+      setErrorMessage("Please log in to save locations");
+      return;
+    }
+
+    setSavingLocation(true);
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch(`${backendUrl}/user/saved-locations`, {
+        body: JSON.stringify({
+          location: {
+            lat: selectedDestination.lat,
+            lng: selectedDestination.lng,
+            name: selectedDestination.name,
+          },
+          type,
+        }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        method: "PUT",
+      });
+
+      if (response.ok) {
+        // Update local state
+        setSavedLocations((prev) => ({
+          ...prev,
+          [type]: {
+            lat: selectedDestination.lat,
+            lng: selectedDestination.lng,
+            name: selectedDestination.name,
+          },
+        }));
+        setShowSaveModal(false);
+      } else {
+        const data = await response.json();
+        setErrorMessage(data.message || "Failed to save location");
+      }
+    } catch (error) {
+      console.error("Error saving location:", error);
+      setErrorMessage("Failed to save location");
+    } finally {
+      setSavingLocation(false);
+    }
+  };
+
+  // Select a saved location as destination
+  const handleSelectSavedLocation = (type: LocationType) => {
+    const location = savedLocations[type];
+    if (!location) return;
+
+    setSelectedDestination({
+      lat: location.lat,
+      lng: location.lng,
+      name: location.name,
+    });
+    setSearchDestination(location.name);
+    setEditingLocationType(null); // Close edit menu
+
+    // Pan map to selected location
+    if (mapRef.current) {
+      mapRef.current.panTo({ lat: location.lat, lng: location.lng });
+      mapRef.current.setZoom(15);
+    }
+  };
+
+  // Clear/delete a saved location
+  const handleClearSavedLocation = async (type: LocationType) => {
+    const user = auth?.currentUser;
+    if (!user) return;
+
+    setSavingLocation(true);
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch(`${backendUrl}/user/saved-locations`, {
+        body: JSON.stringify({
+          location: null, // Setting to null clears the location
+          type,
+        }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        method: "PUT",
+      });
+
+      if (response.ok) {
+        setSavedLocations((prev) => ({
+          ...prev,
+          [type]: null,
+        }));
+        setEditingLocationType(null);
+      }
+    } catch (error) {
+      console.error("Error clearing saved location:", error);
+    } finally {
+      setSavingLocation(false);
+    }
   };
 
   if (!isLoaded) {
@@ -1152,7 +1478,471 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                       <span>Destination: {selectedDestination.name}</span>
                     </div>
                   )}
+
+                  {/* Saved Locations Quick Select */}
+                  <div style={{ marginTop: "16px" }}>
+                    <p style={{ color: "#94a3b8", fontSize: "12px", marginBottom: "8px" }}>
+                      Quick Select:
+                    </p>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                      {/* Home Button */}
+                      <div style={{ position: "relative" }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            savedLocations.home
+                              ? editingLocationType === "home"
+                                ? setEditingLocationType(null)
+                                : setEditingLocationType("home")
+                              : selectedDestination
+                                ? setShowSaveModal(true)
+                                : setErrorMessage("Please search and select a destination first")
+                          }
+                          style={{
+                            alignItems: "center",
+                            background: savedLocations.home
+                              ? "rgba(34, 197, 94, 0.15)"
+                              : "rgba(71, 85, 105, 0.3)",
+                            border: savedLocations.home
+                              ? "1px solid rgba(34, 197, 94, 0.4)"
+                              : "1px solid rgba(71, 85, 105, 0.4)",
+                            borderRadius: "8px",
+                            color: savedLocations.home ? "#4ade80" : "#64748b",
+                            cursor: "pointer",
+                            display: "flex",
+                            fontSize: "13px",
+                            gap: "6px",
+                            padding: "8px 12px",
+                          }}
+                          title={savedLocations.home?.name || "Click to set Home"}
+                        >
+                          <FaHome style={{ fontSize: "14px" }} /> Home
+                        </button>
+                        {/* Edit Menu for Home */}
+                        {editingLocationType === "home" && savedLocations.home && (
+                          <div
+                            style={{
+                              background: "rgba(15, 23, 42, 0.98)",
+                              border: "1px solid rgba(34, 197, 94, 0.3)",
+                              borderRadius: "8px",
+                              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                              left: 0,
+                              minWidth: "140px",
+                              padding: "8px",
+                              position: "absolute",
+                              top: "100%",
+                              zIndex: 10,
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleSelectSavedLocation("home")}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#4ade80",
+                                cursor: "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaMapMarkerAlt /> Use Location
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingLocationType(null);
+                                setShowSaveModal(true);
+                              }}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#60a5fa",
+                                cursor: "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaEdit /> Change
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleClearSavedLocation("home")}
+                              disabled={savingLocation}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#f87171",
+                                cursor: savingLocation ? "not-allowed" : "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaTrash /> Remove
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Work Button */}
+                      <div style={{ position: "relative" }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            savedLocations.work
+                              ? editingLocationType === "work"
+                                ? setEditingLocationType(null)
+                                : setEditingLocationType("work")
+                              : selectedDestination
+                                ? setShowSaveModal(true)
+                                : setErrorMessage("Please search and select a destination first")
+                          }
+                          style={{
+                            alignItems: "center",
+                            background: savedLocations.work
+                              ? "rgba(34, 197, 94, 0.15)"
+                              : "rgba(71, 85, 105, 0.3)",
+                            border: savedLocations.work
+                              ? "1px solid rgba(34, 197, 94, 0.4)"
+                              : "1px solid rgba(71, 85, 105, 0.4)",
+                            borderRadius: "8px",
+                            color: savedLocations.work ? "#4ade80" : "#64748b",
+                            cursor: "pointer",
+                            display: "flex",
+                            fontSize: "13px",
+                            gap: "6px",
+                            padding: "8px 12px",
+                          }}
+                          title={savedLocations.work?.name || "Click to set Work"}
+                        >
+                          <FaBriefcase style={{ fontSize: "14px" }} /> Work
+                        </button>
+                        {/* Edit Menu for Work */}
+                        {editingLocationType === "work" && savedLocations.work && (
+                          <div
+                            style={{
+                              background: "rgba(15, 23, 42, 0.98)",
+                              border: "1px solid rgba(34, 197, 94, 0.3)",
+                              borderRadius: "8px",
+                              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                              left: 0,
+                              minWidth: "140px",
+                              padding: "8px",
+                              position: "absolute",
+                              top: "100%",
+                              zIndex: 10,
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleSelectSavedLocation("work")}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#4ade80",
+                                cursor: "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaMapMarkerAlt /> Use Location
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingLocationType(null);
+                                setShowSaveModal(true);
+                              }}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#60a5fa",
+                                cursor: "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaEdit /> Change
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleClearSavedLocation("work")}
+                              disabled={savingLocation}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#f87171",
+                                cursor: savingLocation ? "not-allowed" : "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaTrash /> Remove
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Favourite Button */}
+                      <div style={{ position: "relative" }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            savedLocations.favourite
+                              ? editingLocationType === "favourite"
+                                ? setEditingLocationType(null)
+                                : setEditingLocationType("favourite")
+                              : selectedDestination
+                                ? setShowSaveModal(true)
+                                : setErrorMessage("Please search and select a destination first")
+                          }
+                          style={{
+                            alignItems: "center",
+                            background: savedLocations.favourite
+                              ? "rgba(34, 197, 94, 0.15)"
+                              : "rgba(71, 85, 105, 0.3)",
+                            border: savedLocations.favourite
+                              ? "1px solid rgba(34, 197, 94, 0.4)"
+                              : "1px solid rgba(71, 85, 105, 0.4)",
+                            borderRadius: "8px",
+                            color: savedLocations.favourite ? "#4ade80" : "#64748b",
+                            cursor: "pointer",
+                            display: "flex",
+                            fontSize: "13px",
+                            gap: "6px",
+                            padding: "8px 12px",
+                          }}
+                          title={savedLocations.favourite?.name || "Click to set Favourite"}
+                        >
+                          <FaStar style={{ fontSize: "14px" }} /> Favourite
+                        </button>
+                        {/* Edit Menu for Favourite */}
+                        {editingLocationType === "favourite" && savedLocations.favourite && (
+                          <div
+                            style={{
+                              background: "rgba(15, 23, 42, 0.98)",
+                              border: "1px solid rgba(34, 197, 94, 0.3)",
+                              borderRadius: "8px",
+                              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+                              left: 0,
+                              minWidth: "140px",
+                              padding: "8px",
+                              position: "absolute",
+                              top: "100%",
+                              zIndex: 10,
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleSelectSavedLocation("favourite")}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#4ade80",
+                                cursor: "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaMapMarkerAlt /> Use Location
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingLocationType(null);
+                                setShowSaveModal(true);
+                              }}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#60a5fa",
+                                cursor: "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaEdit /> Change
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleClearSavedLocation("favourite")}
+                              disabled={savingLocation}
+                              style={{
+                                alignItems: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "#f87171",
+                                cursor: savingLocation ? "not-allowed" : "pointer",
+                                display: "flex",
+                                fontSize: "12px",
+                                gap: "8px",
+                                padding: "8px",
+                                width: "100%",
+                              }}
+                            >
+                              <FaTrash /> Remove
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Save Current Destination Button */}
+                    {selectedDestination && (
+                      <button
+                        type="button"
+                        onClick={() => setShowSaveModal(true)}
+                        style={{
+                          alignItems: "center",
+                          background: "transparent",
+                          border: "1px dashed rgba(34, 197, 94, 0.5)",
+                          borderRadius: "8px",
+                          color: "#4ade80",
+                          cursor: "pointer",
+                          display: "flex",
+                          fontSize: "13px",
+                          gap: "6px",
+                          justifyContent: "center",
+                          marginTop: "8px",
+                          padding: "8px 12px",
+                          width: "100%",
+                        }}
+                      >
+                        + Save this destination
+                      </button>
+                    )}
+                  </div>
                 </div>
+
+                {/* Save Location Modal */}
+                {showSaveModal && (
+                  <div
+                    style={{
+                      background: "rgba(15, 23, 42, 0.95)",
+                      border: "1px solid rgba(34, 197, 94, 0.3)",
+                      borderRadius: "16px",
+                      marginBottom: "16px",
+                      padding: "16px",
+                    }}
+                  >
+                    <h4 style={{ color: "white", fontSize: "14px", margin: "0 0 12px" }}>
+                      Save "{selectedDestination?.name}" as:
+                    </h4>
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      <button
+                        type="button"
+                        onClick={() => handleSaveLocation("home")}
+                        disabled={savingLocation}
+                        style={{
+                          alignItems: "center",
+                          background: "rgba(34, 197, 94, 0.2)",
+                          border: "1px solid rgba(34, 197, 94, 0.5)",
+                          borderRadius: "8px",
+                          color: "#4ade80",
+                          cursor: savingLocation ? "not-allowed" : "pointer",
+                          display: "flex",
+                          flex: 1,
+                          fontSize: "13px",
+                          gap: "6px",
+                          justifyContent: "center",
+                          padding: "10px",
+                        }}
+                      >
+                        <FaHome style={{ fontSize: "14px" }} /> Home
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSaveLocation("work")}
+                        disabled={savingLocation}
+                        style={{
+                          alignItems: "center",
+                          background: "rgba(34, 197, 94, 0.2)",
+                          border: "1px solid rgba(34, 197, 94, 0.5)",
+                          borderRadius: "8px",
+                          color: "#4ade80",
+                          cursor: savingLocation ? "not-allowed" : "pointer",
+                          display: "flex",
+                          flex: 1,
+                          fontSize: "13px",
+                          gap: "6px",
+                          justifyContent: "center",
+                          padding: "10px",
+                        }}
+                      >
+                        <FaBriefcase style={{ fontSize: "14px" }} /> Work
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSaveLocation("favourite")}
+                        disabled={savingLocation}
+                        style={{
+                          alignItems: "center",
+                          background: "rgba(34, 197, 94, 0.2)",
+                          border: "1px solid rgba(34, 197, 94, 0.5)",
+                          borderRadius: "8px",
+                          color: "#4ade80",
+                          cursor: savingLocation ? "not-allowed" : "pointer",
+                          display: "flex",
+                          flex: 1,
+                          fontSize: "13px",
+                          gap: "6px",
+                          justifyContent: "center",
+                          padding: "10px",
+                        }}
+                      >
+                        <FaStar style={{ fontSize: "14px" }} /> Favourite
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowSaveModal(false)}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        color: "#94a3b8",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                        marginTop: "12px",
+                        padding: "4px",
+                        width: "100%",
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
 
                 {/* Pickup Location Section */}
                 <div style={{ marginBottom: "16px" }}>
@@ -1247,38 +2037,119 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                   </div>
                 )}
 
-                <button
-                  type="button"
-                  onClick={handleFindRide}
-                  disabled={!canRequestRide}
-                  style={canRequestRide ? styles.actionButton : styles.actionButtonDisabled}
-                  onMouseEnter={(e) => {
-                    if (canRequestRide) {
-                      e.currentTarget.style.transform = "translateY(-2px)";
-                      e.currentTarget.style.boxShadow = "0 12px 28px rgba(34, 197, 94, 0.4)";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (canRequestRide) {
-                      e.currentTarget.style.transform = "translateY(0)";
-                      e.currentTarget.style.boxShadow = "0 8px 24px rgba(34, 197, 94, 0.3)";
-                    }
-                  }}
-                >
-                  {rideStatus === "searching" ? (
-                    <>
-                      <FaSpinner
-                        style={{ animation: "spin 1s linear infinite", fontSize: "20px" }}
-                      />
-                      Finding Driver...
-                    </>
-                  ) : (
-                    <>
-                      <FaCar style={{ fontSize: "20px" }} />
-                      Find a Ride
-                    </>
-                  )}
-                </button>
+                {/* Estimate Card */}
+                {estimate ? (
+                  <div
+                    style={{
+                      background: "rgba(34, 197, 94, 0.1)",
+                      border: "1px solid rgba(34, 197, 94, 0.3)",
+                      borderRadius: "16px",
+                      marginBottom: "10px",
+                      padding: "16px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        alignItems: "flex-end",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        marginBottom: "12px",
+                      }}
+                    >
+                      <div>
+                        <div style={{ color: "#94a3b8", fontSize: "12px" }}>Total Fare</div>
+                        <div style={{ color: "#22c55e", fontSize: "24px", fontWeight: "bold" }}>
+                          ₹{estimate.fare}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div
+                          style={{
+                            alignItems: "center",
+                            color: "#e2e8f0",
+                            display: "flex",
+                            fontSize: "14px",
+                            gap: "6px",
+                          }}
+                        >
+                          <FaClock size={12} /> {estimate.eta_min} min
+                        </div>
+                        <div style={{ color: "#94a3b8", fontSize: "12px" }}>
+                          {estimate.distance_km} km
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", gap: "12px" }}>
+                      <button
+                        type="button"
+                        onClick={cancelEstimate}
+                        style={{
+                          background: "rgba(239, 68, 68, 0.1)",
+                          border: "1px solid rgba(239, 68, 68, 0.5)",
+                          borderRadius: "12px",
+                          color: "#f87171",
+                          cursor: "pointer",
+                          flex: 1,
+                          fontWeight: 600,
+                          padding: "12px",
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleFindRide}
+                        style={{
+                          background: "linear-gradient(135deg, #22c55e, #10b981)",
+                          border: "none",
+                          borderRadius: "12px",
+                          boxShadow: "0 4px 12px rgba(34, 197, 94, 0.3)",
+                          color: "white",
+                          cursor: "pointer",
+                          flex: 2,
+                          fontWeight: 600,
+                          padding: "12px",
+                        }}
+                      >
+                        Confirm Ride
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleFindRide}
+                    disabled={!canRequestRide}
+                    style={canRequestRide ? styles.actionButton : styles.actionButtonDisabled}
+                    onMouseEnter={(e) => {
+                      if (canRequestRide) {
+                        e.currentTarget.style.transform = "translateY(-2px)";
+                        e.currentTarget.style.boxShadow = "0 12px 28px rgba(34, 197, 94, 0.4)";
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (canRequestRide) {
+                        e.currentTarget.style.transform = "translateY(0)";
+                        e.currentTarget.style.boxShadow = "0 8px 24px rgba(34, 197, 94, 0.3)";
+                      }
+                    }}
+                  >
+                    {rideStatus === "searching" ? (
+                      <>
+                        <FaSpinner
+                          style={{ animation: "spin 1s linear infinite", fontSize: "20px" }}
+                        />
+                        Finding Driver...
+                      </>
+                    ) : (
+                      <>
+                        <FaCar style={{ fontSize: "20px" }} />
+                        Find a Ride
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
             )}
 
@@ -1368,7 +2239,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                     disableDefaultUI: true,
                     draggableCursor: manualPickupMode ? "crosshair" : undefined,
                     gestureHandling: "greedy",
-                    styles: darkMapStyles,
+                    styles: darkMode ? darkMapStyles : lightMapStyles,
                     zoomControl: true,
                   }}
                 >
@@ -1388,7 +2259,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                   )}
 
                   {/* Route Directions - Pickup to Destination (GREEN) */}
-                  {directionsToDestination && (
+                  {directionsToDestination && !decodedPolyline.length && (
                     <DirectionsRenderer
                       directions={directionsToDestination}
                       options={{
@@ -1398,6 +2269,18 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                           strokeWeight: 5,
                         },
                         suppressMarkers: true,
+                      }}
+                    />
+                  )}
+
+                  {/* Estimated Route Polyline (Green) */}
+                  {decodedPolyline.length > 0 && (
+                    <Polyline
+                      path={decodedPolyline}
+                      options={{
+                        strokeColor: "#22c55e",
+                        strokeOpacity: 0.9,
+                        strokeWeight: 6,
                       }}
                     />
                   )}
@@ -1496,7 +2379,7 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                     e.currentTarget.style.transform = "translateY(0)";
                     e.currentTarget.style.borderColor = "rgba(71, 85, 105, 0.5)";
                   }}
-                  onClick={rideStatus === "idle" ? handleFindRide : undefined}
+                  onClick={rideStatus === "idle" ? handleGetEstimate : undefined}
                 >
                   <div style={{ alignItems: "center", display: "flex", gap: "16px" }}>
                     <div
@@ -1510,14 +2393,21 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
                         width: "48px",
                       }}
                     >
-                      <FaCar style={{ color: "#4ade80", fontSize: "20px" }} />
+                      {estimating ? (
+                        <FaSpinner
+                          className="animate-spin"
+                          style={{ color: "#4ade80", fontSize: "20px" }}
+                        />
+                      ) : (
+                        <FaLeaf style={{ color: "#4ade80", fontSize: "20px" }} />
+                      )}
                     </div>
                     <div>
                       <h3 style={{ color: "white", fontSize: "16px", fontWeight: 600, margin: 0 }}>
-                        Find a Ride
+                        Get Price Estimate
                       </h3>
                       <p style={{ color: "#94a3b8", fontSize: "13px", margin: "4px 0 0" }}>
-                        Search for available carpools near you
+                        Check fare and ETA before booking
                       </p>
                     </div>
                   </div>
@@ -1793,6 +2683,16 @@ export default function RiderMap({ embedded = false }: RiderMapProps): React.Rea
           to { transform: rotate(360deg); }
         }
       `}</style>
+
+      {/* Payment Modal */}
+      {showPayment && clientSecret && (
+        <PaymentModal
+          clientSecret={clientSecret}
+          amount={paymentAmount}
+          onSuccess={handlePaymentSuccess}
+          onClose={() => setShowPayment(false)}
+        />
+      )}
     </div>
   );
 }

@@ -12,6 +12,7 @@ import * as geofire from "geofire-common";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FaCar,
+  FaCheckCircle,
   FaClock,
   FaFlagCheckered,
   FaLeaf,
@@ -22,7 +23,7 @@ import {
 } from "react-icons/fa";
 import { backendUrl } from "@/config";
 import { auth, db, rtdb } from "@/lib/firebase";
-import { darkMapStyles } from "@/lib/mapStyles";
+import { darkMapStyles, lightMapStyles } from "@/lib/mapStyles";
 
 interface DriverLocation {
   lat: number;
@@ -189,9 +190,13 @@ type LocationMode = "select" | "gps" | "map" | "ready";
 
 interface DriverLiveMapProps {
   embedded?: boolean;
+  darkMode?: boolean;
 }
 
-export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps): React.ReactNode {
+export default function DriverLiveMap({
+  embedded = false,
+  darkMode = true,
+}: DriverLiveMapProps): React.ReactNode {
   const { isLoaded } = useJsApiLoader({
     googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
     id: "google-map-script",
@@ -214,6 +219,11 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
   const [showOtpModal, setShowOtpModal] = useState(false);
   const [otpInput, setOtpInput] = useState("");
   const [submittingOtp, setSubmittingOtp] = useState(false);
+
+  // Payment Popup State
+  const [finishedRideId, setFinishedRideId] = useState<string | null>(null);
+  const [showPaymentPopup, setShowPaymentPopup] = useState(false);
+  const [receivedAmount, setReceivedAmount] = useState(0);
 
   // Ride assignment state
   const [assignedRide, setAssignedRide] = useState<AssignedRide | null>(null);
@@ -442,6 +452,7 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
         method: "POST",
       });
       if (res.ok) {
+        setFinishedRideId(assignedRide.rideId); // Track for payment
         setRideStatus("COMPLETED");
         setAssignedRide(null);
         setDirectionsToPickup(null);
@@ -550,6 +561,71 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
       return;
     }
 
+    // Clear any existing error
+    setError(null);
+
+    // Request location permission
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude, accuracy, heading } = position.coords;
+        console.log("GPS Location:", latitude, longitude, "Accuracy:", accuracy);
+
+        // Update local state
+        setPosition({ heading: heading ?? 0, lat: latitude, lng: longitude });
+        setLocationMode("ready");
+
+        // Write to Firebase
+        if (rtdb && userId) {
+          const driverRef = ref(rtdb, `drivers-online/${userId}`);
+          const hash = geofire.geohashForLocation([latitude, longitude]);
+          const locationData: DriverLocation = {
+            geohash: hash,
+            heading: heading ?? 0,
+            lastUpdated: Date.now(),
+            lat: latitude,
+            lng: longitude,
+            status: statusRef.current,
+            vehicleType: "CAR",
+          };
+          await set(driverRef, locationData);
+          console.log("✅ Location written to Firebase");
+        }
+      },
+      (error) => {
+        console.error("Error getting location:", error);
+        setError(error.message);
+        setLocationMode("select");
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 10000,
+      },
+    );
+  }, [userId]);
+
+  // Listen for payment confirmation
+  useEffect(() => {
+    if (!finishedRideId || !rtdb) return;
+
+    const rideRef = ref(rtdb, `rides/${finishedRideId}`);
+    const unsubscribe = onValue(rideRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data && data.paymentStatus === "PAID") {
+        setReceivedAmount(data.paidAmount || 0);
+        setShowPaymentPopup(true);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [finishedRideId]);
+
+  const _goOnline = useCallback(async () => {
+    if (!rtdb) {
+      setError("Firebase not initialized");
+      return;
+    }
+
     setIsGettingGPS(true);
     setError(null);
 
@@ -650,7 +726,7 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
 
   // Memoized map options - prevents re-initialization on every render
   // Only cursor needs to change based on mode
-  const mapOptions = useMemo(
+  const _mapOptions = useMemo(
     () => ({
       disableDefaultUI: true,
       draggableCursor: locationMode === "map" || manualLocationMode ? "crosshair" : undefined,
@@ -830,12 +906,16 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
               )}
               <GoogleMap
                 mapContainerStyle={mapContainerStyle}
-                // Use uncontrolled mode - no center/zoom in options to prevent re-initialization
-                // The onLoad callback sets initial center, then user has full control
-                options={mapOptions}
                 onLoad={onLoad}
                 onUnmount={onUnmount}
                 onClick={onMapClick}
+                options={{
+                  disableDefaultUI: true,
+                  draggableCursor: manualLocationMode ? "crosshair" : undefined,
+                  gestureHandling: "greedy",
+                  styles: darkMode ? darkMapStyles : lightMapStyles,
+                  zoomControl: true,
+                }}
               >
                 {/* Selected start location marker (before going online) */}
                 {!isOnline && selectedStartLocation && (
@@ -1587,6 +1667,93 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
                 {submittingOtp ? "Verifying..." : "Start Trip"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Payment Received Popup */}
+      {showPaymentPopup && (
+        <div
+          style={{
+            alignItems: "center",
+            backdropFilter: "blur(8px)",
+            backgroundColor: "rgba(0, 0, 0, 0.8)",
+            bottom: 0,
+            display: "flex",
+            justifyContent: "center",
+            left: 0,
+            position: "fixed",
+            right: 0,
+            top: 0,
+            zIndex: 1100,
+          }}
+        >
+          <div
+            style={{
+              alignItems: "center",
+              background: "rgba(30, 41, 59, 0.95)",
+              border: "1px solid rgba(34, 197, 94, 0.5)",
+              borderRadius: "24px",
+              boxShadow: "0 25px 50px -12px rgba(34, 197, 94, 0.25)",
+              display: "flex",
+              flexDirection: "column",
+              maxWidth: "400px",
+              padding: "40px",
+              textAlign: "center",
+              width: "90%",
+            }}
+          >
+            <div
+              style={{
+                alignItems: "center",
+                background: "rgba(34, 197, 94, 0.2)",
+                borderRadius: "50%",
+                display: "flex",
+                height: "96px",
+                justifyContent: "center",
+                marginBottom: "24px",
+                width: "96px",
+              }}
+            >
+              <FaCheckCircle style={{ color: "#22c55e", fontSize: "48px" }} />
+            </div>
+
+            <h2
+              style={{ color: "white", fontSize: "24px", fontWeight: "bold", margin: "0 0 16px" }}
+            >
+              Payment Received
+            </h2>
+
+            <p style={{ color: "#94a3b8", fontSize: "16px", margin: "0 0 8px" }}>Amount Paid</p>
+
+            <p
+              style={{ color: "#ffffff", fontSize: "36px", fontWeight: "bold", margin: "0 0 32px" }}
+            >
+              ₹{receivedAmount}
+            </p>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowPaymentPopup(false);
+                setFinishedRideId(null);
+              }}
+              style={{
+                background: "linear-gradient(90deg, #22c55e, #16a34a)",
+                border: "none",
+                borderRadius: "16px",
+                boxShadow: "0 10px 25px -5px rgba(34, 197, 94, 0.4)",
+                color: "white",
+                cursor: "pointer",
+                fontSize: "18px",
+                fontWeight: "600",
+                padding: "16px",
+                transition: "transform 0.2s",
+                width: "100%",
+              }}
+            >
+              Okay
+            </button>
           </div>
         </div>
       )}

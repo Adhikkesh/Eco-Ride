@@ -7,6 +7,7 @@ import {
   signInWithEmailAndPassword,
   signInWithPopup,
 } from "firebase/auth";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -16,7 +17,9 @@ import {
   FaGift,
   FaInstagram,
   FaLeaf,
+  FaMoon,
   FaShieldAlt,
+  FaSun,
   FaTwitter,
   FaUsers,
 } from "react-icons/fa";
@@ -38,6 +41,7 @@ export default function Home(): React.ReactNode {
   const [emailFocus, setEmailFocus] = useState(false);
   const [passwordFocus, setPasswordFocus] = useState(false);
   const [submitHover, setSubmitHover] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
 
   // Ref to track if we're in the middle of a signup flow
   const isSigningUp = useRef(false);
@@ -176,10 +180,13 @@ export default function Home(): React.ReactNode {
   return (
     <main
       style={{
-        background: "linear-gradient(135deg, #c8e6c9 0%, #a5d6a7 100%)",
+        background: darkMode
+          ? "linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)"
+          : "linear-gradient(135deg, #c8e6c9 0%, #a5d6a7 100%)",
         minHeight: "100vh",
         overflow: "hidden",
         position: "relative",
+        transition: "background 0.3s ease",
       }}
     >
       <div className="bird bird-1" />
@@ -248,40 +255,43 @@ export default function Home(): React.ReactNode {
         {/* Header */}
         <header
           style={{
-            background: "white",
+            background: darkMode ? "rgba(30, 41, 59, 0.95)" : "white",
             borderRadius: "16px",
-            boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
+            boxShadow: darkMode ? "0 4px 20px rgba(0,0,0,0.3)" : "0 1px 3px rgba(0,0,0,0.1)",
             marginBottom: "48px",
             padding: "16px 32px",
+            transition: "all 0.3s ease",
           }}
         >
           <nav style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
             <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
-              <div
+              <Image
+                src="/logo.png"
+                alt="EcoRide Logo"
+                width={150}
+                height={50}
                 style={{
-                  alignItems: "center",
-                  background: "#2e7d32",
-                  borderRadius: "50%",
-                  display: "flex",
-                  fontSize: "24px",
-                  height: "48px",
-                  justifyContent: "center",
-                  width: "48px",
+                  filter: darkMode
+                    ? "brightness(1.2) contrast(1.2) invert(1) hue-rotate(180deg)"
+                    : "none",
+                  height: "50px",
+                  mixBlendMode: darkMode ? "screen" : "normal",
+                  objectFit: "contain",
+                  width: "auto",
                 }}
-              >
-                🚗
-              </div>
-              <span style={{ color: "#333", fontSize: "24px", fontWeight: "bold" }}>EcoRide</span>
+                priority
+              />
             </div>
 
             <ul
               style={{
                 alignItems: "center",
-                color: "#555",
+                color: darkMode ? "#cbd5e1" : "#555",
                 display: "flex",
                 fontSize: "15px",
                 gap: "32px",
                 listStyle: "none",
+                transition: "color 0.3s ease",
               }}
             >
               <li>Features</li>
@@ -294,21 +304,66 @@ export default function Home(): React.ReactNode {
               <li>Contact</li>
             </ul>
 
-            <button
-              type="button"
-              style={{
-                background: "#4caf50",
-                border: "none",
-                borderRadius: "25px",
-                color: "white",
-                cursor: "pointer",
-                fontSize: "15px",
-                fontWeight: "600",
-                padding: "12px 32px",
-              }}
-            >
-              Get Started
-            </button>
+            <div style={{ alignItems: "center", display: "flex", gap: "16px" }}>
+              {/* Dark Mode Toggle */}
+              <button
+                type="button"
+                onClick={() => setDarkMode(!darkMode)}
+                style={{
+                  alignItems: "center",
+                  background: darkMode ? "rgba(59, 130, 246, 0.2)" : "rgba(79, 70, 229, 0.1)",
+                  border: "1px solid",
+                  borderColor: darkMode ? "rgba(59, 130, 246, 0.3)" : "rgba(79, 70, 229, 0.2)",
+                  borderRadius: "12px",
+                  color: darkMode ? "#60a5fa" : "#4f46e5",
+                  cursor: "pointer",
+                  display: "flex",
+                  height: "44px",
+                  justifyContent: "center",
+                  transition: "all 0.3s ease",
+                  width: "44px",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = darkMode
+                    ? "rgba(59, 130, 246, 0.3)"
+                    : "rgba(79, 70, 229, 0.15)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = darkMode
+                    ? "rgba(59, 130, 246, 0.2)"
+                    : "rgba(79, 70, 229, 0.1)";
+                }}
+              >
+                {darkMode ? (
+                  <FaSun style={{ fontSize: "18px" }} />
+                ) : (
+                  <FaMoon style={{ fontSize: "18px" }} />
+                )}
+              </button>
+
+              <button
+                type="button"
+                style={{
+                  background: "#4caf50",
+                  border: "none",
+                  borderRadius: "25px",
+                  color: "white",
+                  cursor: "pointer",
+                  fontSize: "15px",
+                  fontWeight: "600",
+                  padding: "12px 32px",
+                  transition: "all 0.3s ease",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "#45a049";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "#4caf50";
+                }}
+              >
+                Get Started
+              </button>
+            </div>
           </nav>
         </header>
 
