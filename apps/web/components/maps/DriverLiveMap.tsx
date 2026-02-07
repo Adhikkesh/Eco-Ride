@@ -9,7 +9,7 @@ import {
 } from "@react-google-maps/api";
 import { onDisconnect, onValue, ref, remove, set } from "firebase/database";
 import * as geofire from "geofire-common";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FaCar,
   FaClock,
@@ -161,10 +161,31 @@ const mapContainerStyle = {
   width: "100%",
 };
 
-const defaultCenter = { lat: 11.0168, lng: 76.9558 };
+// No fixed default center - will be set by user choice
+const TAMIL_NADU_CENTER = { lat: 11.1271, lng: 78.6569 }; // Tamil Nadu center as initial view
+
+// Helper function to create rotated car icon SVG
+const createRotatedCarIcon = (
+  heading: number,
+  color: string = "#22c55e",
+  size: number = 50,
+): string => {
+  // Car SVG that points upward (north) by default
+  const carSvg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24">
+      <g transform="rotate(${heading}, 12, 12)">
+        <path fill="${color}" d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/>
+      </g>
+    </svg>
+  `;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(carSvg)}`;
+};
 
 // Use same libraries as RiderMap to avoid loader conflict
 const libraries: Libraries = ["places"];
+
+// Location selection mode before going online
+type LocationMode = "select" | "gps" | "map" | "ready";
 
 interface DriverLiveMapProps {
   embedded?: boolean;
@@ -183,6 +204,11 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
   const [error, setError] = useState<string | null>(null);
   const [sessionTime, setSessionTime] = useState(0);
   const [manualLocationMode, setManualLocationMode] = useState(false);
+
+  // New: Location selection before going online
+  const [locationMode, setLocationMode] = useState<LocationMode>("select");
+  const [selectedStartLocation, setSelectedStartLocation] = useState<Position | null>(null);
+  const [isGettingGPS, setIsGettingGPS] = useState(false);
 
   // OTP State
   const [showOtpModal, setShowOtpModal] = useState(false);
@@ -206,6 +232,41 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
   const userId = auth?.currentUser?.uid || `test-driver-${Date.now()}`;
 
   const [driverName, setDriverName] = useState<string | null>(null);
+
+  // Check if driver is already online in RTDB on mount (handles page refresh)
+  useEffect(() => {
+    const checkExistingSession = async () => {
+      if (!rtdb || !userId) return;
+
+      try {
+        const { get, ref: dbRef } = await import("firebase/database");
+        const driverRef = dbRef(rtdb, `drivers-online/${userId}`);
+        const snapshot = await get(driverRef);
+        const data = snapshot.val();
+
+        if (data?.lat && data?.lng) {
+          console.log("🔄 Restoring driver session from RTDB:", data);
+          // Driver is already online - restore state
+          setPosition({
+            heading: data.heading ?? 0,
+            lat: data.lat,
+            lng: data.lng,
+          });
+          setStatus(data.status || "AVAILABLE");
+          setIsOnline(true);
+          setLocationMode("ready");
+
+          // Set up onDisconnect again
+          const { onDisconnect: onDisconnectFn } = await import("firebase/database");
+          await onDisconnectFn(driverRef).remove();
+        }
+      } catch (error) {
+        console.error("Error checking existing session:", error);
+      }
+    };
+
+    checkExistingSession();
+  }, [userId]);
 
   useEffect(() => {
     const fetchDriverName = async () => {
@@ -239,17 +300,26 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
     };
   }, [isOnline]);
 
-  // Update Firebase immediately when status changes while online
+  // Store current position in ref for status update effect (avoids position in deps)
+  const positionRef = useRef(position);
+  positionRef.current = position;
+
+  // Store current status in ref for listener to compare without re-subscribing
+  const statusRef = useRef(status);
+  statusRef.current = status;
+
+  // Update Firebase ONLY when status changes (position is handled by simulator)
   useEffect(() => {
-    if (isOnline && position && rtdb) {
+    const pos = positionRef.current;
+    if (isOnline && pos && rtdb) {
       const driverRef = ref(rtdb, `drivers-online/${userId}`);
-      const hash = geofire.geohashForLocation([position.lat, position.lng]);
+      const hash = geofire.geohashForLocation([pos.lat, pos.lng]);
       const locationData: DriverLocation = {
         geohash: hash,
-        heading: position.heading,
+        heading: pos.heading,
         lastUpdated: Date.now(),
-        lat: position.lat,
-        lng: position.lng,
+        lat: pos.lat,
+        lng: pos.lng,
         status,
         vehicleType: "CAR",
       };
@@ -257,7 +327,35 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
         console.error("Failed to update status:", err);
       });
     }
-  }, [status, isOnline, position, userId]);
+  }, [status, isOnline, userId]); // Only status changes trigger this
+
+  // Listen for position updates from RTDB (simulator updates the driver's position)
+  useEffect(() => {
+    if (!rtdb || !isOnline) {
+      return;
+    }
+
+    const driverRef = ref(rtdb, `drivers-online/${userId}`);
+
+    const unsubscribe = onValue(driverRef, (snapshot) => {
+      const data = snapshot.val() as DriverLocation | null;
+      if (data?.lat && data?.lng) {
+        // Update position from RTDB (simulator moves the driver)
+        // Don't set the local flag - this is from RTDB, not local
+        setPosition({
+          heading: data.heading ?? 0,
+          lat: data.lat,
+          lng: data.lng,
+        });
+        // Also update status if changed (use ref to avoid re-subscribing)
+        if (data.status && data.status !== statusRef.current) {
+          setStatus(data.status as "AVAILABLE" | "BUSY");
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [isOnline, userId]); // Removed status from dependencies!
 
   // Listen for ride assignments from RTDB
   useEffect(() => {
@@ -357,17 +455,29 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
     }
   };
 
-  // Calculate routes when ride is assigned
+  // Ref to track last ride ID to avoid recalculating directions on every position change
+  const lastRideIdRef = useRef<string | null>(null);
+
+  // Calculate routes when ride is FIRST assigned (not on every position change)
   useEffect(() => {
+    // Only calculate once when a NEW ride is assigned
     if (!isLoaded || !assignedRide || !position) {
       return;
     }
+
+    // Skip if we already calculated for this ride
+    if (lastRideIdRef.current === assignedRide.rideId) {
+      return;
+    }
+
+    lastRideIdRef.current = assignedRide.rideId;
 
     if (!directionsServiceRef.current) {
       directionsServiceRef.current = new google.maps.DirectionsService();
     }
 
     // Calculate route 1: Driver -> Pickup (BLUE route)
+    // Use position at time of assignment, not continuously updated position
     directionsServiceRef.current.route(
       {
         destination: assignedRide.pickup,
@@ -409,17 +519,6 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
 
   const prevPositionRef = useRef<{ lat: number; lng: number } | null>(null);
 
-  const calculateHeading = useCallback((newLat: number, newLng: number): number => {
-    if (!prevPositionRef.current) return 0;
-    const { lat: prevLat, lng: prevLng } = prevPositionRef.current;
-    const dLng = newLng - prevLng;
-    const y = Math.sin(dLng) * Math.cos(newLat);
-    const x =
-      Math.cos(prevLat) * Math.sin(newLat) - Math.sin(prevLat) * Math.cos(newLat) * Math.cos(dLng);
-    const heading = (Math.atan2(y, x) * 180) / Math.PI;
-    return (heading + 360) % 360;
-  }, []);
-
   const writeLocationToFirebase = useCallback(
     async (pos: Position) => {
       if (!rtdb) return;
@@ -444,13 +543,52 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
     [userId, status],
   );
 
-  const goOnline = useCallback(async () => {
-    if (!rtdb) {
-      setError("Firebase not initialized");
+  // Handler: Use GPS location
+  const handleUseGPS = useCallback(async () => {
+    if (!navigator.geolocation) {
+      setError("Geolocation is not supported by your browser");
       return;
     }
-    if (!navigator.geolocation) {
-      setError("Geolocation is not supported");
+
+    setIsGettingGPS(true);
+    setError(null);
+
+    navigator.geolocation.getCurrentPosition(
+      (geoPosition) => {
+        const newPos: Position = {
+          heading: 0,
+          lat: geoPosition.coords.latitude,
+          lng: geoPosition.coords.longitude,
+        };
+        setSelectedStartLocation(newPos);
+        setLocationMode("ready");
+        setIsGettingGPS(false);
+        // Pan map to selected location
+        if (mapRef.current) {
+          mapRef.current.panTo({ lat: newPos.lat, lng: newPos.lng });
+          mapRef.current.setZoom(16);
+        }
+      },
+      (err) => {
+        console.error("GPS error:", err);
+        setError("Could not get GPS location. Please pick a location on the map instead.");
+        setLocationMode("map");
+        setIsGettingGPS(false);
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 },
+    );
+  }, []);
+
+  // Handler: Pick location on map
+  const handlePickOnMap = useCallback(() => {
+    setLocationMode("map");
+    setError(null);
+  }, []);
+
+  // Handler: Confirm location and go online
+  const handleConfirmAndGoOnline = useCallback(async () => {
+    if (!selectedStartLocation || !rtdb) {
+      setError("Please select a starting location first");
       return;
     }
 
@@ -461,28 +599,26 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
       console.error("Failed to setup onDisconnect:", err);
     }
 
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      (geoPosition) => {
-        const newLat = geoPosition.coords.latitude;
-        const newLng = geoPosition.coords.longitude;
-        const heading = calculateHeading(newLat, newLng);
-        const newPos: Position = { heading, lat: newLat, lng: newLng };
-        setPosition(newPos);
-        prevPositionRef.current = { lat: newLat, lng: newLng };
-        writeLocationToFirebase(newPos);
-      },
-      (err) => {
-        console.error("Geolocation error:", err);
-        // Instead of blocking, enable manual location mode
-        setError("Location unavailable. Use 'Set Location on Map' to set your position.");
-        setManualLocationMode(true);
-      },
-      { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 },
-    );
+    // Set initial position from selected location
+    setPosition(selectedStartLocation);
+    prevPositionRef.current = { lat: selectedStartLocation.lat, lng: selectedStartLocation.lng };
+
+    // Write to Firebase
+    await writeLocationToFirebase(selectedStartLocation);
+
+    // NOTE: We do NOT start GPS watching here anymore.
+    // The simulator will handle driver movement.
+    // If real GPS tracking is needed later, it can be enabled as an option.
 
     setIsOnline(true);
     setError(null);
-  }, [userId, calculateHeading, writeLocationToFirebase]);
+  }, [selectedStartLocation, userId, writeLocationToFirebase]);
+
+  // Handler: Reset location selection
+  const handleResetLocation = useCallback(() => {
+    setSelectedStartLocation(null);
+    setLocationMode("select");
+  }, []);
 
   const goOffline = useCallback(async () => {
     if (watchIdRef.current !== null) {
@@ -499,6 +635,9 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
     }
     setIsOnline(false);
     setPosition(null);
+    // Reset location selection for next time
+    setLocationMode("select");
+    setSelectedStartLocation(null);
   }, [userId]);
 
   useEffect(() => {
@@ -509,8 +648,27 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
     };
   }, []);
 
+  // Memoized map options - prevents re-initialization on every render
+  // Only cursor needs to change based on mode
+  const mapOptions = useMemo(
+    () => ({
+      disableDefaultUI: true,
+      draggableCursor: locationMode === "map" || manualLocationMode ? "crosshair" : undefined,
+      gestureHandling: "greedy" as const,
+      styles: darkMapStyles,
+      zoomControl: true,
+      // NO center or zoom here - let onLoad handle initial state
+      // This prevents the map from re-centering on every render
+    }),
+    [locationMode, manualLocationMode],
+  );
+
+  // Stable onLoad - only runs once when map mounts
   const onLoad = useCallback((map: google.maps.Map) => {
     mapRef.current = map;
+    // Set initial center to Tamil Nadu - user will pan/select location
+    map.setCenter(TAMIL_NADU_CENTER);
+    map.setZoom(10);
   }, []);
 
   const onUnmount = useCallback(() => {
@@ -520,22 +678,34 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
   // Handle map click to set location manually
   const onMapClick = useCallback(
     async (e: google.maps.MapMouseEvent) => {
-      if (!manualLocationMode || !isOnline || !e.latLng) return;
+      if (!e.latLng) return;
 
       const lat = e.latLng.lat();
       const lng = e.latLng.lng();
-      const newPos: Position = { heading: position?.heading ?? 0, lat, lng };
 
-      setPosition(newPos);
-      prevPositionRef.current = { lat, lng };
+      // Pre-online location selection (picking start location before going online)
+      if (!isOnline && locationMode === "map") {
+        const newPos: Position = { heading: 0, lat, lng };
+        setSelectedStartLocation(newPos);
+        setLocationMode("ready");
+        // Pan to the selected location
+        if (mapRef.current) {
+          mapRef.current.panTo({ lat, lng });
+          mapRef.current.setZoom(16);
+        }
+        return;
+      }
 
-      // Write to Firebase
-      await writeLocationToFirebase(newPos);
-
-      // Exit manual mode after setting location
-      setManualLocationMode(false);
+      // Online manual location update
+      if (manualLocationMode && isOnline) {
+        const newPos: Position = { heading: position?.heading ?? 0, lat, lng };
+        setPosition(newPos);
+        prevPositionRef.current = { lat, lng };
+        await writeLocationToFirebase(newPos);
+        setManualLocationMode(false);
+      }
     },
-    [manualLocationMode, isOnline, position, writeLocationToFirebase],
+    [manualLocationMode, isOnline, position, writeLocationToFirebase, locationMode],
   );
 
   if (!isLoaded) {
@@ -612,8 +782,31 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
                 position: "relative",
               }}
             >
-              {/* Manual location mode indicator */}
-              {manualLocationMode && (
+              {/* Location selection mode indicator (before going online) */}
+              {!isOnline && locationMode === "map" && (
+                <div
+                  style={{
+                    alignItems: "center",
+                    background: "linear-gradient(90deg, #3b82f6, #2563eb)",
+                    color: "white",
+                    display: "flex",
+                    fontSize: "14px",
+                    fontWeight: 600,
+                    gap: "8px",
+                    justifyContent: "center",
+                    left: 0,
+                    padding: "12px",
+                    position: "absolute",
+                    right: 0,
+                    top: 0,
+                    zIndex: 10,
+                  }}
+                >
+                  <FaMapMarkerAlt /> Click on the map to select your starting location
+                </div>
+              )}
+              {/* Manual location mode indicator (while online) */}
+              {isOnline && manualLocationMode && (
                 <div
                   style={{
                     alignItems: "center",
@@ -632,24 +825,30 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
                     zIndex: 10,
                   }}
                 >
-                  <FaMapMarkerAlt /> Click on the map to set your location
+                  <FaMapMarkerAlt /> Click on the map to update your location
                 </div>
               )}
               <GoogleMap
                 mapContainerStyle={mapContainerStyle}
-                center={defaultCenter}
-                zoom={16}
+                // Use uncontrolled mode - no center/zoom in options to prevent re-initialization
+                // The onLoad callback sets initial center, then user has full control
+                options={mapOptions}
                 onLoad={onLoad}
                 onUnmount={onUnmount}
                 onClick={onMapClick}
-                options={{
-                  disableDefaultUI: true,
-                  draggableCursor: manualLocationMode ? "crosshair" : undefined,
-                  gestureHandling: "greedy",
-                  styles: darkMapStyles,
-                  zoomControl: true,
-                }}
               >
+                {/* Selected start location marker (before going online) */}
+                {!isOnline && selectedStartLocation && (
+                  <Marker
+                    position={{ lat: selectedStartLocation.lat, lng: selectedStartLocation.lng }}
+                    icon={{
+                      anchor: new google.maps.Point(20, 20),
+                      scaledSize: new google.maps.Size(40, 40),
+                      url: createRotatedCarIcon(selectedStartLocation.heading, "#3b82f6", 40),
+                    }}
+                    title="Your starting location"
+                  />
+                )}
                 {/* Route Directions - Driver to Pickup (BLUE) */}
                 {directionsToPickup && (
                   <DirectionsRenderer
@@ -680,14 +879,14 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
                   />
                 )}
 
-                {/* Driver Position Marker */}
+                {/* Driver Position Marker - with heading rotation */}
                 {position && (
                   <Marker
                     position={{ lat: position.lat, lng: position.lng }}
                     icon={{
                       anchor: new google.maps.Point(25, 25),
                       scaledSize: new google.maps.Size(50, 50),
-                      url: "/car-icon.svg",
+                      url: createRotatedCarIcon(position.heading, "#22c55e", 50),
                     }}
                   />
                 )}
@@ -975,6 +1174,185 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
                 </div>
               )}
 
+              {/* Location Selection UI - Show when offline */}
+              {!isOnline && (
+                <div style={{ marginBottom: "24px" }}>
+                  <p style={{ color: "#94a3b8", fontSize: "14px", marginBottom: "12px" }}>
+                    Select your starting location
+                  </p>
+
+                  {/* Location mode: select (initial state) */}
+                  {locationMode === "select" && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      <button
+                        type="button"
+                        onClick={handleUseGPS}
+                        disabled={isGettingGPS}
+                        style={{
+                          alignItems: "center",
+                          background: "linear-gradient(90deg, #3b82f6, #2563eb)",
+                          border: "none",
+                          borderRadius: "12px",
+                          color: "white",
+                          cursor: isGettingGPS ? "wait" : "pointer",
+                          display: "flex",
+                          fontSize: "14px",
+                          fontWeight: 600,
+                          gap: "10px",
+                          justifyContent: "center",
+                          opacity: isGettingGPS ? 0.7 : 1,
+                          padding: "14px 20px",
+                          transition: "all 0.3s ease",
+                          width: "100%",
+                        }}
+                      >
+                        <FaMapMarkerAlt />
+                        {isGettingGPS ? "Getting GPS Location..." : "Use My Current Location"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handlePickOnMap}
+                        style={{
+                          alignItems: "center",
+                          background: "rgba(30, 41, 59, 0.8)",
+                          border: "2px solid rgba(71, 85, 105, 0.5)",
+                          borderRadius: "12px",
+                          color: "#94a3b8",
+                          cursor: "pointer",
+                          display: "flex",
+                          fontSize: "14px",
+                          fontWeight: 600,
+                          gap: "10px",
+                          justifyContent: "center",
+                          padding: "14px 20px",
+                          transition: "all 0.3s ease",
+                          width: "100%",
+                        }}
+                      >
+                        <FaRoute />
+                        Pick Location on Map
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Location mode: map (picking on map) */}
+                  {locationMode === "map" && (
+                    <div
+                      style={{
+                        alignItems: "center",
+                        background: "rgba(59, 130, 246, 0.1)",
+                        border: "1px solid rgba(59, 130, 246, 0.3)",
+                        borderRadius: "12px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "12px",
+                        padding: "16px",
+                      }}
+                    >
+                      <p
+                        style={{
+                          color: "#60a5fa",
+                          fontSize: "14px",
+                          margin: 0,
+                          textAlign: "center",
+                        }}
+                      >
+                        Click anywhere on the map to select your starting location
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleResetLocation}
+                        style={{
+                          background: "transparent",
+                          border: "1px solid rgba(148, 163, 184, 0.3)",
+                          borderRadius: "8px",
+                          color: "#94a3b8",
+                          cursor: "pointer",
+                          fontSize: "13px",
+                          padding: "8px 16px",
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Location mode: ready (location selected) */}
+                  {locationMode === "ready" && selectedStartLocation && (
+                    <div
+                      style={{
+                        background: "rgba(34, 197, 94, 0.1)",
+                        border: "1px solid rgba(34, 197, 94, 0.3)",
+                        borderRadius: "12px",
+                        padding: "16px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          alignItems: "center",
+                          display: "flex",
+                          gap: "12px",
+                          marginBottom: "12px",
+                        }}
+                      >
+                        <div
+                          style={{
+                            alignItems: "center",
+                            background: "#22c55e",
+                            borderRadius: "50%",
+                            display: "flex",
+                            height: "32px",
+                            justifyContent: "center",
+                            width: "32px",
+                          }}
+                        >
+                          <FaMapMarkerAlt style={{ color: "white", fontSize: "14px" }} />
+                        </div>
+                        <div>
+                          <p
+                            style={{
+                              color: "#4ade80",
+                              fontSize: "14px",
+                              fontWeight: 600,
+                              margin: 0,
+                            }}
+                          >
+                            Location Selected
+                          </p>
+                          <p
+                            style={{
+                              color: "#94a3b8",
+                              fontFamily: "monospace",
+                              fontSize: "12px",
+                              margin: 0,
+                            }}
+                          >
+                            {selectedStartLocation.lat.toFixed(6)},{" "}
+                            {selectedStartLocation.lng.toFixed(6)}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleResetLocation}
+                        style={{
+                          background: "transparent",
+                          border: "1px solid rgba(148, 163, 184, 0.3)",
+                          borderRadius: "8px",
+                          color: "#94a3b8",
+                          cursor: "pointer",
+                          fontSize: "13px",
+                          padding: "8px 16px",
+                          width: "100%",
+                        }}
+                      >
+                        Change Location
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {isOnline && (
                 <div style={{ marginBottom: "24px" }}>
                   <p style={{ color: "#94a3b8", fontSize: "14px", marginBottom: "12px" }}>
@@ -1040,21 +1418,28 @@ export default function DriverLiveMap({ embedded = false }: DriverLiveMapProps):
                 </div>
               )}
 
-              <button
-                type="button"
-                onClick={isOnline ? goOffline : goOnline}
-                style={isOnline ? styles.buttonOffline : styles.buttonOnline}
-              >
-                {isOnline ? (
-                  <>
-                    <FaPowerOff /> Go Offline
-                  </>
-                ) : (
-                  <>
-                    <FaCar /> Go Online
-                  </>
-                )}
-              </button>
+              {/* Go Online/Offline Button */}
+              {isOnline ? (
+                <button type="button" onClick={goOffline} style={styles.buttonOffline}>
+                  <FaPowerOff /> Go Offline
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleConfirmAndGoOnline}
+                  disabled={!selectedStartLocation || locationMode !== "ready"}
+                  style={{
+                    ...styles.buttonOnline,
+                    cursor:
+                      !selectedStartLocation || locationMode !== "ready"
+                        ? "not-allowed"
+                        : "pointer",
+                    opacity: !selectedStartLocation || locationMode !== "ready" ? 0.5 : 1,
+                  }}
+                >
+                  <FaCar /> {selectedStartLocation ? "Go Online" : "Select Location First"}
+                </button>
+              )}
             </div>
 
             {/* Driver Info Card */}
