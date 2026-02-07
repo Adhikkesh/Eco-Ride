@@ -214,6 +214,15 @@ export function phase1SpatialFilter(
     const isAvailable = location.status === "AVAILABLE";
     const isOnTrip = location.status === "ON_TRIP";
 
+    // Validate coordinates
+    const lat = Number(location.lat);
+    const lng = Number(location.lng);
+
+    if (isNaN(lat) || isNaN(lng)) {
+      console.warn(`[Phase 1] Driver ${driverId} has invalid coordinates:`, location);
+      continue;
+    }
+
     // Skip if not available and not eligible for pooling
     if (!isAvailable && !isOnTrip) {
       continue;
@@ -242,9 +251,20 @@ export function phase1SpatialFilter(
 
       // Check destination proximity for pooling
       if (rideDestination && location.destination) {
+        const destLat = Number(location.destination.lat);
+        const destLng = Number(location.destination.lng);
+
+        if (isNaN(destLat) || isNaN(destLng)) {
+          console.warn(
+            `[Phase 1] Driver ${driverId} has invalid destination coordinates:`,
+            location.destination,
+          );
+          continue;
+        }
+
         const destDistance = geofire.distanceBetween(
           [rideDestination.lat, rideDestination.lng],
-          [location.destination.lat, location.destination.lng],
+          [destLat, destLng],
         );
 
         if (destDistance > MATCHING_CONFIG.POOLING_DROP_TOLERANCE_KM) {
@@ -260,10 +280,7 @@ export function phase1SpatialFilter(
     }
 
     // Calculate distance from driver to pickup
-    const distance = geofire.distanceBetween(
-      [location.lat, location.lng],
-      [pickupLocation.lat, pickupLocation.lng],
-    );
+    const distance = geofire.distanceBetween([lat, lng], [pickupLocation.lat, pickupLocation.lng]);
 
     // For pooled rides, use pickup tolerance instead of standard radius
     const effectiveRadius = isOnTrip ? MATCHING_CONFIG.POOLING_PICKUP_TOLERANCE_KM : radiusKm;

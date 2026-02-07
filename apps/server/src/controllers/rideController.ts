@@ -12,29 +12,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import * as geofire from "geofire-common";
 import { db, rtdb } from "../config/firebase.js";
 import { calculateGreenPoints, type VehicleType } from "../utils/greenPoints.js";
-import { type DriverLocation, matchDriver } from "../utils/matchingEngine.js";
-
-/**
- * Interface representing a driver's real-time location data.
- * Stored in Firebase Realtime Database under 'drivers-online' node.
- * @interface DriverLocation
- * @property {number} lat - Driver's current latitude
- * @property {number} lng - Driver's current longitude
- * @property {number} heading - Direction the driver is facing (degrees)
- * @property {"AVAILABLE"|"BUSY"|"RESERVED"} status - Driver's current availability
- * @property {number} lastUpdated - Timestamp of last location update
- * @property {string} [vehicleType] - Type of vehicle (optional)
- * @property {string} [geohash] - Geohash for location-based queries (optional)
- */
-interface DriverLocation {
-  lat: number;
-  lng: number;
-  heading: number;
-  status: "AVAILABLE" | "BUSY" | "RESERVED";
-  lastUpdated: number;
-  vehicleType?: string;
-  geohash?: string;
-}
+import { type DriverLocation, matchDriver, optimizeRoute } from "../utils/matchingEngine.js";
 
 /**
  * Interface for matched driver information.
@@ -308,7 +286,7 @@ export const requestRide = async (req: Request, res: Response) => {
       }
 
       // Optimize route starting from driver's current location
-      const { optimizeRoute } = await import("../utils/matchingEngine.js");
+      // Using top-level import for optimizeRoute
       waypoints = optimizeRoute(
         { lat: assignedDriverCandidate.location.lat, lng: assignedDriverCandidate.location.lng },
         pendingWaypoints,
@@ -395,7 +373,13 @@ export const requestRide = async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error("Ride Request Error:", error);
+    // Log stack trace if available
+    if (error instanceof Error) {
+      console.error("Stack trace:", error.stack);
+    }
     return res.status(500).json({
+      // Include error details in development mode only (optional, but good for debugging now)
+      error: error instanceof Error ? error.message : "Unknown error",
       message: "Internal server error while processing ride request",
       success: false,
     });
