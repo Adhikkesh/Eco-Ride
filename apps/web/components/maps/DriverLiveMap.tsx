@@ -315,7 +315,7 @@ export default function DriverLiveMap({
     setSubmittingOtp(true);
     try {
       const token = await auth.currentUser?.getIdToken();
-      const res = await fetch(`${backendUrl}/ride/start`, {
+      const res = await fetch(`${backendUrl}/api/v1/ride/start`, {
         body: JSON.stringify({ otp: otpInput, rideId: assignedRide.rideId }),
         headers: {
           Authorization: `Bearer ${token}`,
@@ -345,7 +345,7 @@ export default function DriverLiveMap({
     if (!assignedRide) return;
     try {
       const token = await auth.currentUser?.getIdToken();
-      const res = await fetch(`${backendUrl}/ride/complete`, {
+      const res = await fetch(`${backendUrl}/api/v1/ride/complete`, {
         body: JSON.stringify({ rideId: assignedRide.rideId }),
         headers: {
           Authorization: `Bearer ${token}`,
