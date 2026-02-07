@@ -31,6 +31,9 @@ jobs:
 
       - name: Run Biome check
         run: pnpm run check
+        
+      - name: Run vitest
+        run: pnpm run test
 
   typecheck:
     name: Type Check
