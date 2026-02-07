@@ -1,28 +1,66 @@
+/**
+ * @fileoverview Fare Controller
+ * @description Handles fare calculation for rides using Google Routes API.
+ *              Computes dynamic pricing based on distance, duration, and ride type.
+ *              Also calculates CO2 emissions saved by using electric vehicles.
+ * @module controllers/fareController
+ */
+
 import type { Request, Response } from "express";
 
-// Initialize Google Maps Client if available or use fetch directly
-// Since I don't want to add a new dependency if not needed, I'll use fetch as per the plan.
-// But typescript might need types. I'll stick to native fetch for zero-dependency bloat.
-
-// Pricing Configuration (INR)
+/**
+ * Pricing configuration for fare calculation (in INR).
+ * @constant {Object}
+ * @property {number} BASE_FARE - Base fare for all rides in rupees
+ * @property {number} PER_KM - Per kilometer charge in rupees
+ * @property {number} PER_MIN - Per minute charge in rupees
+ * @property {number} POOL_DISCOUNT - Discount percentage for pooled rides (0.2 = 20%)
+ */
 const PRICING = {
   BASE_FARE: 40,
   PER_KM: 12,
   PER_MIN: 1.5,
-  POOL_DISCOUNT: 0.2, // 20% off
+  POOL_DISCOUNT: 0.2,
 };
 
+/**
+ * CO2 emissions configuration (grams per kilometer).
+ * Used to calculate environmental impact savings.
+ * @constant {Object}
+ * @property {number} EV_G_PER_KM - Emissions for electric vehicles (0g)
+ * @property {number} PETROL_G_PER_KM - Average emissions for petrol vehicles
+ */
 const EMISSIONS = {
   EV_G_PER_KM: 0,
   PETROL_G_PER_KM: 192,
 };
 
+/**
+ * Request body interface for fare estimation endpoint.
+ * @interface EstimateRequest
+ * @property {Object} pickup - Pickup location coordinates
+ * @property {number} pickup.lat - Pickup latitude
+ * @property {number} pickup.lng - Pickup longitude
+ * @property {Object} drop - Drop-off location coordinates
+ * @property {number} drop.lat - Drop-off latitude
+ * @property {number} drop.lng - Drop-off longitude
+ * @property {boolean} [isPooled] - Whether this is a pooled ride (optional)
+ */
 interface EstimateRequest {
   pickup: { lat: number; lng: number };
   drop: { lat: number; lng: number };
   isPooled?: boolean;
 }
 
+/**
+ * Calculate Fare Controller
+ * @description Calculates ride fare using Google Routes API for distance and duration.
+ *              Applies base fare + per-km + per-minute pricing with optional pool discount.
+ *              Also returns CO2 savings, route polyline, and ETA.
+ * @route POST /fare/calculate
+ * @param {EstimateRequest} req.body - Pickup and drop coordinates with optional pooling flag
+ * @returns {Object} JSON response with fare, distance, ETA, CO2 savings, and route polyline
+ */
 export const calculateFare = async (req: Request, res: Response) => {
   try {
     const { pickup, drop, isPooled } = req.body as EstimateRequest;

@@ -1,21 +1,51 @@
+/**
+ * @fileoverview User Controller
+ * @description Handles user management operations including user creation and driver status.
+ *              Supports both rider and driver registration with appropriate profile creation.
+ *              Manages Firestore collections: users, driver_profile, and vehicle.
+ * @module controllers/userController
+ */
+
 import type { RequestHandler } from "express";
 import { FieldValue } from "firebase-admin/firestore";
 import status from "http-status";
 import { db } from "../config/firebase.js";
 
+/**
+ * Request body interface for user creation endpoint.
+ * @interface CreateUserBody
+ * @property {string} name - User's display name
+ * @property {string} phone_number - User's phone number
+ * @property {"driver"|"rider"} role - User's role in the platform
+ * @property {string} [kyc_url] - Driver's KYC document URL (driver only)
+ * @property {string} [license_url] - Driver's license document URL (driver only)
+ * @property {string} [plate_number] - Vehicle plate number (driver only)
+ * @property {string} [model] - Vehicle model name (driver only)
+ * @property {boolean} [is_ev] - Whether vehicle is electric (driver only)
+ * @property {string} [pollution_expiry] - Pollution certificate expiry date ISO string (driver only)
+ */
 interface CreateUserBody {
   name: string;
   phone_number: string;
   role: "driver" | "rider";
-  // Driver-specific fields
   kyc_url?: string;
   license_url?: string;
   plate_number?: string;
   model?: string;
   is_ev?: boolean;
-  pollution_expiry?: string; // ISO date string
+  pollution_expiry?: string;
 }
 
+/**
+ * Create User Controller
+ * @description Creates a new user account with role-specific profile data.
+ *              For drivers, also creates driver_profile and vehicle documents.
+ *              Uses Firestore batch writes for atomic operations.
+ * @route POST /user/create
+ * @access Authenticated users (Firebase token required)
+ * @param {CreateUserBody} req.body - User registration data
+ * @returns {Object} JSON response with created user data
+ */
 export const CreateUserController: RequestHandler<object, object, CreateUserBody> = async (
   req,
   res,
@@ -127,6 +157,14 @@ export const CreateUserController: RequestHandler<object, object, CreateUserBody
   }
 };
 
+/**
+ * Get Driver Status Controller
+ * @description Retrieves the KYC verification status for the authenticated driver.
+ *              Returns false if driver profile doesn't exist.
+ * @route GET /user/driver-status
+ * @access Authenticated users (drivers)
+ * @returns {Object} JSON response with kyc_verified boolean
+ */
 export const GetDriverStatusController: RequestHandler = async (req, res) => {
   const firebaseUser = req.user;
 
