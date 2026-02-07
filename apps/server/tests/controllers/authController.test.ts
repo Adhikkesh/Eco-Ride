@@ -22,14 +22,29 @@
  * @date 2026-02-03
  */
 
-import type { NextFunction, Request, Response } from "express";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Request, Response } from "express";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * Response data interface for auth controller
+ */
+interface AuthResponseData {
+  valid?: boolean;
+  message?: string;
+  user?: {
+    uid: string;
+    email?: string;
+    name?: string;
+    picture?: string;
+    emailVerified?: boolean;
+  };
+}
 
 /**
  * Mock response helper
  */
 interface MockResponse extends Partial<Response> {
-  _getData: () => any;
+  _getData: () => AuthResponseData;
   _getStatusCode: () => number;
 }
 
@@ -40,22 +55,22 @@ interface MockResponse extends Partial<Response> {
  */
 const createMockResponse = (): MockResponse => {
   let statusCode = 200;
-  let data: any = null;
+  let data: AuthResponseData = {};
 
-  const res: any = {
+  const res: MockResponse = {
     _getData: () => data,
     _getStatusCode: () => statusCode,
-    json: vi.fn((responseData: any) => {
+    json: vi.fn((responseData: AuthResponseData) => {
       data = responseData;
       return res;
-    }),
+    }) as MockResponse["json"],
     status: vi.fn((code: number) => {
       statusCode = code;
       return res;
-    }),
+    }) as MockResponse["status"],
   };
 
-  return res as MockResponse;
+  return res;
 };
 
 /**

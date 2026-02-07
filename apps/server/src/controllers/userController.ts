@@ -33,11 +33,9 @@ interface CreateUserBody {
   plate_number?: string;
   model?: string;
   is_ev?: boolean;
-  pollution_expiry?: string;
-}
   vehicle_type?: "PETROL" | "DIESEL" | "HYBRID" | "ELECTRIC";
   passenger_capacity?: number;
-  pollution_expiry?: string; // ISO date string
+  pollution_expiry?: string;
 }
 
 /**
