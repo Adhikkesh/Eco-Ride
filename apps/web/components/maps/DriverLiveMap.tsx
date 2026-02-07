@@ -7,7 +7,7 @@ import {
   Marker,
   useJsApiLoader,
 } from "@react-google-maps/api";
-import { onDisconnect, onValue, ref, remove, set } from "firebase/database";
+import { onDisconnect, onValue, ref, remove, set, update } from "firebase/database";
 import * as geofire from "geofire-common";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -250,24 +250,29 @@ export default function DriverLiveMap({
   }, [isOnline]);
 
   // Update Firebase immediately when status changes while online
+  // IMPORTANT: Use update() NOT set() to preserve server-managed fields
+  // (currentPassengers, destination, pooledRides for ride pooling)
   useEffect(() => {
     if (isOnline && position && rtdb) {
       const driverRef = ref(rtdb, `drivers-online/${userId}`);
       const hash = geofire.geohashForLocation([position.lat, position.lng]);
-      const locationData: DriverLocation = {
+
+      // Only update location fields - preserve status/passengers managed by server
+      const locationUpdate = {
         geohash: hash,
         heading: position.heading,
         lastUpdated: Date.now(),
         lat: position.lat,
         lng: position.lng,
-        status,
         vehicleType: "CAR",
       };
-      set(driverRef, locationData).catch((err) => {
-        console.error("Failed to update status:", err);
+
+      // Use update() to merge with existing data instead of overwriting
+      update(driverRef, locationUpdate).catch((err) => {
+        console.error("Failed to update location:", err);
       });
     }
-  }, [status, isOnline, position, userId]);
+  }, [position, isOnline, userId]);
 
   // Listen for ride assignments from RTDB
   useEffect(() => {
@@ -368,6 +373,25 @@ export default function DriverLiveMap({
     }
   };
 
+  interface RoutePoint {
+    lat: number;
+    lng: number;
+    type: "PICKUP" | "DROP";
+    riderId: string;
+    order?: number;
+  }
+
+  interface AssignedRide {
+    rideId: string;
+    riderId: string;
+    pickup: { lat: number; lng: number };
+    drop: { lat: number; lng: number };
+    timestamp: number;
+    status?: "MATCHED" | "IN_PROGRESS";
+    waypoints?: RoutePoint[]; // Multi-stop support
+    riders?: any[]; // Pooled riders info
+  }
+
   // Calculate routes when ride is assigned
   useEffect(() => {
     if (!isLoaded || !assignedRide || !position) {
@@ -378,37 +402,139 @@ export default function DriverLiveMap({
       directionsServiceRef.current = new google.maps.DirectionsService();
     }
 
-    // Calculate route 1: Driver -> Pickup (BLUE route)
-    directionsServiceRef.current.route(
-      {
-        destination: assignedRide.pickup,
-        origin: { lat: position.lat, lng: position.lng },
-        travelMode: google.maps.TravelMode.DRIVING,
-      },
-      (result, status) => {
-        if (status === google.maps.DirectionsStatus.OK && result) {
-          setDirectionsToPickup(result);
-        } else {
-          console.error("Directions to pickup failed:", status);
-        }
-      },
-    );
+    const waypoints = assignedRide.waypoints;
 
-    // Calculate route 2: Pickup -> Destination (GREEN route)
-    directionsServiceRef.current.route(
-      {
-        destination: assignedRide.drop,
-        origin: assignedRide.pickup,
-        travelMode: google.maps.TravelMode.DRIVING,
-      },
-      (result, status) => {
-        if (status === google.maps.DirectionsStatus.OK && result) {
-          setDirectionsToDestination(result);
-        } else {
-          console.error("Directions to destination failed:", status);
+    if (waypoints && waypoints.length > 0) {
+      // MULTI-STOP ROUTING
+
+      // Find the pivot point: The LAST pickup in the sequence
+      // Blue route: Driver -> Last Pickup (gathering phase)
+      // Green route: Last Pickup -> Final Drop (delivery phase)
+
+      let lastPickupIdx = -1;
+      for (let i = waypoints.length - 1; i >= 0; i--) {
+        const wp = waypoints[i];
+        if (wp && wp.type === "PICKUP") {
+          lastPickupIdx = i;
+          break;
         }
-      },
-    );
+      }
+
+      // If no pickups (all drops), treat current location as start of Green Route
+      if (lastPickupIdx === -1) {
+        setDirectionsToPickup(null);
+
+        // Green Route: Driver -> Final Drop (visiting all intermediate drops)
+        const finalDrop = waypoints[waypoints.length - 1];
+        if (finalDrop) {
+          const intermediateDrops = waypoints.slice(0, waypoints.length - 1).map((wp) => ({
+            location: { lat: wp.lat, lng: wp.lng },
+            stopover: true,
+          }));
+
+          directionsServiceRef.current.route(
+            {
+              destination: { lat: finalDrop.lat, lng: finalDrop.lng },
+              origin: { lat: position.lat, lng: position.lng },
+              travelMode: google.maps.TravelMode.DRIVING,
+              waypoints: intermediateDrops,
+            },
+            (result, status) => {
+              if (status === google.maps.DirectionsStatus.OK && result) {
+                setDirectionsToDestination(result);
+              }
+            },
+          );
+        }
+        return;
+      }
+
+      // BLUE ROUTE: Driver -> Last Pickup
+      const lastPickup = waypoints[lastPickupIdx];
+      if (lastPickup) {
+        const intermediatePickups = waypoints.slice(0, lastPickupIdx).map((wp) => ({
+          location: { lat: wp.lat, lng: wp.lng },
+          stopover: true,
+        }));
+
+        directionsServiceRef.current.route(
+          {
+            destination: { lat: lastPickup.lat, lng: lastPickup.lng },
+            origin: { lat: position.lat, lng: position.lng },
+            travelMode: google.maps.TravelMode.DRIVING,
+            waypoints: intermediatePickups,
+          },
+          (result, status) => {
+            if (status === google.maps.DirectionsStatus.OK && result) {
+              setDirectionsToPickup(result);
+            }
+          },
+        );
+      }
+
+      // GREEN ROUTE: Last Pickup -> Final Drop
+      if (lastPickupIdx < waypoints.length - 1) {
+        const finalDrop = waypoints[waypoints.length - 1];
+
+        if (lastPickup && finalDrop) {
+          const intermediateBetween = waypoints
+            .slice(lastPickupIdx + 1, waypoints.length - 1)
+            .map((wp) => ({
+              location: { lat: wp.lat, lng: wp.lng },
+              stopover: true,
+            }));
+
+          directionsServiceRef.current.route(
+            {
+              destination: { lat: finalDrop.lat, lng: finalDrop.lng },
+              origin: { lat: lastPickup.lat, lng: lastPickup.lng },
+              travelMode: google.maps.TravelMode.DRIVING,
+              waypoints: intermediateBetween,
+            },
+            (result, status) => {
+              if (status === google.maps.DirectionsStatus.OK && result) {
+                setDirectionsToDestination(result);
+              }
+            },
+          );
+        }
+      } else {
+        setDirectionsToDestination(null);
+      }
+    } else {
+      // SINGLE RIDE (Legacy Fallback)
+      // Calculate route 1: Driver -> Pickup (BLUE route)
+      directionsServiceRef.current.route(
+        {
+          destination: assignedRide.pickup,
+          origin: { lat: position.lat, lng: position.lng },
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          if (status === google.maps.DirectionsStatus.OK && result) {
+            setDirectionsToPickup(result);
+          } else {
+            console.error("Directions to pickup failed:", status);
+          }
+        },
+      );
+
+      // Calculate route 2: Pickup -> Destination (GREEN route)
+      directionsServiceRef.current.route(
+        {
+          destination: assignedRide.drop,
+          origin: assignedRide.pickup,
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          if (status === google.maps.DirectionsStatus.OK && result) {
+            setDirectionsToDestination(result);
+          } else {
+            console.error("Directions to destination failed:", status);
+          }
+        },
+      );
+    }
   }, [isLoaded, assignedRide, position]);
 
   const formatTime = (seconds: number): string => {
@@ -719,38 +845,72 @@ export default function DriverLiveMap({
                   />
                 )}
 
-                {/* Pickup Location Marker */}
-                {assignedRide && (
-                  <Marker
-                    position={assignedRide.pickup}
-                    icon={{
-                      anchor: new google.maps.Point(12, 12),
-                      fillColor: "#3b82f6",
-                      fillOpacity: 1,
-                      path: google.maps.SymbolPath.CIRCLE,
-                      scale: 12,
-                      strokeColor: "#fff",
-                      strokeWeight: 3,
-                    }}
-                    title="Pickup Location"
-                  />
-                )}
+                {/* Waypoint Markers (Multi-Stop Support) */}
+                {assignedRide && assignedRide.waypoints ? (
+                  assignedRide.waypoints.map((wp, index) => (
+                    <Marker
+                      key={`${wp.riderId}-${wp.type}-${index}`}
+                      position={{ lat: wp.lat, lng: wp.lng }}
+                      label={{
+                        color: "white",
+                        fontWeight: "bold",
+                        text: (index + 1).toString(),
+                      }}
+                      icon={{
+                        anchor: new google.maps.Point(14, 14),
+                        scaledSize: new google.maps.Size(28, 28),
+                        url:
+                          "data:image/svg+xml;charset=UTF-8," +
+                          encodeURIComponent(`
+                          <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
+                            <circle cx="14" cy="14" r="12" fill="${wp.type === "PICKUP" ? "#3b82f6" : "#22c55e"}" stroke="#ffffff" stroke-width="3"/>
+                          </svg>
+                        `),
+                      }}
+                      title={`${wp.type} - Stop ${index + 1}`}
+                    />
+                  ))
+                ) : (
+                  // Legacy/Single Ride Fallback Markers
+                  <>
+                    {/* Pickup Location Marker */}
+                    {assignedRide && (
+                      <Marker
+                        position={assignedRide.pickup}
+                        icon={{
+                          anchor: new google.maps.Point(14, 14),
+                          scaledSize: new google.maps.Size(28, 28),
+                          url:
+                            "data:image/svg+xml;charset=UTF-8," +
+                            encodeURIComponent(`
+                            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
+                              <circle cx="14" cy="14" r="12" fill="#3b82f6" stroke="#ffffff" stroke-width="3"/>
+                            </svg>
+                          `),
+                        }}
+                        title="Pickup Location"
+                      />
+                    )}
 
-                {/* Destination Marker */}
-                {assignedRide && (
-                  <Marker
-                    position={assignedRide.drop}
-                    icon={{
-                      anchor: new google.maps.Point(12, 12),
-                      fillColor: "#22c55e",
-                      fillOpacity: 1,
-                      path: google.maps.SymbolPath.CIRCLE,
-                      scale: 12,
-                      strokeColor: "#fff",
-                      strokeWeight: 3,
-                    }}
-                    title="Destination"
-                  />
+                    {/* Destination Marker */}
+                    {assignedRide && (
+                      <Marker
+                        position={assignedRide.drop}
+                        icon={{
+                          anchor: new google.maps.Point(14, 14),
+                          scaledSize: new google.maps.Size(28, 28),
+                          url:
+                            "data:image/svg+xml;charset=UTF-8," +
+                            encodeURIComponent(`
+                            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
+                              <circle cx="14" cy="14" r="12" fill="#22c55e" stroke="#ffffff" stroke-width="3"/>
+                            </svg>
+                          `),
+                        }}
+                        title="Destination"
+                      />
+                    )}
+                  </>
                 )}
               </GoogleMap>
 

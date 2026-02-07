@@ -440,6 +440,18 @@ export default function RiderMap({
             setAssignedDriverId(data.driverId);
             setAssignedDriverName(data.driverName || "Unknown Driver");
 
+            // RESTORE ROUTE STATE
+            if (data.pickup) {
+              setPickupLocation(data.pickup);
+            }
+            if (data.drop) {
+              setSelectedDestination({
+                lat: data.drop.lat,
+                lng: data.drop.lng,
+                name: "Destination", // Default name as backend only stores lat/lng
+              });
+            }
+
             // ETA logic
             // We can re-calculate ETA in the effect that watches driver location
           }
@@ -1596,12 +1608,14 @@ export default function RiderMap({
                       position={currentLocation}
                       icon={{
                         anchor: new google.maps.Point(12, 12),
-                        fillColor: "#22c55e",
-                        fillOpacity: 1,
-                        path: google.maps.SymbolPath.CIRCLE,
-                        scale: 12,
-                        strokeColor: "#ffffff",
-                        strokeWeight: 3,
+                        scaledSize: new google.maps.Size(24, 24),
+                        url:
+                          "data:image/svg+xml;charset=UTF-8," +
+                          encodeURIComponent(`
+                          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r="10" fill="#22c55e" stroke="#ffffff" stroke-width="3"/>
+                          </svg>
+                        `),
                       }}
                       title="Your Location"
                     />
