@@ -16,9 +16,12 @@ import { calculateFare } from "../controllers/fareController.js";
 import { GetMeController, HealthCheckController } from "../controllers/index.js";
 import { confirmPayment, createPaymentIntent } from "../controllers/paymentController.js";
 import {
+  acceptRide,
   cancelRide,
   completeRide,
+  declineRide,
   getActiveRide,
+  getOtp,
   requestRide,
   startRide,
 } from "../controllers/rideController.js";
@@ -71,6 +74,15 @@ router.post("/ride/request", verifyToken, requestRide);
 
 /** Get current active ride for authenticated user */
 router.get("/ride/active", verifyToken, getActiveRide);
+
+/** Driver accepts a pending ride request */
+router.post("/ride/accept", verifyToken, acceptRide);
+
+/** Driver declines a pending ride request - triggers re-matching */
+router.post("/ride/decline", verifyToken, declineRide);
+
+/** Get OTP for ride (only available when driver is within 100m of pickup) */
+router.get("/ride/otp/:rideId", verifyToken, getOtp);
 
 /** Cancel an active ride request */
 router.post("/ride/cancel", verifyToken, cancelRide);

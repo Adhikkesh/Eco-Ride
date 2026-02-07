@@ -21,7 +21,7 @@ import { db, rtdb } from "../config/firebase.js";
 // TYPES & INTERFACES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export type DriverMode = "IDLE" | "PICKUP" | "TRIP" | "WAITING";
+export type DriverMode = "IDLE" | "PICKUP" | "TRIP" | "WAITING" | "AWAITING_PAYMENT";
 
 export interface Coordinate {
   lat: number;
@@ -103,6 +103,9 @@ export class DriverAgent {
   // Waiting state
   private waitStartTime: number | null = null;
 
+  // Payment waiting state
+  private paymentListenerUnsubscribe: (() => void) | null = null;
+
   constructor(
     driverId: string,
     initialPosition: Coordinate,
@@ -183,6 +186,9 @@ export class DriverAgent {
         break;
       case "TRIP":
         await this.tickTrip(deltaTimeMs);
+        break;
+      case "AWAITING_PAYMENT":
+        // Do nothing - just wait at drop location for payment confirmation
         break;
     }
   }
@@ -382,26 +388,55 @@ export class DriverAgent {
   }
 
   /**
-   * Complete the trip - update Firestore and clean up RTDB
+   * Complete the trip - update Firestore and wait for payment
    */
   private async completeTrip(): Promise<void> {
     if (!this.currentAssignment) return;
 
     const rideId = this.currentAssignment.rideId;
-    const riderId = this.currentAssignment.riderId;
 
-    console.log(`  🧹 ${this.driverId} cleaning up ride ${rideId}...`);
+    console.log(`  💳 ${this.driverId} waiting for payment on ride ${rideId}...`);
 
     // 1. Update Firestore ride status to COMPLETED with completedAt timestamp
     await this.updateRideStatus("COMPLETED");
 
-    // 2. Clean up RTDB - remove all ride-related data
-    await this.cleanupRTDB(rideId, riderId);
+    // 2. Set mode to AWAITING_PAYMENT - driver stays at drop location
+    this.mode = "AWAITING_PAYMENT";
 
-    console.log(`  ✨ ${this.driverId} completed ride ${rideId}`);
+    // 3. Listen for payment confirmation via RTDB
+    // When payment is confirmed, the /rides/{rideId} node will be removed by backend
+    // OR the status will change to PAYMENT_CONFIRMED
+    const rideRef = rtdb.ref(`rides/${rideId}`);
 
-    // 3. Return to IDLE mode (this will set status back to AVAILABLE)
-    await this.startIdleMode();
+    const callback = async (snapshot: import("firebase-admin/database").DataSnapshot) => {
+      const data = snapshot.val();
+
+      // If data is null (removed) or status is PAYMENT_CONFIRMED, payment is done
+      if (!data || data.status === "PAYMENT_CONFIRMED") {
+        console.log(`  ✅ ${this.driverId} payment confirmed for ride ${rideId}!`);
+
+        // Cleanup listener
+        if (this.paymentListenerUnsubscribe) {
+          this.paymentListenerUnsubscribe();
+          this.paymentListenerUnsubscribe = null;
+        }
+
+        // Clean up RTDB
+        await this.cleanupRTDB(rideId, this.currentAssignment?.riderId || "");
+
+        console.log(`  ✨ ${this.driverId} completed ride ${rideId}`);
+
+        // Now return to IDLE mode
+        await this.startIdleMode();
+      }
+    };
+
+    rideRef.on("value", callback);
+
+    // Store unsubscribe function
+    this.paymentListenerUnsubscribe = () => {
+      rideRef.off("value", callback);
+    };
   }
 
   /**
