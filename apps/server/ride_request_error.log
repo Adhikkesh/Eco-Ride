@@ -1,0 +1,7 @@
+[2026-02-07T14:21:22.421Z] Ride Request Error:
+Error: Invalid GeoFire location ',': latitude must be a number
+    at validateLocation (D:\College\Eco-Ride\node_modules\.pnpm\geofire-common@6.0.0\node_modules\geofire-common\dist\geofire-common\index.cjs.js:86:15)
+    at Module.distanceBetween (D:\College\Eco-Ride\node_modules\.pnpm\geofire-common@6.0.0\node_modules\geofire-common\dist\geofire-common\index.cjs.js:352:5)
+    at requestRide (D:\College\Eco-Ride\apps\server\src\controllers\rideController.ts:129:38)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+

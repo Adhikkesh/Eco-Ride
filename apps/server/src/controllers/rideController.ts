@@ -123,16 +123,25 @@ export const requestRide = async (req: Request, res: Response) => {
           continue;
         }
 
+        // Parse coordinates to ensure they are numbers
+        const driverLat = parseFloat(String(driver.lat));
+        const driverLng = parseFloat(String(driver.lng));
+
+        if (isNaN(driverLat) || isNaN(driverLng)) {
+          console.log(`  -> Skipping: Invalid coordinates for driver ${driverId}`);
+          continue;
+        }
+
         // Calculate distance from pickup location
-        const distanceInKm = geofire.distanceBetween([driver.lat, driver.lng], center);
+        const distanceInKm = geofire.distanceBetween([driverLat, driverLng], center);
         console.log(`  -> Distance: ${distanceInKm.toFixed(2)} km`);
 
         if (distanceInKm <= currentRadius) {
           matchingDrivers.push({
             distance: distanceInKm,
             driverId,
-            lat: driver.lat,
-            lng: driver.lng,
+            lat: driverLat,
+            lng: driverLng,
             status: driver.status,
           });
           console.log(`  -> ADDED to matching drivers`);
