@@ -29,11 +29,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run Biome check
+      - name: Run Biome lint check
         run: pnpm run check
-        
-      - name: Run vitest
-        run: pnpm run test
 
   typecheck:
     name: Type Check
@@ -63,7 +60,6 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    needs: [lint, typecheck]
 
     steps:
       - name: Checkout code
@@ -84,7 +80,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run tests
-        run: pnpm test
+        run: pnpm run test
 
   build:
     name: Build
@@ -109,5 +105,5 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build
+      - name: Build project
         run: pnpm run build
