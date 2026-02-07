@@ -15,6 +15,9 @@
     },
     "lint": {
       "dependsOn": ["^lint"]
+    },
+    "test": {
+      "dependsOn": ["^build"]
     }
   },
   "ui": "tui"

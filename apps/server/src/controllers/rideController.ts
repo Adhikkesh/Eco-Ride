@@ -1,10 +1,30 @@
-// apps/server/src/controllers/rideController.ts
+/**
+ * @fileoverview Ride Controller
+ * @description Handles all ride-related operations for the Eco-Ride platform.
+ *              Includes ride request, matching with nearby drivers, ride lifecycle
+ *              management (start, cancel, complete), and active ride queries.
+ *              Uses geolocation-based driver matching with expanding radius search.
+ * @module controllers/rideController
+ */
+
 import type { Request, Response } from "express";
 import { FieldValue } from "firebase-admin/firestore";
 import * as geofire from "geofire-common";
 import { db, rtdb } from "../config/firebase.js";
 import { calculateGreenPoints, type VehicleType } from "../utils/greenPoints.js";
 
+/**
+ * Interface representing a driver's real-time location data.
+ * Stored in Firebase Realtime Database under 'drivers-online' node.
+ * @interface DriverLocation
+ * @property {number} lat - Driver's current latitude
+ * @property {number} lng - Driver's current longitude
+ * @property {number} heading - Direction the driver is facing (degrees)
+ * @property {"AVAILABLE"|"BUSY"|"RESERVED"} status - Driver's current availability
+ * @property {number} lastUpdated - Timestamp of last location update
+ * @property {string} [vehicleType] - Type of vehicle (optional)
+ * @property {string} [geohash] - Geohash for location-based queries (optional)
+ */
 interface DriverLocation {
   lat: number;
   lng: number;
@@ -15,6 +35,16 @@ interface DriverLocation {
   geohash?: string;
 }
 
+/**
+ * Interface for matched driver information.
+ * Used during the driver matching process.
+ * @interface DriverMatch
+ * @property {string} driverId - Unique identifier of the driver
+ * @property {number} lat - Driver's latitude at time of match
+ * @property {number} lng - Driver's longitude at time of match
+ * @property {number} distance - Distance from pickup location in kilometers
+ * @property {string} status - Driver's status at time of match
+ */
 interface DriverMatch {
   driverId: string;
   lat: number;
@@ -23,6 +53,21 @@ interface DriverMatch {
   status: string;
 }
 
+/**
+ * Request Ride Controller
+ * @description Handles new ride requests from riders. Implements an expanding radius
+ *              search algorithm to find the nearest available driver within 100km.
+ *              Creates ride record in Firestore and notifies matched driver via RTDB.
+ * @route POST /ride/request
+ * @param {Object} req.body - Ride request parameters
+ * @param {string} req.body.riderId - The rider's unique identifier
+ * @param {number} req.body.pickupLat - Pickup location latitude
+ * @param {number} req.body.pickupLng - Pickup location longitude
+ * @param {number} req.body.dropLat - Drop-off location latitude
+ * @param {number} req.body.dropLng - Drop-off location longitude
+ * @param {number} [req.body.fare] - Pre-calculated fare (optional)
+ * @returns {Object} JSON response with matched driver details, ride ID, OTP, and ETA
+ */
 export const requestRide = async (req: Request, res: Response) => {
   try {
     const { riderId, pickupLat, pickupLng, dropLat, dropLng, fare } = req.body;
@@ -227,6 +272,15 @@ export const requestRide = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * Cancel Ride Controller
+ * @description Cancels an active ride request. Updates ride status in Firestore,
+ *              removes driver assignment from RTDB, and sets driver back to AVAILABLE.
+ * @route POST /ride/cancel
+ * @param {Object} req.body - Request body
+ * @param {string} req.body.rideId - The unique identifier of the ride to cancel
+ * @returns {Object} JSON response with cancellation status
+ */
 export const cancelRide = async (req: Request, res: Response) => {
   try {
     const { rideId } = req.body;
@@ -279,6 +333,17 @@ export const cancelRide = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * Start Ride Controller
+ * @description Initiates a matched ride after OTP verification by the driver.
+ *              Validates the OTP provided by rider and updates ride status to IN_PROGRESS.
+ *              Syncs status to both Firestore and RTDB for real-time updates.
+ * @route POST /ride/start
+ * @param {Object} req.body - Request body
+ * @param {string} req.body.rideId - The unique identifier of the ride
+ * @param {string} req.body.otp - The 4-digit OTP provided by the rider
+ * @returns {Object} JSON response with ride start status
+ */
 export const startRide = async (req: Request, res: Response) => {
   try {
     const { rideId, otp } = req.body;
@@ -322,6 +387,16 @@ export const startRide = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * Complete Ride Controller
+ * @description Marks a ride as completed after reaching the destination.
+ *              Updates ride status, frees up the driver for new rides,
+ *              and syncs completion status to RTDB for frontend listeners.
+ * @route POST /ride/complete
+ * @param {Object} req.body - Request body
+ * @param {string} req.body.rideId - The unique identifier of the ride
+ * @returns {Object} JSON response with completion status
+ */
 export const completeRide = async (req: Request, res: Response) => {
   try {
     const { rideId } = req.body;
@@ -415,6 +490,15 @@ export const completeRide = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * Get Active Ride Controller
+ * @description Retrieves the currently active ride for an authenticated rider.
+ *              Returns ride details including driver info, locations, and OTP.
+ *              Only returns rides with status MATCHED or IN_PROGRESS.
+ * @route GET /ride/active
+ * @access Authenticated users (rider)
+ * @returns {Object} JSON response with active ride details or 404 if none found
+ */
 export const getActiveRide = async (req: Request, res: Response) => {
   try {
     // metadata is attached by verifyToken middleware

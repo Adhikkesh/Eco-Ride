@@ -1,9 +1,28 @@
+/**
+ * @fileoverview Payment Controller
+ * @description Handles payment processing for rides using Stripe payment gateway.
+ *              Manages payment intent creation and payment confirmation workflows.
+ *              Integrates with Firebase Firestore and Realtime Database for ride data.
+ * @module controllers/paymentController
+ */
+
 import type { Request, Response } from "express";
 import Stripe from "stripe";
 import { db, rtdb } from "../config/firebase.js";
 
+/**
+ * Singleton instance of the Stripe client.
+ * Initialized lazily when first payment operation is requested.
+ * @type {Stripe | null}
+ */
 let stripeInstance: Stripe | null = null;
 
+/**
+ * Get or initialize the Stripe client instance.
+ * @description Lazily initializes the Stripe client using the STRIPE_SECRET_KEY
+ *              environment variable. Logs warnings if key is missing.
+ * @returns {Stripe | null} Stripe client instance or null if not configured
+ */
 const getStripe = () => {
   if (!stripeInstance) {
     const key = process.env.STRIPE_SECRET_KEY;
@@ -19,6 +38,16 @@ const getStripe = () => {
   return stripeInstance;
 };
 
+/**
+ * Create Payment Intent Controller
+ * @description Creates a Stripe payment intent for a ride.
+ *              Fetches ride details from Firestore to determine fare amount.
+ *              Handles legacy rides without fare data by using a fallback amount.
+ * @route POST /payment/create-intent
+ * @param {Object} req.body - Request body
+ * @param {string} req.body.rideId - The unique identifier of the ride
+ * @returns {Object} JSON response with clientSecret, amount, and success status
+ */
 export const createPaymentIntent = async (req: Request, res: Response) => {
   try {
     const { rideId } = req.body;
@@ -98,6 +127,17 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * Confirm Payment Controller
+ * @description Confirms a successful payment and updates ride status.
+ *              Updates both Firebase Realtime Database and Firestore to notify
+ *              the driver and maintain persistent payment records.
+ * @route POST /payment/confirm
+ * @param {Object} req.body - Request body
+ * @param {string} req.body.rideId - The unique identifier of the ride
+ * @param {number} req.body.amount - The amount paid
+ * @returns {Object} JSON response with confirmation status
+ */
 export const confirmPayment = async (req: Request, res: Response) => {
   try {
     const { rideId, amount } = req.body;
