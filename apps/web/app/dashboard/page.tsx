@@ -44,7 +44,7 @@ export default function Dashboard(): React.ReactNode {
               try {
                 // Fetch latest status from backend API to ensure accuracy (bypass Firestore cache/sync issues)
                 const token = await currentUser.getIdToken();
-                const statusRes = await fetch(`${backendUrl}/user/driver-status`, {
+                const statusRes = await fetch(`${backendUrl}/api/v1/user/driver-status`, {
                   headers: {
                     Authorization: `Bearer ${token}`,
                   },

@@ -68,7 +68,7 @@ export default function AdminVerification(): JSX.Element {
       if (!user) return;
 
       const token = await user.getIdToken();
-      const response = await fetch(`${backendUrl}/admin/drivers/unverified`, {
+      const response = await fetch(`${backendUrl}/api/v1/admin/drivers/unverified`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -141,7 +141,7 @@ export default function AdminVerification(): JSX.Element {
       if (!user) return;
 
       const token = await user.getIdToken();
-      const response = await fetch(`${backendUrl}/admin/drivers/verify`, {
+      const response = await fetch(`${backendUrl}/api/v1/admin/drivers/verify`, {
         body: JSON.stringify({ driver_uid: driverUid, verified }),
         headers: {
           Authorization: `Bearer ${token}`,

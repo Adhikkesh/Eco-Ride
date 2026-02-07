@@ -320,7 +320,7 @@ export default function DriverLiveMap({
     setSubmittingOtp(true);
     try {
       const token = await auth.currentUser?.getIdToken();
-      const res = await fetch(`${backendUrl}/ride/start`, {
+      const res = await fetch(`${backendUrl}/api/v1/ride/start`, {
         body: JSON.stringify({ otp: otpInput, rideId: assignedRide.rideId }),
         headers: {
           Authorization: `Bearer ${token}`,
@@ -350,7 +350,7 @@ export default function DriverLiveMap({
     if (!assignedRide) return;
     try {
       const token = await auth.currentUser?.getIdToken();
-      const res = await fetch(`${backendUrl}/ride/complete`, {
+      const res = await fetch(`${backendUrl}/api/v1/ride/complete`, {
         body: JSON.stringify({ rideId: assignedRide.rideId }),
         headers: {
           Authorization: `Bearer ${token}`,
@@ -581,6 +581,8 @@ export default function DriverLiveMap({
     [userId, status],
   );
 
+  const [greenPointsRedeemed, setGreenPointsRedeemed] = useState(0);
+
   // Listen for payment confirmation
   useEffect(() => {
     if (!finishedRideId || !rtdb) return;
@@ -590,6 +592,7 @@ export default function DriverLiveMap({
       const data = snapshot.val();
       if (data && data.paymentStatus === "PAID") {
         setReceivedAmount(data.paidAmount || 0);
+        setGreenPointsRedeemed(data.greenPointsRedeemed || 0);
         setShowPaymentPopup(true);
       }
     });
@@ -1451,7 +1454,7 @@ export default function DriverLiveMap({
             <p
               style={{ color: "#ffffff", fontSize: "36px", fontWeight: "bold", margin: "0 0 32px" }}
             >
-              ₹{receivedAmount}
+              ₹{receivedAmount + (greenPointsRedeemed || 0)}
             </p>
 
             <button

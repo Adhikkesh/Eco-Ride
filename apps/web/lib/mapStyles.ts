@@ -1,6 +1,17 @@
 /**
- * Dark Mode Map Styles (Uber/Ola-like aesthetic)
- * Apply this to Google Maps for a professional night-time look
+ * @fileoverview Google Maps Styling Configuration
+ * @description Provides custom map styles for light and dark themes.
+ *              Creates a professional Uber/Ola-like aesthetic for the ride-sharing app.
+ *              These styles are applied to Google Maps instances throughout the application.
+ * @module lib/mapStyles
+ */
+
+/**
+ * Dark Mode Map Styles
+ * @description Custom styling for Google Maps in dark theme.
+ *              Features a night-time aesthetic with muted colors.
+ *              Suitable for evening/night usage and reduces eye strain.
+ * @type {google.maps.MapTypeStyle[]}
  */
 export const darkMapStyles: google.maps.MapTypeStyle[] = [
   { elementType: "geometry", stylers: [{ color: "#242f3e" }] },
@@ -84,7 +95,11 @@ export const darkMapStyles: google.maps.MapTypeStyle[] = [
 ];
 
 /**
- * Light Mode Map Styles (Clean daytime look)
+ * Light Mode Map Styles
+ * @description Custom styling for Google Maps in light theme.
+ *              Features a clean, bright aesthetic suitable for daytime usage.
+ *              Provides good contrast and readability in sunny conditions.
+ * @type {google.maps.MapTypeStyle[]}
  */
 export const lightMapStyles: google.maps.MapTypeStyle[] = [
   { elementType: "geometry", stylers: [{ color: "#f5f5f5" }] },

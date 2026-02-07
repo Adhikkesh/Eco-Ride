@@ -111,7 +111,7 @@ export default function Onboarding(): React.ReactNode {
         payload.pollution_expiry = pollutionExpiry;
       }
 
-      const response = await fetch(`${backendUrl}/user`, {
+      const response = await fetch(`${backendUrl}/api/v1/user`, {
         body: JSON.stringify(payload),
         headers: {
           Authorization: `Bearer ${token}`,
