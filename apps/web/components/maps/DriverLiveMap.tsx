@@ -29,7 +29,7 @@ interface DriverLocation {
   lat: number;
   lng: number;
   heading: number;
-  status: "AVAILABLE" | "BUSY";
+  status: "AVAILABLE" | "BUSY" | "RESERVED";
   lastUpdated: number;
   vehicleType?: string;
   geohash: string;
@@ -48,6 +48,16 @@ interface AssignedRide {
   drop: { lat: number; lng: number };
   timestamp: number;
   status?: "MATCHED" | "IN_PROGRESS";
+}
+
+interface PendingRide {
+  rideId: string;
+  riderId: string;
+  pickup: { lat: number; lng: number };
+  drop: { lat: number; lng: number };
+  fare?: number;
+  timestamp: number;
+  status: "PENDING_ACCEPTANCE";
 }
 
 const styles = {
@@ -185,6 +195,18 @@ const createRotatedCarIcon = (
 // Use same libraries as RiderMap to avoid loader conflict
 const libraries: Libraries = ["places"];
 
+// Haversine formula to calculate distance between two coordinates in meters
+const haversineDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
+  const R = 6371e3;
+  const p1 = (lat1 * Math.PI) / 180;
+  const p2 = (lat2 * Math.PI) / 180;
+  const dp = ((lat2 - lat1) * Math.PI) / 180;
+  const dl = ((lng2 - lng1) * Math.PI) / 180;
+  const a = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
 // Location selection mode before going online
 type LocationMode = "select" | "gps" | "map" | "ready";
 
@@ -224,6 +246,24 @@ export default function DriverLiveMap({
   const [finishedRideId, setFinishedRideId] = useState<string | null>(null);
   const [showPaymentPopup, setShowPaymentPopup] = useState(false);
   const [receivedAmount, setReceivedAmount] = useState(0);
+
+  // Pending Ride Acceptance State
+  const [pendingRide, setPendingRide] = useState<PendingRide | null>(null);
+  const [showAcceptModal, setShowAcceptModal] = useState(false);
+  const [acceptingRide, setAcceptingRide] = useState(false);
+  const [decliningRide, setDecliningRide] = useState(false);
+
+  // Location names (reverse geocoded)
+  const [pickupLocationName, setPickupLocationName] = useState<string | null>(null);
+  const [dropLocationName, setDropLocationName] = useState<string | null>(null);
+
+  // Distance and ETA tracking
+  const [distanceToPickup, setDistanceToPickup] = useState<number | null>(null);
+  const [distanceToDestination, setDistanceToDestination] = useState<number | null>(null);
+  const [etaToPickup, setEtaToPickup] = useState<string | null>(null);
+  const [etaToDestination, setEtaToDestination] = useState<string | null>(null);
+  const [waitingForPayment, setWaitingForPayment] = useState(false);
+  const autoCompleteTriggeredRef = useRef(false);
 
   // Ride assignment state
   const [assignedRide, setAssignedRide] = useState<AssignedRide | null>(null);
@@ -373,12 +413,14 @@ export default function DriverLiveMap({
       setAssignedRide(null);
       setDirectionsToPickup(null);
       setDirectionsToDestination(null);
+      setPickupLocationName(null);
+      setDropLocationName(null);
       return;
     }
 
     const assignedRideRef = ref(rtdb, `rides-assigned/${userId}`);
 
-    const unsubscribe = onValue(assignedRideRef, (snapshot) => {
+    const unsubscribe = onValue(assignedRideRef, async (snapshot) => {
       const data = snapshot.val() as AssignedRide | null;
       if (data) {
         console.log("Ride assigned:", data);
@@ -387,15 +429,207 @@ export default function DriverLiveMap({
         setRideStatus(data.status || "MATCHED");
         // Auto-set status to BUSY when assigned
         setStatus("BUSY");
+
+        // Fetch readable location names if not already set
+        if (!pickupLocationName || !dropLocationName) {
+          // Use reverseGeocode after it's defined (call it inline here)
+          try {
+            if (window.google?.maps?.Geocoder) {
+              const geocoder = new google.maps.Geocoder();
+
+              const [pickupRes, dropRes] = await Promise.all([
+                geocoder.geocode({ location: data.pickup }).catch(() => ({ results: [] })),
+                geocoder.geocode({ location: data.drop }).catch(() => ({ results: [] })),
+              ]);
+
+              const getShortName = (results: google.maps.GeocoderResult[]) => {
+                if (!results?.length) return null;
+                const components = results[0].address_components || [];
+                const sublocality = components.find((c) =>
+                  c.types.includes("sublocality"),
+                )?.long_name;
+                const route = components.find((c) => c.types.includes("route"))?.short_name;
+                if (route && sublocality) return `${route}, ${sublocality}`;
+                if (sublocality) return sublocality;
+                return results[0].formatted_address?.split(",").slice(0, 2).join(",") || null;
+              };
+
+              setPickupLocationName(
+                getShortName(pickupRes.results) ||
+                  `${data.pickup.lat.toFixed(4)}, ${data.pickup.lng.toFixed(4)}`,
+              );
+              setDropLocationName(
+                getShortName(dropRes.results) ||
+                  `${data.drop.lat.toFixed(4)}, ${data.drop.lng.toFixed(4)}`,
+              );
+            }
+          } catch (_err) {
+            // Silently ignore geocoding errors
+          }
+        }
       } else {
         setAssignedRide(null);
         setDirectionsToPickup(null);
         setDirectionsToDestination(null);
+        setPickupLocationName(null);
+        setDropLocationName(null);
       }
     });
 
     return () => unsubscribe();
-  }, [isOnline, userId]);
+  }, [isOnline, userId, pickupLocationName, dropLocationName]);
+
+  // Reverse geocode coordinates to a readable landmark name
+  // Falls back to coordinates if Geocoding API is not enabled
+  const reverseGeocode = useCallback(async (lat: number, lng: number): Promise<string> => {
+    const fallback = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+
+    try {
+      // Check if Geocoder is available
+      if (!window.google?.maps?.Geocoder) {
+        return fallback;
+      }
+
+      const geocoder = new google.maps.Geocoder();
+      const response = await geocoder.geocode({ location: { lat, lng } });
+
+      if (response.results && response.results.length > 0) {
+        // Try to get a short, meaningful name from the address components
+        const result = response.results[0];
+        const components = result.address_components || [];
+
+        // Try to find a meaningful landmark
+        const neighborhood = components.find((c) => c.types.includes("neighborhood"))?.long_name;
+        const locality = components.find((c) => c.types.includes("locality"))?.long_name;
+        const sublocality = components.find((c) => c.types.includes("sublocality"))?.long_name;
+        const route = components.find((c) => c.types.includes("route"))?.short_name;
+        const premise = components.find((c) => c.types.includes("premise"))?.long_name;
+
+        // Build a short name prioritizing landmarks
+        if (premise) return premise;
+        if (route && sublocality) return `${route}, ${sublocality}`;
+        if (route && neighborhood) return `${route}, ${neighborhood}`;
+        if (sublocality) return sublocality;
+        if (neighborhood) return neighborhood;
+        if (locality) return locality;
+
+        // Fallback to short formatted address
+        return result.formatted_address?.split(",").slice(0, 2).join(",") || fallback;
+      }
+      return fallback;
+    } catch (_error) {
+      // Silently fail and return coordinates
+      // This handles cases where Geocoding API is not enabled
+      return fallback;
+    }
+  }, []);
+
+  // Listen for PENDING ride requests (driver must accept/decline)
+  useEffect(() => {
+    if (!rtdb || !isOnline) {
+      setPendingRide(null);
+      setShowAcceptModal(false);
+      setPickupLocationName(null);
+      setDropLocationName(null);
+      return;
+    }
+
+    const pendingRideRef = ref(rtdb, `rides-pending/${userId}`);
+
+    const unsubscribe = onValue(pendingRideRef, async (snapshot) => {
+      const data = snapshot.val() as PendingRide | null;
+      if (data && data.status === "PENDING_ACCEPTANCE") {
+        console.log("Pending ride request:", data);
+        setPendingRide(data);
+        setShowAcceptModal(true);
+
+        // Fetch readable location names
+        const [pickupName, dropName] = await Promise.all([
+          reverseGeocode(data.pickup.lat, data.pickup.lng),
+          reverseGeocode(data.drop.lat, data.drop.lng),
+        ]);
+        setPickupLocationName(pickupName);
+        setDropLocationName(dropName);
+      } else {
+        setPendingRide(null);
+        setShowAcceptModal(false);
+        setPickupLocationName(null);
+        setDropLocationName(null);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [isOnline, userId, reverseGeocode]);
+
+  // Handle accepting a pending ride
+  const handleAcceptRide = async () => {
+    if (!pendingRide) return;
+
+    setAcceptingRide(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch(`${backendUrl}/ride/accept`, {
+        body: JSON.stringify({ rideId: pendingRide.rideId }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        console.log("Ride accepted successfully");
+        setShowAcceptModal(false);
+        setPendingRide(null);
+        // The rides-assigned listener will pick up the ride
+      } else {
+        console.error("Failed to accept ride:", data.message);
+        alert(data.message || "Failed to accept ride");
+      }
+    } catch (err) {
+      console.error("Error accepting ride:", err);
+      alert("Error accepting ride. Please try again.");
+    } finally {
+      setAcceptingRide(false);
+    }
+  };
+
+  // Handle declining a pending ride
+  const handleDeclineRide = async () => {
+    if (!pendingRide) return;
+
+    setDecliningRide(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch(`${backendUrl}/ride/decline`, {
+        body: JSON.stringify({ rideId: pendingRide.rideId }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        console.log("Ride declined:", data.message);
+        setShowAcceptModal(false);
+        setPendingRide(null);
+        // Driver returns to AVAILABLE and waits for new rides
+      } else {
+        console.error("Failed to decline ride:", data.message);
+        alert(data.message || "Failed to decline ride");
+      }
+    } catch (err) {
+      console.error("Error declining ride:", err);
+      alert("Error declining ride. Please try again.");
+    } finally {
+      setDecliningRide(false);
+    }
+  };
 
   const [rideStatus, setRideStatus] = useState<"MATCHED" | "IN_PROGRESS" | "COMPLETED">("MATCHED");
 
@@ -454,10 +688,14 @@ export default function DriverLiveMap({
       if (res.ok) {
         setFinishedRideId(assignedRide.rideId); // Track for payment
         setRideStatus("COMPLETED");
+        setWaitingForPayment(true);
         setAssignedRide(null);
         setDirectionsToPickup(null);
         setDirectionsToDestination(null);
-        setStatus("AVAILABLE"); // Reset driver status
+        setDistanceToDestination(null);
+        setEtaToDestination(null);
+        autoCompleteTriggeredRef.current = false;
+        // Driver stays BUSY until payment is confirmed
       } else {
         console.error("Failed to complete ride");
       }
@@ -520,6 +758,110 @@ export default function DriverLiveMap({
       },
     );
   }, [isLoaded, assignedRide, position]);
+
+  // Track distance to pickup and auto-show OTP when driver arrives
+  useEffect(() => {
+    if (!assignedRide || !position || rideStatus !== "MATCHED") return;
+
+    const dist = haversineDistance(
+      position.lat,
+      position.lng,
+      assignedRide.pickup.lat,
+      assignedRide.pickup.lng,
+    );
+    setDistanceToPickup(Math.round(dist));
+
+    // Auto-show OTP modal when within 100m of pickup
+    if (dist <= 100 && !showOtpModal) {
+      setShowOtpModal(true);
+      setOtpInput("");
+    }
+  }, [position, assignedRide, rideStatus, showOtpModal]);
+
+  // Track distance to destination during trip and auto-complete at 100m
+  // biome-ignore lint/correctness/useExhaustiveDependencies: handleCompleteRide is guarded by autoCompleteTriggeredRef
+  useEffect(() => {
+    if (
+      !assignedRide ||
+      !position ||
+      rideStatus !== "IN_PROGRESS" ||
+      autoCompleteTriggeredRef.current
+    )
+      return;
+
+    const dist = haversineDistance(
+      position.lat,
+      position.lng,
+      assignedRide.drop.lat,
+      assignedRide.drop.lng,
+    );
+    setDistanceToDestination(Math.round(dist));
+
+    if (dist <= 100) {
+      console.log("Driver within 100m of destination - Auto-completing trip...");
+      autoCompleteTriggeredRef.current = true;
+      handleCompleteRide();
+    }
+  }, [position, assignedRide, rideStatus]);
+
+  // Update ETA every 10 seconds during ride
+  useEffect(() => {
+    if (!isLoaded || !assignedRide || !position) return;
+
+    if (!directionsServiceRef.current) {
+      directionsServiceRef.current = new google.maps.DirectionsService();
+    }
+
+    const updateEta = () => {
+      if (!directionsServiceRef.current || !assignedRide || !position) return;
+
+      if (rideStatus === "MATCHED") {
+        // ETA: Driver → Pickup
+        directionsServiceRef.current.route(
+          {
+            destination: assignedRide.pickup,
+            origin: { lat: position.lat, lng: position.lng },
+            travelMode: google.maps.TravelMode.DRIVING,
+          },
+          (result, status) => {
+            if (status === google.maps.DirectionsStatus.OK && result) {
+              const leg = result.routes[0]?.legs[0];
+              if (leg?.duration?.text) {
+                setEtaToPickup(leg.duration.text);
+              }
+              setDirectionsToPickup(result);
+            }
+          },
+        );
+      } else if (rideStatus === "IN_PROGRESS") {
+        // ETA: Driver → Destination
+        directionsServiceRef.current.route(
+          {
+            destination: assignedRide.drop,
+            origin: { lat: position.lat, lng: position.lng },
+            travelMode: google.maps.TravelMode.DRIVING,
+          },
+          (result, status) => {
+            if (status === google.maps.DirectionsStatus.OK && result) {
+              const leg = result.routes[0]?.legs[0];
+              if (leg?.duration?.text) {
+                setEtaToDestination(leg.duration.text);
+              }
+              setDirectionsToDestination(result);
+              setDirectionsToPickup(null);
+            }
+          },
+        );
+      }
+    };
+
+    // Initial calculation
+    updateEta();
+
+    // Update every 10 seconds
+    const interval = setInterval(updateEta, 10000);
+    return () => clearInterval(interval);
+  }, [isLoaded, assignedRide, rideStatus, position]);
 
   const formatTime = (seconds: number): string => {
     const hrs = Math.floor(seconds / 3600);
@@ -614,6 +956,7 @@ export default function DriverLiveMap({
       if (data && data.paymentStatus === "PAID") {
         setReceivedAmount(data.paidAmount || 0);
         setShowPaymentPopup(true);
+        setWaitingForPayment(false);
       }
     });
 
@@ -1059,6 +1402,54 @@ export default function DriverLiveMap({
 
           {/* Control Panel */}
           <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+            {/* Waiting for Payment Card */}
+            {waitingForPayment && !showPaymentPopup && (
+              <div
+                style={{
+                  background:
+                    "linear-gradient(135deg, rgba(234, 179, 8, 0.15), rgba(251, 191, 36, 0.1))",
+                  border: "2px solid rgba(234, 179, 8, 0.5)",
+                  borderRadius: "24px",
+                  padding: "24px",
+                  textAlign: "center",
+                }}
+              >
+                <div
+                  style={{
+                    alignItems: "center",
+                    animation: "pulse 2s infinite",
+                    background: "rgba(234, 179, 8, 0.2)",
+                    borderRadius: "50%",
+                    display: "flex",
+                    height: "64px",
+                    justifyContent: "center",
+                    margin: "0 auto 16px",
+                    width: "64px",
+                  }}
+                >
+                  <FaClock style={{ color: "#fbbf24", fontSize: "28px" }} />
+                </div>
+                <h2
+                  style={{ color: "#fbbf24", fontSize: "20px", fontWeight: 700, margin: "0 0 8px" }}
+                >
+                  Waiting for Payment
+                </h2>
+                <p style={{ color: "#94a3b8", fontSize: "14px", margin: "0 0 16px" }}>
+                  Trip completed. Please wait while the rider completes the payment.
+                </p>
+                <div
+                  style={{
+                    animation: "progressBar 3s ease-in-out infinite",
+                    background: "linear-gradient(90deg, #fbbf24, #f59e0b, #fbbf24)",
+                    backgroundSize: "200% 100%",
+                    borderRadius: "4px",
+                    height: "4px",
+                    width: "100%",
+                  }}
+                />
+              </div>
+            )}
+
             {/* Assigned Ride Card - Show when ride is assigned */}
             {assignedRide && (
               <div
@@ -1084,10 +1475,67 @@ export default function DriverLiveMap({
                       {rideStatus === "IN_PROGRESS" ? "Trip in Progress" : "Ride Assigned!"}
                     </h2>
                     <p style={{ color: "#94a3b8", fontSize: "12px", margin: "2px 0 0" }}>
-                      {rideStatus === "IN_PROGRESS" ? "Head to destination" : "Follow local laws"}
+                      {rideStatus === "IN_PROGRESS" ? "Head to destination" : "Navigate to pickup"}
                     </p>
                   </div>
                 </div>
+
+                {/* ETA and Distance Info */}
+                <div
+                  style={{
+                    background: "rgba(15, 23, 42, 0.5)",
+                    borderRadius: "12px",
+                    display: "grid",
+                    gap: "12px",
+                    gridTemplateColumns: "1fr 1fr",
+                    marginBottom: "16px",
+                    padding: "12px",
+                  }}
+                >
+                  <div style={{ textAlign: "center" }}>
+                    <p
+                      style={{
+                        color: "#94a3b8",
+                        fontSize: "11px",
+                        margin: "0 0 4px",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      ETA
+                    </p>
+                    <p style={{ color: "#4ade80", fontSize: "18px", fontWeight: 700, margin: 0 }}>
+                      {rideStatus === "IN_PROGRESS"
+                        ? etaToDestination || "Calculating..."
+                        : etaToPickup || "Calculating..."}
+                    </p>
+                  </div>
+                  <div style={{ textAlign: "center" }}>
+                    <p
+                      style={{
+                        color: "#94a3b8",
+                        fontSize: "11px",
+                        margin: "0 0 4px",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      Distance
+                    </p>
+                    <p style={{ color: "#60a5fa", fontSize: "18px", fontWeight: 700, margin: 0 }}>
+                      {rideStatus === "IN_PROGRESS"
+                        ? distanceToDestination != null
+                          ? distanceToDestination > 1000
+                            ? `${(distanceToDestination / 1000).toFixed(1)} km`
+                            : `${distanceToDestination} m`
+                          : "..."
+                        : distanceToPickup != null
+                          ? distanceToPickup > 1000
+                            ? `${(distanceToPickup / 1000).toFixed(1)} km`
+                            : `${distanceToPickup} m`
+                          : "..."}
+                    </p>
+                  </div>
+                </div>
+
                 <div
                   style={{
                     display: "flex",
@@ -1112,8 +1560,9 @@ export default function DriverLiveMap({
                         textDecoration: rideStatus === "IN_PROGRESS" ? "line-through" : "none",
                       }}
                     >
-                      Pickup: {assignedRide.pickup.lat.toFixed(4)},{" "}
-                      {assignedRide.pickup.lng.toFixed(4)}
+                      Pickup:{" "}
+                      {pickupLocationName ||
+                        `${assignedRide.pickup.lat.toFixed(4)}, ${assignedRide.pickup.lng.toFixed(4)}`}
                     </span>
                   </div>
                   <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
@@ -1126,57 +1575,146 @@ export default function DriverLiveMap({
                       }}
                     />
                     <span style={{ color: "#94a3b8", fontSize: "13px" }}>
-                      Drop: {assignedRide.drop.lat.toFixed(4)}, {assignedRide.drop.lng.toFixed(4)}
+                      Drop:{" "}
+                      {dropLocationName ||
+                        `${assignedRide.drop.lat.toFixed(4)}, ${assignedRide.drop.lng.toFixed(4)}`}
                     </span>
                   </div>
                 </div>
 
                 {rideStatus === "MATCHED" ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleStartRideClick();
-                    }}
-                    style={{
-                      background: "linear-gradient(90deg, #3b82f6, #2563eb)",
-                      border: "none",
-                      borderRadius: "12px",
-                      color: "white",
-                      cursor: "pointer",
-                      display: "flex",
-                      fontSize: "16px",
-                      fontWeight: 600,
-                      gap: "8px",
-                      justifyContent: "center",
-                      padding: "12px",
-                      width: "100%",
-                    }}
-                  >
-                    <FaPlay /> Start Trip
-                  </button>
+                  distanceToPickup != null && distanceToPickup <= 100 ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                      <div
+                        style={{
+                          alignItems: "center",
+                          animation: "pulse 2s infinite",
+                          background: "rgba(34, 197, 94, 0.15)",
+                          border: "1px solid rgba(34, 197, 94, 0.4)",
+                          borderRadius: "12px",
+                          display: "flex",
+                          gap: "8px",
+                          justifyContent: "center",
+                          marginBottom: "4px",
+                          padding: "10px",
+                        }}
+                      >
+                        <FaCheckCircle style={{ color: "#4ade80" }} />
+                        <span style={{ color: "#4ade80", fontSize: "14px", fontWeight: 600 }}>
+                          You have arrived at pickup!
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleStartRideClick();
+                        }}
+                        style={{
+                          background: "linear-gradient(90deg, #3b82f6, #2563eb)",
+                          border: "none",
+                          borderRadius: "12px",
+                          color: "white",
+                          cursor: "pointer",
+                          display: "flex",
+                          fontSize: "16px",
+                          fontWeight: 600,
+                          gap: "8px",
+                          justifyContent: "center",
+                          padding: "12px",
+                          width: "100%",
+                        }}
+                      >
+                        <FaPlay /> Enter OTP to Start Trip
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                      <div
+                        style={{
+                          alignItems: "center",
+                          background: "rgba(59, 130, 246, 0.1)",
+                          border: "1px solid rgba(59, 130, 246, 0.3)",
+                          borderRadius: "12px",
+                          display: "flex",
+                          gap: "8px",
+                          justifyContent: "center",
+                          padding: "10px",
+                        }}
+                      >
+                        <FaCar style={{ color: "#60a5fa" }} />
+                        <span style={{ color: "#60a5fa", fontSize: "14px", fontWeight: 600 }}>
+                          Navigating to Pickup...
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleStartRideClick();
+                        }}
+                        style={{
+                          background: "rgba(71, 85, 105, 0.5)",
+                          border: "none",
+                          borderRadius: "12px",
+                          color: "#94a3b8",
+                          cursor: "pointer",
+                          display: "flex",
+                          fontSize: "14px",
+                          fontWeight: 600,
+                          gap: "8px",
+                          justifyContent: "center",
+                          padding: "12px",
+                          width: "100%",
+                        }}
+                      >
+                        <FaPlay /> Enter OTP (at pickup)
+                      </button>
+                    </div>
+                  )
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleCompleteRide();
-                    }}
-                    style={{
-                      background: "linear-gradient(90deg, #22c55e, #16a34a)",
-                      border: "none",
-                      borderRadius: "12px",
-                      color: "white",
-                      cursor: "pointer",
-                      display: "flex",
-                      fontSize: "16px",
-                      fontWeight: 600,
-                      gap: "8px",
-                      justifyContent: "center",
-                      padding: "12px",
-                      width: "100%",
-                    }}
-                  >
-                    <FaFlagCheckered /> Complete Trip
-                  </button>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                    {distanceToDestination != null && distanceToDestination <= 200 && (
+                      <div
+                        style={{
+                          alignItems: "center",
+                          animation: "pulse 2s infinite",
+                          background: "rgba(34, 197, 94, 0.15)",
+                          border: "1px solid rgba(34, 197, 94, 0.4)",
+                          borderRadius: "12px",
+                          display: "flex",
+                          gap: "8px",
+                          justifyContent: "center",
+                          padding: "10px",
+                        }}
+                      >
+                        <FaFlagCheckered style={{ color: "#4ade80" }} />
+                        <span style={{ color: "#4ade80", fontSize: "14px", fontWeight: 600 }}>
+                          Approaching destination!
+                        </span>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleCompleteRide();
+                      }}
+                      style={{
+                        background: "linear-gradient(90deg, #22c55e, #16a34a)",
+                        border: "none",
+                        borderRadius: "12px",
+                        color: "white",
+                        cursor: "pointer",
+                        display: "flex",
+                        fontSize: "16px",
+                        fontWeight: 600,
+                        gap: "8px",
+                        justifyContent: "center",
+                        padding: "12px",
+                        width: "100%",
+                      }}
+                    >
+                      <FaFlagCheckered /> Complete Trip
+                    </button>
+                  </div>
                 )}
               </div>
             )}
@@ -1558,6 +2096,196 @@ export default function DriverLiveMap({
         </div>
       </main>
 
+      {/* Ride Acceptance Modal */}
+      {showAcceptModal && pendingRide && (
+        <div
+          style={{
+            alignItems: "center",
+            backdropFilter: "blur(8px)",
+            backgroundColor: "rgba(0, 0, 0, 0.8)",
+            bottom: 0,
+            display: "flex",
+            justifyContent: "center",
+            left: 0,
+            position: "fixed",
+            right: 0,
+            top: 0,
+            zIndex: 1100,
+          }}
+        >
+          <div
+            style={{
+              background: "rgba(30, 41, 59, 0.98)",
+              border: "2px solid rgba(59, 130, 246, 0.5)",
+              borderRadius: "24px",
+              boxShadow: "0 25px 50px -12px rgba(59, 130, 246, 0.3)",
+              maxWidth: "420px",
+              padding: "32px",
+              width: "90%",
+            }}
+          >
+            <div
+              style={{
+                alignItems: "center",
+                display: "flex",
+                gap: "16px",
+                marginBottom: "24px",
+              }}
+            >
+              <div
+                style={{
+                  alignItems: "center",
+                  background: "linear-gradient(135deg, #3b82f6, #2563eb)",
+                  borderRadius: "50%",
+                  display: "flex",
+                  height: "56px",
+                  justifyContent: "center",
+                  width: "56px",
+                }}
+              >
+                <FaCar style={{ color: "white", fontSize: "24px" }} />
+              </div>
+              <div>
+                <h2 style={{ color: "white", fontSize: "22px", fontWeight: 700, margin: 0 }}>
+                  New Ride Request
+                </h2>
+                <p style={{ color: "#94a3b8", fontSize: "14px", margin: "4px 0 0" }}>
+                  A rider is waiting for you
+                </p>
+              </div>
+            </div>
+
+            <div
+              style={{
+                background: "rgba(15, 23, 42, 0.6)",
+                borderRadius: "16px",
+                marginBottom: "24px",
+                padding: "20px",
+              }}
+            >
+              <div style={{ marginBottom: "16px" }}>
+                <div
+                  style={{
+                    alignItems: "center",
+                    display: "flex",
+                    gap: "10px",
+                    marginBottom: "8px",
+                  }}
+                >
+                  <div
+                    style={{
+                      background: "#3b82f6",
+                      borderRadius: "50%",
+                      height: "12px",
+                      width: "12px",
+                    }}
+                  />
+                  <span style={{ color: "#94a3b8", fontSize: "13px", fontWeight: 500 }}>
+                    PICKUP
+                  </span>
+                </div>
+                <p style={{ color: "#e2e8f0", fontSize: "15px", margin: 0, paddingLeft: "22px" }}>
+                  {pickupLocationName ||
+                    `${pendingRide.pickup.lat.toFixed(4)}, ${pendingRide.pickup.lng.toFixed(4)}`}
+                </p>
+              </div>
+
+              <div>
+                <div
+                  style={{
+                    alignItems: "center",
+                    display: "flex",
+                    gap: "10px",
+                    marginBottom: "8px",
+                  }}
+                >
+                  <div
+                    style={{
+                      background: "#22c55e",
+                      borderRadius: "50%",
+                      height: "12px",
+                      width: "12px",
+                    }}
+                  />
+                  <span style={{ color: "#94a3b8", fontSize: "13px", fontWeight: 500 }}>
+                    DROP-OFF
+                  </span>
+                </div>
+                <p style={{ color: "#e2e8f0", fontSize: "15px", margin: 0, paddingLeft: "22px" }}>
+                  {dropLocationName ||
+                    `${pendingRide.drop.lat.toFixed(4)}, ${pendingRide.drop.lng.toFixed(4)}`}
+                </p>
+              </div>
+
+              {pendingRide.fare && (
+                <div
+                  style={{
+                    borderTop: "1px solid rgba(71, 85, 105, 0.5)",
+                    marginTop: "16px",
+                    paddingTop: "16px",
+                  }}
+                >
+                  <div
+                    style={{
+                      alignItems: "center",
+                      display: "flex",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <span style={{ color: "#94a3b8", fontSize: "14px" }}>Estimated Fare</span>
+                    <span style={{ color: "#22c55e", fontSize: "20px", fontWeight: 700 }}>
+                      ₹{pendingRide.fare}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: "flex", gap: "12px" }}>
+              <button
+                type="button"
+                onClick={handleDeclineRide}
+                disabled={decliningRide || acceptingRide}
+                style={{
+                  background: "rgba(239, 68, 68, 0.15)",
+                  border: "1px solid rgba(239, 68, 68, 0.5)",
+                  borderRadius: "12px",
+                  color: "#f87171",
+                  cursor: decliningRide || acceptingRide ? "not-allowed" : "pointer",
+                  flex: 1,
+                  fontSize: "16px",
+                  fontWeight: 600,
+                  opacity: decliningRide || acceptingRide ? 0.7 : 1,
+                  padding: "14px",
+                }}
+              >
+                {decliningRide ? "Declining..." : "Decline"}
+              </button>
+              <button
+                type="button"
+                onClick={handleAcceptRide}
+                disabled={acceptingRide || decliningRide}
+                style={{
+                  background: "linear-gradient(90deg, #22c55e, #16a34a)",
+                  border: "none",
+                  borderRadius: "12px",
+                  boxShadow: "0 8px 20px -4px rgba(34, 197, 94, 0.4)",
+                  color: "white",
+                  cursor: acceptingRide || decliningRide ? "not-allowed" : "pointer",
+                  flex: 1,
+                  fontSize: "16px",
+                  fontWeight: 600,
+                  opacity: acceptingRide || decliningRide ? 0.7 : 1,
+                  padding: "14px",
+                }}
+              >
+                {acceptingRide ? "Accepting..." : "Accept Ride"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* OTP Modal */}
       {showOtpModal && (
         <div
@@ -1677,7 +2405,7 @@ export default function DriverLiveMap({
           style={{
             alignItems: "center",
             backdropFilter: "blur(8px)",
-            backgroundColor: "rgba(0, 0, 0, 0.8)",
+            backgroundColor: "rgba(0, 0, 0, 0.85)",
             bottom: 0,
             display: "flex",
             justifyContent: "center",
@@ -1691,68 +2419,140 @@ export default function DriverLiveMap({
           <div
             style={{
               alignItems: "center",
-              background: "rgba(30, 41, 59, 0.95)",
-              border: "1px solid rgba(34, 197, 94, 0.5)",
-              borderRadius: "24px",
-              boxShadow: "0 25px 50px -12px rgba(34, 197, 94, 0.25)",
+              animation: "popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)",
+              background: "linear-gradient(135deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.98))",
+              border: "2px solid rgba(34, 197, 94, 0.5)",
+              borderRadius: "28px",
+              boxShadow: "0 30px 60px -12px rgba(34, 197, 94, 0.3)",
               display: "flex",
               flexDirection: "column",
-              maxWidth: "400px",
-              padding: "40px",
+              maxWidth: "420px",
+              padding: "48px 40px",
+              position: "relative",
               textAlign: "center",
               width: "90%",
             }}
           >
+            {/* Success checkmark with animation */}
             <div
               style={{
                 alignItems: "center",
-                background: "rgba(34, 197, 94, 0.2)",
+                animation: "successPop 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55)",
+                background: "linear-gradient(135deg, #22c55e, #10b981)",
                 borderRadius: "50%",
+                boxShadow: "0 0 40px rgba(34, 197, 94, 0.4)",
                 display: "flex",
-                height: "96px",
+                height: "100px",
                 justifyContent: "center",
                 marginBottom: "24px",
-                width: "96px",
+                position: "relative",
+                width: "100px",
               }}
             >
-              <FaCheckCircle style={{ color: "#22c55e", fontSize: "48px" }} />
+              <div
+                style={{
+                  animation: "successRipple 1.5s ease-out infinite",
+                  border: "3px solid rgba(34, 197, 94, 0.5)",
+                  borderRadius: "50%",
+                  height: "100%",
+                  left: 0,
+                  position: "absolute",
+                  top: 0,
+                  width: "100%",
+                }}
+              />
+              <FaCheckCircle style={{ color: "white", fontSize: "48px" }} />
             </div>
 
             <h2
-              style={{ color: "white", fontSize: "24px", fontWeight: "bold", margin: "0 0 16px" }}
+              style={{
+                animation: "fadeIn 0.5s ease-out 0.2s forwards",
+                color: "#22c55e",
+                fontSize: "26px",
+                fontWeight: 700,
+                margin: "0 0 8px",
+                opacity: 0,
+              }}
             >
-              Payment Received
+              Payment Received!
             </h2>
 
-            <p style={{ color: "#94a3b8", fontSize: "16px", margin: "0 0 8px" }}>Amount Paid</p>
-
             <p
-              style={{ color: "#ffffff", fontSize: "36px", fontWeight: "bold", margin: "0 0 32px" }}
+              style={{
+                animation: "fadeIn 0.5s ease-out 0.4s forwards",
+                color: "#94a3b8",
+                fontSize: "15px",
+                margin: "0 0 24px",
+                opacity: 0,
+              }}
             >
-              ₹{receivedAmount}
+              Ride completed successfully
             </p>
+
+            <div
+              style={{
+                animation: "fadeIn 0.5s ease-out 0.5s forwards",
+                background: "rgba(34, 197, 94, 0.1)",
+                border: "1px solid rgba(34, 197, 94, 0.3)",
+                borderRadius: "16px",
+                marginBottom: "28px",
+                opacity: 0,
+                padding: "20px",
+                width: "100%",
+              }}
+            >
+              <p style={{ color: "#94a3b8", fontSize: "13px", margin: "0 0 4px" }}>Amount Earned</p>
+              <p style={{ color: "#4ade80", fontSize: "40px", fontWeight: 800, margin: 0 }}>
+                ₹{receivedAmount}
+              </p>
+            </div>
+
+            <div
+              style={{
+                alignItems: "center",
+                animation: "fadeIn 0.5s ease-out 0.6s forwards",
+                background: "rgba(34, 197, 94, 0.08)",
+                borderRadius: "12px",
+                display: "flex",
+                gap: "8px",
+                justifyContent: "center",
+                marginBottom: "24px",
+                opacity: 0,
+                padding: "12px",
+                width: "100%",
+              }}
+            >
+              <FaLeaf style={{ color: "#4ade80" }} />
+              <span style={{ color: "#4ade80", fontSize: "13px" }}>
+                Thank you for driving green with Eco-Ride!
+              </span>
+            </div>
 
             <button
               type="button"
               onClick={() => {
                 setShowPaymentPopup(false);
                 setFinishedRideId(null);
+                setWaitingForPayment(false);
+                setStatus("AVAILABLE");
               }}
               style={{
-                background: "linear-gradient(90deg, #22c55e, #16a34a)",
+                animation: "fadeIn 0.5s ease-out 0.7s forwards",
+                background: "linear-gradient(135deg, #22c55e, #10b981)",
                 border: "none",
                 borderRadius: "16px",
                 boxShadow: "0 10px 25px -5px rgba(34, 197, 94, 0.4)",
                 color: "white",
                 cursor: "pointer",
                 fontSize: "18px",
-                fontWeight: "600",
+                fontWeight: 600,
+                opacity: 0,
                 padding: "16px",
                 transition: "transform 0.2s",
                 width: "100%",
               }}
             >
-              Okay
+              Continue Driving
             </button>
           </div>
         </div>
@@ -1765,6 +2565,28 @@ export default function DriverLiveMap({
         }
         @keyframes spin {
           to { transform: rotate(360deg); }
+        }
+        @keyframes popIn {
+          0% { transform: scale(0.8); opacity: 0; }
+          100% { transform: scale(1); opacity: 1; }
+        }
+        @keyframes successPop {
+          0% { transform: scale(0); }
+          50% { transform: scale(1.2); }
+          100% { transform: scale(1); }
+        }
+        @keyframes successRipple {
+          0% { transform: scale(1); opacity: 1; }
+          100% { transform: scale(1.8); opacity: 0; }
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes progressBar {
+          0% { background-position: 0% 50%; }
+          50% { background-position: 100% 50%; }
+          100% { background-position: 0% 50%; }
         }
       `}</style>
     </div>
