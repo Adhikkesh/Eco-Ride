@@ -7,7 +7,7 @@ import { type Firestore, getFirestore } from "firebase-admin/firestore";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const serviceAccount = path.resolve(__dirname, "../../firebase_credential.json");
+const serviceAccount = path.resolve(__dirname, "../../../server/firebase_credential.json");
 
 let app: App;
 
