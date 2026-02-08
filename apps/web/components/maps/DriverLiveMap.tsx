@@ -565,6 +565,12 @@ export default function DriverLiveMap({
   const handleAcceptRide = async () => {
     if (!pendingRide) return;
 
+    // Check backend URL
+    if (!backendUrl) {
+      alert("System Error: Backend URL configuration missing");
+      return;
+    }
+
     setAcceptingRide(true);
     try {
       const token = await auth.currentUser?.getIdToken();
@@ -577,20 +583,23 @@ export default function DriverLiveMap({
         method: "POST",
       });
 
-      const data = await res.json();
-
-      if (res.ok && data.success) {
-        console.log("Ride accepted successfully");
-        setShowAcceptModal(false);
-        setPendingRide(null);
-        // The rides-assigned listener will pick up the ride
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          console.log("Ride accepted successfully");
+          setShowAcceptModal(false);
+          setPendingRide(null);
+          // The rides-assigned listener will pick up the ride
+        } else {
+          console.error("Failed to accept ride:", data.message);
+          alert(data.message || "Failed to accept ride");
+        }
       } else {
-        console.error("Failed to accept ride:", data.message);
-        alert(data.message || "Failed to accept ride");
+        throw new Error(`Server returned ${res.status}`);
       }
     } catch (err) {
       console.error("Error accepting ride:", err);
-      alert("Error accepting ride. Please try again.");
+      alert("Network error: Could not connect to server. Please check your connection.");
     } finally {
       setAcceptingRide(false);
     }
@@ -599,6 +608,11 @@ export default function DriverLiveMap({
   // Handle declining a pending ride
   const handleDeclineRide = async () => {
     if (!pendingRide) return;
+
+    if (!backendUrl) {
+      alert("System Error: Backend URL configuration missing");
+      return;
+    }
 
     setDecliningRide(true);
     try {
@@ -612,20 +626,24 @@ export default function DriverLiveMap({
         method: "POST",
       });
 
-      const data = await res.json();
-
-      if (res.ok && data.success) {
-        console.log("Ride declined:", data.message);
-        setShowAcceptModal(false);
-        setPendingRide(null);
-        // Driver returns to AVAILABLE and waits for new rides
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          console.log("Ride declined:", data.message);
+          setShowAcceptModal(false);
+          setPendingRide(null);
+          // Driver returns to AVAILABLE and waits for new rides
+        } else {
+          console.error("Failed to decline ride:", data.message);
+          alert(data.message || "Failed to decline ride");
+        }
       } else {
-        console.error("Failed to decline ride:", data.message);
-        alert(data.message || "Failed to decline ride");
+        throw new Error(`Server returned ${res.status}`);
       }
     } catch (err) {
       console.error("Error declining ride:", err);
-      alert("Error declining ride. Please try again.");
+      // Don't alert on decline error to be less intrusive, but log it
+      // alert("Network error: Could not decline ride.");
     } finally {
       setDecliningRide(false);
     }
@@ -644,6 +662,11 @@ export default function DriverLiveMap({
       return;
     }
 
+    if (!backendUrl) {
+      alert("System Error: Backend URL configuration missing");
+      return;
+    }
+
     setSubmittingOtp(true);
     try {
       const token = await auth.currentUser?.getIdToken();
@@ -656,18 +679,21 @@ export default function DriverLiveMap({
         method: "POST",
       });
 
-      const data = await res.json();
-
-      if (res.ok && data.success) {
-        setRideStatus("IN_PROGRESS");
-        setShowOtpModal(false);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setRideStatus("IN_PROGRESS");
+          setShowOtpModal(false);
+        } else {
+          console.error("Failed to start ride:", data.message);
+          alert(data.message || "Failed to start ride. Check OTP.");
+        }
       } else {
-        console.error("Failed to start ride:", data.message);
-        alert(data.message || "Failed to start ride. Check OTP.");
+        throw new Error(`Server returned ${res.status}`);
       }
     } catch (err) {
       console.error("Error starting ride:", err);
-      alert("Error starting ride. Please try again.");
+      alert("Network error: Could not start ride. Please try again.");
     } finally {
       setSubmittingOtp(false);
     }
@@ -675,6 +701,13 @@ export default function DriverLiveMap({
 
   const handleCompleteRide = async () => {
     if (!assignedRide) return;
+
+    if (!backendUrl) {
+      // Silent fail or minimal alert
+      console.error("Backend URL missing");
+      return;
+    }
+
     try {
       const token = await auth.currentUser?.getIdToken();
       const res = await fetch(`${backendUrl}/ride/complete`, {
@@ -698,9 +731,11 @@ export default function DriverLiveMap({
         // Driver stays BUSY until payment is confirmed
       } else {
         console.error("Failed to complete ride");
+        // Optional: alert user
       }
     } catch (err) {
       console.error("Error completing ride:", err);
+      // Optional: alert user
     }
   };
 
