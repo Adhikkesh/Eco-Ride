@@ -186,6 +186,17 @@ export const requestRide = async (req: Request, res: Response) => {
       console.error("Error fetching driver name:", err);
     }
 
+    // Fetch rider name for OTP display
+    let riderName = "Rider";
+    try {
+      const riderDoc = await db.collection("users").doc(riderId).get();
+      if (riderDoc.exists) {
+        riderName = riderDoc.data()?.name || "Rider";
+      }
+    } catch (err) {
+      console.error("Error fetching rider name:", err);
+    }
+
     const rideData = {
       createdAt: FieldValue.serverTimestamp(),
       driverId: assignedDriverCandidate.driverId,
@@ -251,6 +262,7 @@ export const requestRide = async (req: Request, res: Response) => {
         pickup: { lat: pickupLat, lng: pickupLng },
         rideId: rideRef.id,
         riderId,
+        riderName,
       });
       scheduledRiders = pooledRiders;
 
@@ -309,6 +321,7 @@ export const requestRide = async (req: Request, res: Response) => {
           pickup: { lat: pickupLat, lng: pickupLng },
           rideId: rideRef.id,
           riderId,
+          riderName,
         },
       ];
 
@@ -506,96 +519,155 @@ export const startRide = async (req: Request, res: Response) => {
  * @description Marks a ride as completed after reaching the destination.
  *              Updates ride status, frees up the driver for new rides,
  *              and syncs completion status to RTDB for frontend listeners.
+ *              Now supports pooled rides - completes all pooled rides together.
  * @route POST /ride/complete
  * @param {Object} req.body - Request body
- * @param {string} req.body.rideId - The unique identifier of the ride
+ * @param {string} req.body.rideId - The unique identifier of the primary ride
+ * @param {string[]} [req.body.pooledRideIds] - Optional array of additional pooled ride IDs
  * @returns {Object} JSON response with completion status
  */
 export const completeRide = async (req: Request, res: Response) => {
   try {
-    const { rideId } = req.body;
+    const { rideId, pooledRideIds } = req.body;
     if (!rideId) return res.status(400).json({ message: "Missing rideId", success: false });
 
-    const rideRef = db.collection("rides").doc(rideId);
-    const rideDoc = await rideRef.get();
+    // Collect all ride IDs to complete (main + pooled, deduplicated)
+    const allRideIds: string[] = [rideId];
+    if (pooledRideIds && Array.isArray(pooledRideIds)) {
+      pooledRideIds.forEach((id: string) => {
+        if (id && typeof id === "string" && id !== rideId && !allRideIds.includes(id)) {
+          allRideIds.push(id);
+        }
+      });
+    }
 
-    if (!rideDoc.exists) return res.status(404).json({ message: "Ride not found", success: false });
+    console.log(`Completing ${allRideIds.length} ride(s):`, allRideIds);
 
-    const rideData = rideDoc.data();
-    const driverId = rideData?.driverId;
-    const riderId = rideData?.riderId;
-    const pickup = rideData?.pickup;
-    const drop = rideData?.drop;
+    // Get the primary ride to extract driver info
+    const primaryRideRef = db.collection("rides").doc(rideId);
+    const primaryRideDoc = await primaryRideRef.get();
 
-    // 1. Update Ride Status
-    await rideRef.update({
-      completedAt: FieldValue.serverTimestamp(),
-      status: "COMPLETED",
-    });
+    if (!primaryRideDoc.exists) {
+      return res.status(404).json({ message: "Primary ride not found", success: false });
+    }
 
-    // 2. Free up the driver
+    const primaryRideData = primaryRideDoc.data();
+    const driverId = primaryRideData?.driverId;
+
+    // Track total green points awarded across all rides
+    let totalGreenPointsAwarded = 0;
+    const completedRides: string[] = [];
+    const failedRides: string[] = [];
+
+    // Process each ride
+    for (const currentRideId of allRideIds) {
+      try {
+        const rideRef = db.collection("rides").doc(currentRideId);
+        const rideDoc = await rideRef.get();
+
+        if (!rideDoc.exists) {
+          console.warn(`Ride ${currentRideId} not found, skipping`);
+          failedRides.push(currentRideId);
+          continue;
+        }
+
+        const rideData = rideDoc.data();
+        const riderId = rideData?.riderId;
+        const pickup = rideData?.pickup;
+        const drop = rideData?.drop;
+
+        // 1. Update Ride Status in Firestore
+        await rideRef.update({
+          completedAt: FieldValue.serverTimestamp(),
+          status: "COMPLETED",
+        });
+
+        // 2. Sync to RTDB for frontend listener (triggers payment modal for this rider)
+        await rtdb.ref(`rides/${currentRideId}`).update({
+          status: "COMPLETED",
+        });
+
+        completedRides.push(currentRideId);
+
+        // 3. Calculate and award green points for this ride
+        if (driverId && riderId && pickup && drop) {
+          try {
+            // Calculate trip distance
+            const distanceKm = geofire.distanceBetween(
+              [pickup.lat, pickup.lng],
+              [drop.lat, drop.lng],
+            );
+
+            // Fetch driver's vehicle info (only once for first ride, reuse for pooled)
+            let vehicleType: VehicleType = "PETROL";
+            let passengerCapacity = 4;
+
+            if (currentRideId === rideId) {
+              // Fetch vehicle info for primary ride
+              const vehicleSnapshot = await db
+                .collection("vehicle")
+                .where("driver_uid", "==", driverId)
+                .limit(1)
+                .get();
+
+              if (!vehicleSnapshot.empty) {
+                const vehicleData = vehicleSnapshot.docs[0]?.data();
+                if (vehicleData) {
+                  vehicleType = (vehicleData.vehicle_type as VehicleType) || "PETROL";
+                  passengerCapacity = vehicleData.passenger_capacity || 4;
+                }
+              }
+            }
+
+            // Calculate green points (pooled rides get bonus for sharing)
+            const basePoints = calculateGreenPoints(vehicleType, passengerCapacity, distanceKm);
+            const poolingBonus = allRideIds.length > 1 ? Math.ceil(basePoints * 0.2) : 0; // 20% bonus for pooling
+            const greenPointsForRide = basePoints + poolingBonus;
+
+            // Award points to both rider and driver
+            if (greenPointsForRide > 0) {
+              const batch = db.batch();
+              batch.update(db.collection("users").doc(riderId), {
+                green_points: FieldValue.increment(greenPointsForRide),
+              });
+              // Driver only gets points once (on primary ride) to avoid double-counting
+              if (currentRideId === rideId) {
+                batch.update(db.collection("users").doc(driverId), {
+                  green_points: FieldValue.increment(greenPointsForRide),
+                });
+              }
+              await batch.commit();
+
+              totalGreenPointsAwarded += greenPointsForRide;
+              console.log(
+                `Green points awarded: ${greenPointsForRide} to rider ${riderId}${currentRideId === rideId ? ` and driver ${driverId}` : ""}`,
+              );
+            }
+          } catch (gpError) {
+            // Log error but don't fail the ride completion
+            console.error(
+              `Error calculating/awarding green points for ride ${currentRideId}:`,
+              gpError,
+            );
+          }
+        }
+      } catch (rideError) {
+        console.error(`Error completing ride ${currentRideId}:`, rideError);
+        failedRides.push(currentRideId);
+      }
+    }
+
+    // 4. Free up the driver (only after all rides are processed)
     if (driverId) {
       await rtdb.ref(`rides-assigned/${driverId}`).remove();
       await rtdb.ref(`drivers-online/${driverId}`).update({ status: "AVAILABLE" });
     }
 
-    // 3. Sync to RTDB for frontend listener
-    await rtdb.ref(`rides/${rideId}`).update({
-      status: "COMPLETED",
-    });
-
-    // 4. Calculate and award green points
-    let greenPointsAwarded = 0;
-    if (driverId && riderId && pickup && drop) {
-      try {
-        // Calculate trip distance
-        const distanceKm = geofire.distanceBetween([pickup.lat, pickup.lng], [drop.lat, drop.lng]);
-
-        // Fetch driver's vehicle info
-        const vehicleSnapshot = await db
-          .collection("vehicle")
-          .where("driver_uid", "==", driverId)
-          .limit(1)
-          .get();
-
-        let vehicleType: VehicleType = "PETROL"; // Default
-        let passengerCapacity = 4; // Default
-
-        if (!vehicleSnapshot.empty) {
-          const vehicleData = vehicleSnapshot.docs[0]?.data();
-          if (vehicleData) {
-            vehicleType = (vehicleData.vehicle_type as VehicleType) || "PETROL";
-            passengerCapacity = vehicleData.passenger_capacity || 4;
-          }
-        }
-
-        // Calculate green points
-        greenPointsAwarded = calculateGreenPoints(vehicleType, passengerCapacity, distanceKm);
-
-        // Award points to both rider and driver
-        if (greenPointsAwarded > 0) {
-          const batch = db.batch();
-          batch.update(db.collection("users").doc(riderId), {
-            green_points: FieldValue.increment(greenPointsAwarded),
-          });
-          batch.update(db.collection("users").doc(driverId), {
-            green_points: FieldValue.increment(greenPointsAwarded),
-          });
-          await batch.commit();
-
-          console.log(
-            `Green points awarded: ${greenPointsAwarded} to rider ${riderId} and driver ${driverId}`,
-          );
-        }
-      } catch (gpError) {
-        // Log error but don't fail the ride completion
-        console.error("Error calculating/awarding green points:", gpError);
-      }
-    }
-
     return res.status(200).json({
-      greenPointsAwarded,
-      message: "Ride completed",
+      completedRides,
+      failedRides,
+      greenPointsAwarded: totalGreenPointsAwarded,
+      message: `Completed ${completedRides.length} ride(s)${failedRides.length > 0 ? `, ${failedRides.length} failed` : ""}`,
       success: true,
     });
   } catch (error) {
