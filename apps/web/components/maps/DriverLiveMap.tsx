@@ -595,11 +595,14 @@ export default function DriverLiveMap({
           alert(data.message || "Failed to accept ride");
         }
       } else {
-        throw new Error(`Server returned ${res.status}`);
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.message || `Server returned ${res.status}`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error accepting ride:", err);
-      alert("Network error: Could not connect to server. Please check your connection.");
+      alert(
+        err.message || "Network error: Could not connect to server. Please check your connection.",
+      );
     } finally {
       setAcceptingRide(false);
     }
@@ -638,12 +641,12 @@ export default function DriverLiveMap({
           alert(data.message || "Failed to decline ride");
         }
       } else {
-        throw new Error(`Server returned ${res.status}`);
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.message || `Server returned ${res.status}`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error declining ride:", err);
-      // Don't alert on decline error to be less intrusive, but log it
-      // alert("Network error: Could not decline ride.");
+      alert(err.message || "Network error: Could not decline ride.");
     } finally {
       setDecliningRide(false);
     }
@@ -689,11 +692,12 @@ export default function DriverLiveMap({
           alert(data.message || "Failed to start ride. Check OTP.");
         }
       } else {
-        throw new Error(`Server returned ${res.status}`);
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.message || `Server returned ${res.status}`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error starting ride:", err);
-      alert("Network error: Could not start ride. Please try again.");
+      alert(err.message || "Network error: Could not start ride. Please try again.");
     } finally {
       setSubmittingOtp(false);
     }
@@ -730,12 +734,13 @@ export default function DriverLiveMap({
         autoCompleteTriggeredRef.current = false;
         // Driver stays BUSY until payment is confirmed
       } else {
-        console.error("Failed to complete ride");
-        // Optional: alert user
+        const errorData = await res.json().catch(() => ({}));
+        console.error("Failed to complete ride:", errorData.message);
+        alert(errorData.message || `Failed to complete ride (Status: ${res.status})`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error completing ride:", err);
-      // Optional: alert user
+      alert(err.message || "Network error while completing ride");
     }
   };
 
