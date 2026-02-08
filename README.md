@@ -48,7 +48,7 @@ To install the project, you should clone the repository and install the dependen
 
 1.  **Clone the repository:**
     ```bash
-    git clone <repository-url>
+    git clone https://github.com/Adhikkesh/Eco-Ride.git
     cd Eco-Ride
     ```
 
