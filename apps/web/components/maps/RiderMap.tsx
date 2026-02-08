@@ -55,6 +55,7 @@ interface DriverMarker extends DriverLocation {
   id: string;
   animatedLat?: number;
   animatedLng?: number;
+  animatedHeading?: number; // For smooth rotation
 }
 
 interface UserStats {
@@ -67,18 +68,6 @@ interface UserStats {
 interface UserData {
   green_points?: number;
   trust_score?: number;
-}
-
-interface RideResponse {
-  success: boolean;
-  message: string;
-  rideId?: string;
-  driverId?: string;
-  driverName?: string;
-  driverLocation?: { lat: number; lng: number };
-  distance?: number;
-  eta?: string;
-  otp?: string;
 }
 
 // Saved locations types
@@ -96,7 +85,7 @@ interface SavedLocations {
 
 type LocationType = "home" | "work" | "favourite";
 
-type RideStatus = "idle" | "searching" | "matched" | "on_trip" | "error";
+type RideStatus = "idle" | "searching" | "pending_acceptance" | "matched" | "on_trip" | "error";
 
 const libraries: Libraries = ["places"];
 
@@ -223,6 +212,37 @@ const defaultCenter = {
   lng: 76.9558,
 };
 
+// Helper function to create rotated car icon SVG
+const createRotatedCarIcon = (
+  heading: number,
+  color: string = "#22c55e",
+  size: number = 45,
+): string => {
+  // Car SVG that points upward (north) by default
+  const carSvg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24">
+      <g transform="rotate(${heading}, 12, 12)">
+        <path fill="${color}" d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/>
+      </g>
+    </svg>
+  `;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(carSvg)}`;
+};
+
+// Haversine formula to calculate distance between two coordinates in meters
+const haversineDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
+  const R = 6371e3; // Earth radius in meters
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+  const Δλ = ((lng2 - lng1) * Math.PI) / 180;
+
+  const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c; // Distance in meters
+};
+
 // ---------------------------------------------------------
 // Component
 // ---------------------------------------------------------
@@ -269,8 +289,10 @@ export default function RiderMap({
     lng: number;
   } | null>(null);
   const [eta, setEta] = useState<string | null>(null);
-  const [otp, setOtp] = useState<string | null>(null); // New OTP state
+  const [otp, setOtp] = useState<string | null>(null); // OTP state - fetched at 100m proximity
   const [showOtpModal, setShowOtpModal] = useState(false); // Modal visibility state
+  const [_otpAvailable, setOtpAvailable] = useState(false); // Whether driver is within 100m
+  const [_distanceToPickup, setDistanceToPickup] = useState<number | null>(null); // Distance in meters
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   // Color-coded routes: blue for driver->pickup, green for pickup->destination
   const [directionsToPickup, setDirectionsToPickup] = useState<google.maps.DirectionsResult | null>(
@@ -288,6 +310,10 @@ export default function RiderMap({
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentAmount, setPaymentAmount] = useState<number>(0);
   const [showPayment, setShowPayment] = useState(false);
+
+  // Auto-complete trip state
+  const [dropOffLocation, setDropOffLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const autoCompleteTriggeredRef = useRef(false);
 
   // Estimation State
   const { getEstimate, estimate, loading: estimating, clearEstimate } = useTripEstimator();
@@ -553,6 +579,9 @@ export default function RiderMap({
     setSearchDestination("");
     setManualPickupMode(false);
     setErrorMessage(null);
+    setDropOffLocation(null);
+    setDecodedPolyline([]);
+    autoCompleteTriggeredRef.current = false;
 
     // Nice success message could go here or in the modal close
     // alert("Payment Successful! Thank you for riding with EcoRide.");
@@ -574,10 +603,15 @@ export default function RiderMap({
           // Trip Completed Logic - Trigger Payment
           console.log("Trip completed. Initializing payment...");
 
+          // Clear route lines from the map
+          setDirectionsToPickup(null);
+          setDirectionsToDestination(null);
+          setDecodedPolyline([]);
+
           // Fetch payment intent
           const user = auth?.currentUser;
           if (user) {
-            user.getIdToken().then((token) => {
+            user.getIdToken().then((token: string) => {
               fetch(`${backendUrl}/payment/create-intent`, {
                 body: JSON.stringify({ rideId }),
                 headers: {
@@ -674,9 +708,10 @@ export default function RiderMap({
     };
   }, []);
 
-  // Listen to assigned driver location updates
+  // Listen to assigned driver location updates (for both matched and on_trip status)
   useEffect(() => {
-    if (!rtdb || !assignedDriverId || rideStatus !== "matched") return;
+    if (!rtdb || !assignedDriverId || (rideStatus !== "matched" && rideStatus !== "on_trip"))
+      return;
 
     const driverRef = ref(rtdb, `drivers-online/${assignedDriverId}`);
 
@@ -690,6 +725,136 @@ export default function RiderMap({
     return () => unsubscribe();
   }, [assignedDriverId, rideStatus]);
 
+  // Listen for ride status updates from RTDB (e.g., driver accepts, trip starts)
+  useEffect(() => {
+    if (!rtdb || !rideId) return;
+
+    const rideRef = ref(rtdb, `rides/${rideId}`);
+
+    const unsubscribe = onValue(rideRef, (snapshot) => {
+      const data = snapshot.val();
+      if (!data) return;
+
+      // Update ride status based on RTDB updates
+      if (data.status === "MATCHED" && rideStatus === "pending_acceptance") {
+        console.log("Driver accepted the ride!");
+        setRideStatus("matched");
+      } else if (data.status === "IN_PROGRESS" && rideStatus === "matched") {
+        console.log("Trip started!");
+        setRideStatus("on_trip");
+      } else if (data.status === "SEARCHING" && rideStatus === "pending_acceptance") {
+        // Driver declined, system is re-matching
+        console.log("Driver declined, searching for new driver...");
+        setErrorMessage("Driver unavailable. Finding another driver...");
+      } else if (data.status === "NO_DRIVERS") {
+        setRideStatus("error");
+        setErrorMessage("No drivers available. Please try again.");
+      }
+    });
+
+    return () => unsubscribe();
+  }, [rideId, rideStatus]);
+
+  // Poll for OTP when matched (available at 100m proximity)
+  useEffect(() => {
+    if (rideStatus !== "matched" || !rideId) return;
+
+    // Polling function to check OTP availability
+    const checkOtpAvailability = async () => {
+      try {
+        const user = auth?.currentUser;
+        if (!user) return;
+
+        const token = await user.getIdToken();
+        const response = await fetch(`${backendUrl}/ride/otp/${rideId}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        const data = await response.json();
+        if (data.success) {
+          setDistanceToPickup(data.distanceToPickup || null);
+
+          if (data.otpAvailable && data.otp) {
+            setOtp(data.otp);
+            setOtpAvailable(true);
+            setShowOtpModal(true);
+          } else {
+            setOtpAvailable(false);
+          }
+        }
+      } catch (error) {
+        console.error("Error checking OTP availability:", error);
+      }
+    };
+
+    // Check immediately and then poll every 5 seconds
+    checkOtpAvailability();
+    const pollInterval = setInterval(checkOtpAvailability, 5000);
+
+    return () => clearInterval(pollInterval);
+  }, [rideStatus, rideId]);
+
+  // Auto-complete trip when driver reaches within 100m of destination
+  useEffect(() => {
+    if (
+      rideStatus !== "on_trip" ||
+      !assignedDriverLocation ||
+      !dropOffLocation ||
+      !rideId ||
+      autoCompleteTriggeredRef.current
+    ) {
+      return;
+    }
+
+    const distance = haversineDistance(
+      assignedDriverLocation.lat,
+      assignedDriverLocation.lng,
+      dropOffLocation.lat,
+      dropOffLocation.lng,
+    );
+
+    console.log(`Distance to destination: ${distance.toFixed(0)}m`);
+
+    if (distance <= 100) {
+      console.log("Driver within 100m of destination - Auto-completing trip...");
+      autoCompleteTriggeredRef.current = true;
+
+      // Auto-complete the ride
+      const autoCompleteRide = async () => {
+        try {
+          const user = auth?.currentUser;
+          if (!user) return;
+
+          const token = await user.getIdToken();
+          const response = await fetch(`${backendUrl}/ride/complete`, {
+            body: JSON.stringify({ rideId }),
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            method: "POST",
+          });
+
+          const data = await response.json();
+          if (data.success) {
+            console.log("Trip auto-completed successfully!");
+            // The RTDB listener will handle showing the payment modal
+          } else {
+            console.error("Failed to auto-complete trip:", data.message);
+            autoCompleteTriggeredRef.current = false; // Allow retry
+          }
+        } catch (error) {
+          console.error("Error auto-completing trip:", error);
+          autoCompleteTriggeredRef.current = false; // Allow retry
+        }
+      };
+
+      autoCompleteRide();
+    }
+  }, [assignedDriverLocation, dropOffLocation, rideStatus, rideId]);
+
   // Calculate and update route when driver location or destination changes
   useEffect(() => {
     if (!isLoaded || (!assignedDriverLocation && !currentLocation) || !selectedDestination) {
@@ -702,8 +867,26 @@ export default function RiderMap({
 
     const pickup = pickupLocation || currentLocation;
 
-    // CASE 1: MATCHED (Driver coming to pickup)
-    if (rideStatus === "matched" && assignedDriverLocation && pickup) {
+    // CASE 1: PENDING_ACCEPTANCE (Show pickup -> destination preview while waiting)
+    if (rideStatus === "pending_acceptance" && pickup) {
+      // Just show planned route: Pickup -> Destination
+      directionsServiceRef.current.route(
+        {
+          destination: { lat: selectedDestination.lat, lng: selectedDestination.lng },
+          origin: pickup,
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          if (status === google.maps.DirectionsStatus.OK && result) {
+            setDirectionsToDestination(result);
+            setDirectionsToPickup(null); // No pickup route yet - driver hasn't accepted
+          }
+        },
+      );
+    }
+
+    // CASE 2: MATCHED (Driver coming to pickup)
+    else if (rideStatus === "matched" && assignedDriverLocation && pickup) {
       // Calculate route: Driver -> Pickup
       directionsServiceRef.current.route(
         {
@@ -741,8 +924,17 @@ export default function RiderMap({
       );
     }
 
-    // CASE 2: ON TRIP (Driving to Destination)
+    // CASE 3: ON TRIP (Driving to Destination) - Update every 10s for live ETA
     else if (rideStatus === "on_trip" && assignedDriverLocation) {
+      // Recalculate route every 10 seconds during on_trip for live ETA updates
+      const now = Date.now();
+      const lastDirectionsUpdate = (window as unknown as { lastDirectionsUpdate?: number })
+        .lastDirectionsUpdate;
+      if (lastDirectionsUpdate && now - lastDirectionsUpdate < 10000) {
+        return; // Skip if last update was less than 10 seconds ago
+      }
+      (window as unknown as { lastDirectionsUpdate: number }).lastDirectionsUpdate = now;
+
       // Calculate route: Driver (Current Loc) -> Destination
       directionsServiceRef.current.route(
         {
@@ -764,6 +956,12 @@ export default function RiderMap({
         },
       );
     }
+
+    // CASE 4: IDLE or COMPLETED - Clear all routes
+    else if (rideStatus === "idle") {
+      setDirectionsToDestination(null);
+      setDirectionsToPickup(null);
+    }
   }, [
     isLoaded,
     rideStatus,
@@ -773,34 +971,91 @@ export default function RiderMap({
     selectedDestination,
   ]);
 
-  // Animate driver markers
+  // Animate driver markers with smooth position and heading interpolation
+  // Use a ref to store animated values and only update state at reduced rate
+  const animatedDriversRef = useRef<Map<string, { lat: number; lng: number; heading: number }>>(
+    new Map(),
+  );
+  const lastAnimationUpdateRef = useRef<number>(0);
+
   useEffect(() => {
-    const animate = () => {
-      setDrivers((prevDrivers) => {
-        const updatedDrivers = new Map(prevDrivers);
-        let hasChanges = false;
-
-        updatedDrivers.forEach((driver, id) => {
-          const targetLat = driver.lat;
-          const targetLng = driver.lng;
-          const currentLat = driver.animatedLat ?? driver.lat;
-          const currentLng = driver.animatedLng ?? driver.lng;
-
-          const lerp = 0.15;
-          const newLat = currentLat + (targetLat - currentLat) * lerp;
-          const newLng = currentLng + (targetLng - currentLng) * lerp;
-
-          if (
-            Math.abs(newLat - currentLat) > 0.000001 ||
-            Math.abs(newLng - currentLng) > 0.000001
-          ) {
-            updatedDrivers.set(id, { ...driver, animatedLat: newLat, animatedLng: newLng });
-            hasChanges = true;
-          }
-        });
-
-        return hasChanges ? updatedDrivers : prevDrivers;
+    const animate = (timestamp: number) => {
+      // Initialize animated positions from driver state
+      drivers.forEach((driver, id) => {
+        if (!animatedDriversRef.current.has(id)) {
+          animatedDriversRef.current.set(id, {
+            heading: driver.heading,
+            lat: driver.lat,
+            lng: driver.lng,
+          });
+        }
       });
+
+      // Clean up removed drivers
+      animatedDriversRef.current.forEach((_, id) => {
+        if (!drivers.has(id)) {
+          animatedDriversRef.current.delete(id);
+        }
+      });
+
+      // Interpolate positions in ref (no React state update)
+      let hasSignificantChange = false;
+      animatedDriversRef.current.forEach((animated, id) => {
+        const driver = drivers.get(id);
+        if (!driver) return;
+
+        const targetLat = driver.lat;
+        const targetLng = driver.lng;
+        const targetHeading = driver.heading;
+
+        // Smooth position interpolation
+        const posLerp = 0.12;
+        const newLat = animated.lat + (targetLat - animated.lat) * posLerp;
+        const newLng = animated.lng + (targetLng - animated.lng) * posLerp;
+
+        // Smooth heading interpolation (handle wrap-around)
+        let headingDiff = targetHeading - animated.heading;
+        if (headingDiff > 180) headingDiff -= 360;
+        if (headingDiff < -180) headingDiff += 360;
+        const headingLerp = 0.15;
+        let newHeading = animated.heading + headingDiff * headingLerp;
+        if (newHeading < 0) newHeading += 360;
+        if (newHeading >= 360) newHeading -= 360;
+
+        // Check for significant change
+        if (
+          Math.abs(newLat - animated.lat) > 0.00001 ||
+          Math.abs(newLng - animated.lng) > 0.00001 ||
+          Math.abs(newHeading - animated.heading) > 0.5
+        ) {
+          hasSignificantChange = true;
+        }
+
+        animated.lat = newLat;
+        animated.lng = newLng;
+        animated.heading = newHeading;
+      });
+
+      // Only trigger React state update every 100ms (10 FPS) to reduce re-renders
+      const timeSinceLastUpdate = timestamp - lastAnimationUpdateRef.current;
+      if (hasSignificantChange && timeSinceLastUpdate > 100) {
+        lastAnimationUpdateRef.current = timestamp;
+        setDrivers((prev) => {
+          const updated = new Map(prev);
+          animatedDriversRef.current.forEach((animated, id) => {
+            const driver = prev.get(id);
+            if (driver) {
+              updated.set(id, {
+                ...driver,
+                animatedHeading: animated.heading,
+                animatedLat: animated.lat,
+                animatedLng: animated.lng,
+              });
+            }
+          });
+          return updated;
+        });
+      }
 
       animationFrameRef.current = requestAnimationFrame(animate);
     };
@@ -812,7 +1067,7 @@ export default function RiderMap({
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, []);
+  }, [drivers]);
 
   const onLoad = useCallback((map: google.maps.Map) => {
     mapRef.current = map;
@@ -860,20 +1115,22 @@ export default function RiderMap({
   const onPlaceChanged = useCallback(() => {
     if (autocompleteRef.current) {
       const place = autocompleteRef.current.getPlace();
-      if (place.geometry?.location) {
-        const location = {
-          lat: place.geometry.location.lat(),
-          lng: place.geometry.location.lng(),
-          name: place.name || place.formatted_address || "Selected Location",
-        };
-        setSelectedDestination(location);
-        setSearchDestination(location.name);
+      if (!place || !place.geometry || !place.geometry.location) {
+        console.warn("Place selection did not return valid geometry");
+        return;
+      }
+      const location = {
+        lat: place.geometry.location.lat(),
+        lng: place.geometry.location.lng(),
+        name: place.name || place.formatted_address || "Selected Location",
+      };
+      setSelectedDestination(location);
+      setSearchDestination(location.name);
 
-        // Pan map to selected location
-        if (mapRef.current) {
-          mapRef.current.panTo({ lat: location.lat, lng: location.lng });
-          mapRef.current.setZoom(15);
-        }
+      // Pan map to selected location
+      if (mapRef.current) {
+        mapRef.current.panTo({ lat: location.lat, lng: location.lng });
+        mapRef.current.setZoom(15);
       }
     }
   }, []);
@@ -881,19 +1138,21 @@ export default function RiderMap({
   const onPickupPlaceChanged = useCallback(() => {
     if (pickupAutocompleteRef.current) {
       const place = pickupAutocompleteRef.current.getPlace();
-      if (place.geometry?.location) {
-        const lat = place.geometry.location.lat();
-        const lng = place.geometry.location.lng();
+      if (!place || !place.geometry || !place.geometry.location) {
+        console.warn("Pickup place selection did not return valid geometry");
+        return;
+      }
+      const lat = place.geometry.location.lat();
+      const lng = place.geometry.location.lng();
 
-        setPickupLocation({ lat, lng });
-        setCurrentLocation({ lat, lng });
-        setPickupSearchText(place.name || place.formatted_address || "Selected Location");
+      setPickupLocation({ lat, lng });
+      setCurrentLocation({ lat, lng });
+      setPickupSearchText(place.name || place.formatted_address || "Selected Location");
 
-        // Pan map to selected location
-        if (mapRef.current) {
-          mapRef.current.panTo({ lat, lng });
-          mapRef.current.setZoom(15);
-        }
+      // Pan map to selected location
+      if (mapRef.current) {
+        mapRef.current.panTo({ lat, lng });
+        mapRef.current.setZoom(15);
       }
     }
   }, []);
@@ -941,6 +1200,54 @@ export default function RiderMap({
     setDecodedPolyline([]);
   };
 
+  // Auto-estimate when both pickup and destination are set
+  const prevAutoEstKeyRef = useRef<string>("");
+  useEffect(() => {
+    if (!selectedDestination || rideStatus !== "idle") return;
+
+    const pickup = pickupLocation || currentLocation;
+    if (!pickup) return;
+
+    const key = `${pickup.lat},${pickup.lng}-${selectedDestination.lat},${selectedDestination.lng}`;
+    if (key === prevAutoEstKeyRef.current) return;
+    prevAutoEstKeyRef.current = key;
+
+    // Clear old estimate & auto-calculate
+    clearEstimate();
+    setDecodedPolyline([]);
+
+    const autoEstimate = async () => {
+      const result = await getEstimate(pickup, {
+        lat: selectedDestination.lat,
+        lng: selectedDestination.lng,
+      });
+      if (result?.polyline) {
+        try {
+          const decoded = polylineUtil.decode(result.polyline);
+          const path = decoded.map((p: number[]) => ({ lat: p[0], lng: p[1] }));
+          setDecodedPolyline(path);
+          if (mapRef.current) {
+            const bounds = new google.maps.LatLngBounds();
+            for (const p of path) {
+              bounds.extend(p);
+            }
+            mapRef.current.fitBounds(bounds);
+          }
+        } catch (e) {
+          console.error("Polyline decode error", e);
+        }
+      }
+    };
+    autoEstimate();
+  }, [
+    selectedDestination,
+    pickupLocation,
+    currentLocation,
+    rideStatus,
+    getEstimate,
+    clearEstimate,
+  ]);
+
   const handleFindRide = async () => {
     if (!currentLocation || !selectedDestination) {
       setErrorMessage("Please select a destination first");
@@ -951,6 +1258,10 @@ export default function RiderMap({
     setErrorMessage(null);
     clearEstimate(); // Clear estimate UI when searching starts
     setDecodedPolyline([]);
+    autoCompleteTriggeredRef.current = false; // Reset auto-complete flag
+
+    // Store drop-off location for auto-complete distance calculation
+    setDropOffLocation({ lat: selectedDestination.lat, lng: selectedDestination.lng });
 
     try {
       // Get auth token
@@ -987,19 +1298,32 @@ export default function RiderMap({
         method: "POST",
       });
 
-      const data: RideResponse = await response.json();
+      const data = await response.json();
 
       if (data.success && data.rideId && data.driverId && data.driverLocation) {
-        setRideStatus("matched");
+        // Store ride info
         setRideId(data.rideId);
-        // Persist to localStorage
         localStorage.setItem("currentRideId", data.rideId);
         setAssignedDriverId(data.driverId);
         setAssignedDriverName(data.driverName || "Unknown Driver");
         setAssignedDriverLocation(data.driverLocation);
         setEta(data.eta || null);
-        setOtp(data.otp || null); // Store OTP
-        if (data.otp) setShowOtpModal(true);
+
+        // Handle based on status from backend
+        if (data.status === "PENDING_ACCEPTANCE") {
+          // Driver needs to accept the ride first
+          setRideStatus("pending_acceptance");
+          // OTP is NOT returned here - will be fetched at 100m proximity
+          setOtp(null);
+          setOtpAvailable(false);
+        } else if (data.status === "MATCHED") {
+          // Driver already accepted (shouldn't happen in new flow but fallback)
+          setRideStatus("matched");
+          if (data.otp) {
+            setOtp(data.otp);
+            setShowOtpModal(true);
+          }
+        }
       } else {
         setRideStatus("error");
         setErrorMessage(data.message || "Failed to find a driver");
@@ -1243,6 +1567,356 @@ export default function RiderMap({
         <div style={{ display: "grid", gap: "24px", gridTemplateColumns: "1fr 380px" }}>
           {/* Left Column - Map and Search */}
           <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+            {/* Enhanced Driver Search Animation Overlay */}
+            {(rideStatus === "searching" || rideStatus === "pending_acceptance") && (
+              <div
+                style={{
+                  background:
+                    "linear-gradient(135deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.95))",
+                  border: "1px solid rgba(34, 197, 94, 0.3)",
+                  borderRadius: "24px",
+                  boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
+                  overflow: "hidden",
+                  padding: "32px",
+                  position: "relative",
+                }}
+              >
+                {/* Animated background gradient */}
+                <div
+                  style={{
+                    animation: "gradientShift 3s ease infinite",
+                    background:
+                      "linear-gradient(45deg, rgba(34, 197, 94, 0.1), rgba(59, 130, 246, 0.1), rgba(34, 197, 94, 0.1))",
+                    backgroundSize: "200% 200%",
+                    height: "100%",
+                    left: 0,
+                    position: "absolute",
+                    top: 0,
+                    width: "100%",
+                  }}
+                />
+
+                {/* Content */}
+                <div style={{ position: "relative", zIndex: 1 }}>
+                  {/* Animated Car Icon with Pulse Effect */}
+                  <div
+                    style={{
+                      alignItems: "center",
+                      display: "flex",
+                      justifyContent: "center",
+                      marginBottom: "24px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        alignItems: "center",
+                        animation: "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+                        background:
+                          "linear-gradient(135deg, rgba(34, 197, 94, 0.3), rgba(16, 185, 129, 0.2))",
+                        borderRadius: "50%",
+                        display: "flex",
+                        height: "120px",
+                        justifyContent: "center",
+                        position: "relative",
+                        width: "120px",
+                      }}
+                    >
+                      {/* Ripple Effects */}
+                      <div
+                        style={{
+                          animation: "ripple 2s linear infinite",
+                          border: "2px solid rgba(34, 197, 94, 0.4)",
+                          borderRadius: "50%",
+                          height: "100%",
+                          left: 0,
+                          position: "absolute",
+                          top: 0,
+                          width: "100%",
+                        }}
+                      />
+                      <div
+                        style={{
+                          animation: "ripple 2s linear infinite 0.5s",
+                          border: "2px solid rgba(34, 197, 94, 0.3)",
+                          borderRadius: "50%",
+                          height: "100%",
+                          left: 0,
+                          position: "absolute",
+                          top: 0,
+                          width: "100%",
+                        }}
+                      />
+                      <div
+                        style={{
+                          animation: "ripple 2s linear infinite 1s",
+                          border: "2px solid rgba(34, 197, 94, 0.2)",
+                          borderRadius: "50%",
+                          height: "100%",
+                          left: 0,
+                          position: "absolute",
+                          top: 0,
+                          width: "100%",
+                        }}
+                      />
+                      <FaCar
+                        style={{
+                          animation: "carBounce 1.5s ease-in-out infinite",
+                          color: "#22c55e",
+                          fontSize: "48px",
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Status Text */}
+                  <div style={{ marginBottom: "28px", textAlign: "center" }}>
+                    <h2
+                      style={{
+                        color: "white",
+                        fontSize: "24px",
+                        fontWeight: 700,
+                        margin: "0 0 8px",
+                      }}
+                    >
+                      {rideStatus === "searching" ? "Finding Your Driver" : "Driver Notified"}
+                    </h2>
+                    <p style={{ color: "#94a3b8", fontSize: "15px", margin: 0 }}>
+                      {rideStatus === "searching"
+                        ? "Searching nearby drivers for the best match..."
+                        : "Waiting for driver to accept your ride request..."}
+                    </p>
+                  </div>
+
+                  {/* Backend Process Steps */}
+                  <div
+                    style={{
+                      background: "rgba(15, 23, 42, 0.6)",
+                      borderRadius: "16px",
+                      marginBottom: "24px",
+                      padding: "20px",
+                    }}
+                  >
+                    <h3
+                      style={{
+                        alignItems: "center",
+                        color: "#94a3b8",
+                        display: "flex",
+                        fontSize: "12px",
+                        fontWeight: 600,
+                        gap: "8px",
+                        letterSpacing: "0.5px",
+                        margin: "0 0 16px",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      <FaSync style={{ animation: "spin 2s linear infinite" }} />
+                      What's happening in the backend
+                    </h3>
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      {/* Step 1: Finding Drivers */}
+                      <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
+                        <div
+                          style={{
+                            alignItems: "center",
+                            animation:
+                              rideStatus === "searching" ? "stepPulse 1.5s ease infinite" : "none",
+                            background: "rgba(34, 197, 94, 0.2)",
+                            borderRadius: "50%",
+                            display: "flex",
+                            height: "32px",
+                            justifyContent: "center",
+                            minWidth: "32px",
+                          }}
+                        >
+                          <FaSearch style={{ color: "#4ade80", fontSize: "14px" }} />
+                        </div>
+                        <div>
+                          <p
+                            style={{ color: "white", fontSize: "14px", fontWeight: 500, margin: 0 }}
+                          >
+                            Scanning nearby drivers
+                          </p>
+                          <p style={{ color: "#64748b", fontSize: "12px", margin: "2px 0 0" }}>
+                            Querying real-time driver locations within 5km radius
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Step 2: Matching Algorithm */}
+                      <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
+                        <div
+                          style={{
+                            alignItems: "center",
+                            animation:
+                              rideStatus === "searching"
+                                ? "stepPulse 1.5s ease infinite 0.3s"
+                                : "none",
+                            background: "rgba(59, 130, 246, 0.2)",
+                            borderRadius: "50%",
+                            display: "flex",
+                            height: "32px",
+                            justifyContent: "center",
+                            minWidth: "32px",
+                          }}
+                        >
+                          <FaUsers style={{ color: "#60a5fa", fontSize: "14px" }} />
+                        </div>
+                        <div>
+                          <p
+                            style={{ color: "white", fontSize: "14px", fontWeight: 500, margin: 0 }}
+                          >
+                            Matching with best driver
+                          </p>
+                          <p style={{ color: "#64748b", fontSize: "12px", margin: "2px 0 0" }}>
+                            Analyzing driver ratings, vehicle type & availability
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Step 3: ETA Calculation */}
+                      <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
+                        <div
+                          style={{
+                            alignItems: "center",
+                            animation:
+                              rideStatus === "pending_acceptance"
+                                ? "stepPulse 1.5s ease infinite"
+                                : "none",
+                            background: "rgba(168, 85, 247, 0.2)",
+                            borderRadius: "50%",
+                            display: "flex",
+                            height: "32px",
+                            justifyContent: "center",
+                            minWidth: "32px",
+                          }}
+                        >
+                          <FaClock style={{ color: "#a855f7", fontSize: "14px" }} />
+                        </div>
+                        <div>
+                          <p
+                            style={{ color: "white", fontSize: "14px", fontWeight: 500, margin: 0 }}
+                          >
+                            Calculating ETA
+                          </p>
+                          <p style={{ color: "#64748b", fontSize: "12px", margin: "2px 0 0" }}>
+                            Computing optimal route with live traffic data
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Step 4: Sending Request */}
+                      <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
+                        <div
+                          style={{
+                            alignItems: "center",
+                            animation:
+                              rideStatus === "pending_acceptance"
+                                ? "stepPulse 1.5s ease infinite 0.3s"
+                                : "none",
+                            background: "rgba(251, 191, 36, 0.2)",
+                            borderRadius: "50%",
+                            display: "flex",
+                            height: "32px",
+                            justifyContent: "center",
+                            minWidth: "32px",
+                          }}
+                        >
+                          <FaRoute style={{ color: "#fbbf24", fontSize: "14px" }} />
+                        </div>
+                        <div>
+                          <p
+                            style={{ color: "white", fontSize: "14px", fontWeight: 500, margin: 0 }}
+                          >
+                            {rideStatus === "pending_acceptance"
+                              ? "Awaiting driver response"
+                              : "Preparing ride request"}
+                          </p>
+                          <p style={{ color: "#64748b", fontSize: "12px", margin: "2px 0 0" }}>
+                            {rideStatus === "pending_acceptance"
+                              ? "Driver has 30 seconds to accept your request"
+                              : "Optimizing for eco-friendly route matching"}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Eco Tip */}
+                  <div
+                    style={{
+                      alignItems: "center",
+                      background: "rgba(34, 197, 94, 0.1)",
+                      borderRadius: "12px",
+                      display: "flex",
+                      gap: "12px",
+                      marginBottom: "20px",
+                      padding: "14px 16px",
+                    }}
+                  >
+                    <FaLeaf style={{ color: "#4ade80", fontSize: "20px" }} />
+                    <p style={{ color: "#94a3b8", fontSize: "13px", margin: 0 }}>
+                      <span style={{ color: "#4ade80", fontWeight: 600 }}>Eco Tip:</span> Carpooling
+                      reduces carbon emissions by up to 50% compared to solo rides!
+                    </p>
+                  </div>
+
+                  {/* Cancel Button */}
+                  <button
+                    type="button"
+                    onClick={handleCancelRide}
+                    style={{
+                      alignItems: "center",
+                      background: "rgba(239, 68, 68, 0.1)",
+                      border: "1px solid rgba(239, 68, 68, 0.3)",
+                      borderRadius: "12px",
+                      color: "#f87171",
+                      cursor: "pointer",
+                      display: "flex",
+                      fontSize: "15px",
+                      fontWeight: 600,
+                      gap: "8px",
+                      justifyContent: "center",
+                      padding: "14px",
+                      transition: "all 0.3s ease",
+                      width: "100%",
+                    }}
+                  >
+                    <FaTimes />
+                    Cancel Request
+                  </button>
+                </div>
+
+                {/* CSS Animations */}
+                <style>{`
+                  @keyframes gradientShift {
+                    0%, 100% { background-position: 0% 50%; }
+                    50% { background-position: 100% 50%; }
+                  }
+                  @keyframes pulse {
+                    0%, 100% { opacity: 1; transform: scale(1); }
+                    50% { opacity: 0.8; transform: scale(0.95); }
+                  }
+                  @keyframes ripple {
+                    0% { transform: scale(1); opacity: 0.8; }
+                    100% { transform: scale(1.8); opacity: 0; }
+                  }
+                  @keyframes carBounce {
+                    0%, 100% { transform: translateY(0); }
+                    50% { transform: translateY(-8px); }
+                  }
+                  @keyframes stepPulse {
+                    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
+                    50% { opacity: 0.7; box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
+                  }
+                  @keyframes spin {
+                    from { transform: rotate(0deg); }
+                    to { transform: rotate(360deg); }
+                  }
+                `}</style>
+              </div>
+            )}
+
             {/* Driver Matched Card */}
             {(rideStatus === "matched" || rideStatus === "on_trip") && assignedDriverId && (
               <div style={styles.matchedCard}>
@@ -2251,15 +2925,15 @@ export default function RiderMap({
                     <Marker
                       position={assignedDriverLocation}
                       icon={{
-                        anchor: new google.maps.Point(22, 22),
+                        anchor: new google.maps.Point(25, 25),
                         scaledSize: new google.maps.Size(50, 50),
-                        url: "/car-icon.svg",
+                        url: createRotatedCarIcon(0, "#3b82f6", 50), // Blue for assigned driver
                       }}
                       title="Your Driver"
                     />
                   )}
 
-                  {/* Other Driver Markers (when not matched) */}
+                  {/* Other Driver Markers (when not matched) - with smooth rotation */}
                   {rideStatus !== "matched" &&
                     driverArray.map((driver) => (
                       <Marker
@@ -2271,7 +2945,11 @@ export default function RiderMap({
                         icon={{
                           anchor: new google.maps.Point(22, 22),
                           scaledSize: new google.maps.Size(45, 45),
-                          url: "/car-icon.svg",
+                          url: createRotatedCarIcon(
+                            driver.animatedHeading ?? driver.heading,
+                            driver.status === "AVAILABLE" ? "#22c55e" : "#f59e0b",
+                            45,
+                          ),
                         }}
                         title={`Driver (${driver.status})`}
                       />

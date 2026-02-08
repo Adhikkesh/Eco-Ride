@@ -19,7 +19,7 @@ import { describe, expect, it } from "vitest";
  * Validates the payment init request body.
  * @param body - Request body containing rideId
  */
-const validatePaymentRequest = (body: any) => {
+const validatePaymentRequest = (body: { rideId?: string }) => {
   if (!body.rideId) {
     return { message: "Missing rideId", valid: false };
   }
@@ -62,7 +62,7 @@ const formatPaymentMetadata = (rideId: string, riderId: string) => {
 };
 
 // Validate payment confirmation request
-const validateConfirmPayment = (body: any) => {
+const validateConfirmPayment = (body: { rideId?: string; amount?: number }) => {
   if (!body.rideId) {
     return { message: "Missing rideId", valid: false };
   }
