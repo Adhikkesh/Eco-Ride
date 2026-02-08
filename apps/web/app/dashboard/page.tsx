@@ -44,6 +44,9 @@ export default function Dashboard(): React.ReactNode {
               try {
                 // Fetch latest status from backend API to ensure accuracy (bypass Firestore cache/sync issues)
                 const token = await currentUser.getIdToken();
+                // Check if backendUrl is defined before making request
+                if (!backendUrl) throw new Error("Backend URL not configured");
+
                 const statusRes = await fetch(`${backendUrl}/user/driver-status`, {
                   headers: {
                     Authorization: `Bearer ${token}`,
@@ -55,12 +58,25 @@ export default function Dashboard(): React.ReactNode {
                   console.log("Driver API Status:", statusData);
                   setKycVerified(statusData.kyc_verified);
                 } else {
-                  console.error("Failed to fetch driver status, defaulting to Firestore");
-                  setKycVerified(userData?.kyc_verified || false);
+                  throw new Error("API returned error status");
                 }
               } catch (err) {
-                console.error("Error fetching driver status from API:", err);
-                setKycVerified(userData?.kyc_verified || false);
+                console.error(
+                  "Error fetching driver status from API, falling back to Firestore:",
+                  err,
+                );
+                // Fallback: Fetch directly from driver_profile collection which has the authoritative status
+                try {
+                  const driverProfileDoc = await getDoc(doc(db, "driver_profile", currentUser.uid));
+                  if (driverProfileDoc.exists()) {
+                    setKycVerified(driverProfileDoc.data()?.kyc_verified || false);
+                  } else {
+                    setKycVerified(false);
+                  }
+                } catch (firestoreErr) {
+                  console.error("Error fetching driver profile from Firestore:", firestoreErr);
+                  setKycVerified(false);
+                }
               }
             }
           } else {
