@@ -639,7 +639,10 @@ export const declineRide = async (req: Request, res: Response) => {
     const { rideId } = req.body;
     const driverId = req.user?.uid;
 
+    console.log("Decline Ride Request:", { body: req.body, driverId });
+
     if (!rideId) {
+      console.error("Decline Ride Error: Missing rideId");
       return res.status(400).json({ message: "Missing rideId", success: false });
     }
 
@@ -666,6 +669,7 @@ export const declineRide = async (req: Request, res: Response) => {
 
     // Verify ride is in pending acceptance state
     if (rideData?.status !== "PENDING_ACCEPTANCE") {
+      console.error(`Decline Ride Error: Invalid status ${rideData?.status} for ride ${rideId}`);
       return res.status(400).json({
         message: `Cannot decline ride with status: ${rideData?.status}`,
         success: false,
