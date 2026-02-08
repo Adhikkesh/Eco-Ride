@@ -193,9 +193,17 @@ export default function DriverLiveMap({
   const [showOtpModal, setShowOtpModal] = useState(false);
   const [otpInput, setOtpInput] = useState("");
   const [submittingOtp, setSubmittingOtp] = useState(false);
+  // Per-rider OTP tracking for pooled rides
+  const [riderOtpInputs, setRiderOtpInputs] = useState<Record<string, string>>({});
+  const [verifiedRiders, setVerifiedRiders] = useState<Set<string>>(new Set());
+  const [verifyingRiderId, setVerifyingRiderId] = useState<string | null>(null);
 
-  // Payment Popup State
-  const [finishedRideId, setFinishedRideId] = useState<string | null>(null);
+  // Payment Popup State - now tracks all rides for per-rider popups
+  const [finishedRideIds, setFinishedRideIds] = useState<string[]>([]);
+  const [paidRideIds, setPaidRideIds] = useState<Set<string>>(new Set());
+  const [paymentQueue, setPaymentQueue] = useState<
+    { rideId: string; amount: number; greenPoints: number }[]
+  >([]);
   const [showPaymentPopup, setShowPaymentPopup] = useState(false);
   const [receivedAmount, setReceivedAmount] = useState(0);
 
@@ -311,17 +319,26 @@ export default function DriverLiveMap({
     setOtpInput("");
   };
 
-  const handleSubmitOtp = async () => {
-    if (!assignedRide || !otpInput || otpInput.length !== 4) {
+  // Handle OTP submission for a specific rider (for pooled rides) or single ride
+  const handleSubmitOtp = async (rideIdToVerify?: string, otpToVerify?: string) => {
+    const targetRideId = rideIdToVerify || assignedRide?.rideId;
+    const targetOtp = otpToVerify || otpInput;
+
+    if (!targetRideId || !targetOtp || targetOtp.length !== 4) {
       alert("Please enter a valid 4-digit OTP");
       return;
     }
 
-    setSubmittingOtp(true);
+    if (rideIdToVerify) {
+      setVerifyingRiderId(rideIdToVerify);
+    } else {
+      setSubmittingOtp(true);
+    }
+
     try {
       const token = await auth.currentUser?.getIdToken();
       const res = await fetch(`${backendUrl}/api/v1/ride/start`, {
-        body: JSON.stringify({ otp: otpInput, rideId: assignedRide.rideId }),
+        body: JSON.stringify({ otp: targetOtp, rideId: targetRideId }),
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
@@ -332,17 +349,53 @@ export default function DriverLiveMap({
       const data = await res.json();
 
       if (res.ok && data.success) {
-        setRideStatus("IN_PROGRESS");
-        setShowOtpModal(false);
+        if (rideIdToVerify) {
+          // Pooled ride - mark this rider as verified
+          setVerifiedRiders((prev) => new Set(prev).add(rideIdToVerify));
+          // Check if all riders are now verified
+          const riders = assignedRide?.riders || [];
+          const newVerified = new Set(verifiedRiders).add(rideIdToVerify);
+          if (riders.length > 0 && riders.every((r) => newVerified.has(r.rideId))) {
+            setRideStatus("IN_PROGRESS");
+            setShowOtpModal(false);
+            // Update RTDB for pooling: set ON_TRIP status and destination
+            if (rtdb && assignedRide?.drop) {
+              const driverRef = ref(rtdb, `drivers-online/${userId}`);
+              update(driverRef, {
+                currentPassengers: riders.length,
+                destination: assignedRide.drop,
+                maxPassengers: 4,
+                pooledRides: riders.map((r) => r.rideId),
+                status: "ON_TRIP",
+              }).catch((err) => console.error("Failed to update driver status:", err));
+            }
+          }
+        } else {
+          // Single ride
+          setRideStatus("IN_PROGRESS");
+          setShowOtpModal(false);
+          // Update RTDB for pooling: set ON_TRIP status and destination
+          if (rtdb && assignedRide?.drop) {
+            const driverRef = ref(rtdb, `drivers-online/${userId}`);
+            update(driverRef, {
+              currentPassengers: 1,
+              destination: assignedRide.drop,
+              maxPassengers: 4,
+              pooledRides: [assignedRide.rideId],
+              status: "ON_TRIP",
+            }).catch((err) => console.error("Failed to update driver status:", err));
+          }
+        }
       } else {
         console.error("Failed to start ride:", data.message);
-        alert(data.message || "Failed to start ride. Check OTP.");
+        alert(data.message || "Failed to verify OTP. Check the code.");
       }
     } catch (err) {
       console.error("Error starting ride:", err);
-      alert("Error starting ride. Please try again.");
+      alert("Error verifying OTP. Please try again.");
     } finally {
       setSubmittingOtp(false);
+      setVerifyingRiderId(null);
     }
   };
 
@@ -350,8 +403,23 @@ export default function DriverLiveMap({
     if (!assignedRide) return;
     try {
       const token = await auth.currentUser?.getIdToken();
+
+      // Collect all pooled ride IDs from the riders array
+      const pooledRideIds = assignedRide.riders?.map((r: { rideId: string }) => r.rideId) || [];
+
+      // All ride IDs including primary
+      const allRideIds = [
+        assignedRide.rideId,
+        ...pooledRideIds.filter((id: string) => id !== assignedRide.rideId),
+      ];
+
+      console.log("Completing ride(s):", { all: allRideIds, primary: assignedRide.rideId });
+
       const res = await fetch(`${backendUrl}/api/v1/ride/complete`, {
-        body: JSON.stringify({ rideId: assignedRide.rideId }),
+        body: JSON.stringify({
+          pooledRideIds,
+          rideId: assignedRide.rideId,
+        }),
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
@@ -359,12 +427,29 @@ export default function DriverLiveMap({
         method: "POST",
       });
       if (res.ok) {
-        setFinishedRideId(assignedRide.rideId); // Track for payment
+        const data = await res.json();
+        console.log("Ride completion result:", data);
+        // Track all ride IDs for payment monitoring
+        setFinishedRideIds(allRideIds);
+        setPaidRideIds(new Set()); // Reset paid tracking
+        setPaymentQueue([]); // Reset payment queue
         setRideStatus("COMPLETED");
         setAssignedRide(null);
         setDirectionsToPickup(null);
         setDirectionsToDestination(null);
         setStatus("AVAILABLE"); // Reset driver status
+        // Reset verified riders for next pooled ride
+        setVerifiedRiders(new Set());
+        // Reset RTDB to AVAILABLE and clear pooling fields
+        if (rtdb) {
+          const driverRef = ref(rtdb, `drivers-online/${userId}`);
+          update(driverRef, {
+            currentPassengers: null,
+            destination: null,
+            pooledRides: null,
+            status: "AVAILABLE",
+          }).catch((err) => console.error("Failed to reset driver status:", err));
+        }
       } else {
         console.error("Failed to complete ride");
       }
@@ -389,7 +474,13 @@ export default function DriverLiveMap({
     timestamp: number;
     status?: "MATCHED" | "IN_PROGRESS";
     waypoints?: RoutePoint[]; // Multi-stop support
-    riders?: any[]; // Pooled riders info
+    riders?: {
+      rideId: string;
+      riderId: string;
+      riderName?: string;
+      pickup: { lat: number; lng: number };
+      drop: { lat: number; lng: number };
+    }[]; // Pooled riders info
   }
 
   // Calculate routes when ride is assigned
@@ -583,22 +674,52 @@ export default function DriverLiveMap({
 
   const [greenPointsRedeemed, setGreenPointsRedeemed] = useState(0);
 
-  // Listen for payment confirmation
+  // Listen for payment confirmation on all finished rides
   useEffect(() => {
-    if (!finishedRideId || !rtdb) return;
+    if (finishedRideIds.length === 0 || !rtdb) return;
 
-    const rideRef = ref(rtdb, `rides/${finishedRideId}`);
-    const unsubscribe = onValue(rideRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data && data.paymentStatus === "PAID") {
-        setReceivedAmount(data.paidAmount || 0);
-        setGreenPointsRedeemed(data.greenPointsRedeemed || 0);
+    const unsubscribes: (() => void)[] = [];
+
+    for (const rideId of finishedRideIds) {
+      const rideRef = ref(rtdb, `rides/${rideId}`);
+      const unsub = onValue(rideRef, (snapshot) => {
+        const data = snapshot.val();
+        // Only trigger if newly paid (not already tracked)
+        if (data && data.paymentStatus === "PAID" && !paidRideIds.has(rideId)) {
+          console.log(`Payment received for ride ${rideId}:`, data.paidAmount);
+          setPaidRideIds((prev) => new Set(prev).add(rideId));
+          // Queue this payment for popup
+          setPaymentQueue((prev) => [
+            ...prev,
+            {
+              amount: data.paidAmount || 0,
+              greenPoints: data.greenPointsRedeemed || 0,
+              rideId,
+            },
+          ]);
+        }
+      });
+      unsubscribes.push(unsub);
+    }
+
+    return () => {
+      unsubscribes.forEach((u) => {
+        u();
+      });
+    };
+  }, [finishedRideIds, paidRideIds]);
+
+  // Process payment queue - show popup for each payment
+  useEffect(() => {
+    if (paymentQueue.length > 0 && !showPaymentPopup) {
+      const nextPayment = paymentQueue[0];
+      if (nextPayment) {
+        setReceivedAmount(nextPayment.amount);
+        setGreenPointsRedeemed(nextPayment.greenPoints);
         setShowPaymentPopup(true);
       }
-    });
-
-    return () => unsubscribe();
-  }, [finishedRideId]);
+    }
+  }, [paymentQueue, showPaymentPopup]);
 
   const goOnline = useCallback(async () => {
     if (!rtdb) {
@@ -849,7 +970,7 @@ export default function DriverLiveMap({
                 )}
 
                 {/* Waypoint Markers (Multi-Stop Support) */}
-                {assignedRide && assignedRide.waypoints ? (
+                {assignedRide?.waypoints ? (
                   assignedRide.waypoints.map((wp, index) => (
                     <Marker
                       key={`${wp.riderId}-${wp.type}-${index}`}
@@ -1306,7 +1427,7 @@ export default function DriverLiveMap({
               border: "1px solid rgba(71, 85, 105, 0.5)",
               borderRadius: "24px",
               boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
-              maxWidth: "400px",
+              maxWidth: "450px",
               padding: "32px",
               width: "90%",
             }}
@@ -1320,7 +1441,9 @@ export default function DriverLiveMap({
                 textAlign: "center",
               }}
             >
-              Enter OTP
+              {assignedRide?.riders && assignedRide.riders.length > 1
+                ? `Verify Riders (${verifiedRiders.size}/${assignedRide.riders.length})`
+                : "Enter OTP"}
             </h2>
             <p
               style={{
@@ -1330,29 +1453,137 @@ export default function DriverLiveMap({
                 textAlign: "center",
               }}
             >
-              Ask the rider for the 4-digit OTP to start the trip.
+              {assignedRide?.riders && assignedRide.riders.length > 1
+                ? "Ask each rider for their 4-digit OTP to verify pickup."
+                : "Ask the rider for the 4-digit OTP to start the trip."}
             </p>
 
-            <input
-              type="text"
-              value={otpInput}
-              onChange={(e) => setOtpInput(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))}
-              placeholder="0000"
-              style={{
-                background: "rgba(15, 23, 42, 0.5)",
-                border: "2px solid rgba(59, 130, 246, 0.5)",
-                borderRadius: "12px",
-                color: "white",
-                fontSize: "32px",
-                fontWeight: "bold",
-                letterSpacing: "8px",
-                marginBottom: "24px",
-                outline: "none",
-                padding: "16px",
-                textAlign: "center",
-                width: "100%",
-              }}
-            />
+            {/* Pooled Rides - Show per-rider OTP inputs */}
+            {assignedRide?.riders && assignedRide.riders.length > 1 ? (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "16px",
+                  marginBottom: "24px",
+                }}
+              >
+                {assignedRide.riders.map((rider, index) => {
+                  const isVerified = verifiedRiders.has(rider.rideId);
+                  const isVerifying = verifyingRiderId === rider.rideId;
+                  const riderOtp = riderOtpInputs[rider.rideId] || "";
+
+                  return (
+                    <div
+                      key={rider.rideId}
+                      style={{
+                        background: isVerified ? "rgba(34, 197, 94, 0.1)" : "rgba(15, 23, 42, 0.5)",
+                        border: isVerified
+                          ? "2px solid rgba(34, 197, 94, 0.5)"
+                          : "2px solid rgba(71, 85, 105, 0.5)",
+                        borderRadius: "12px",
+                        padding: "16px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          alignItems: "center",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          marginBottom: isVerified ? "0" : "12px",
+                        }}
+                      >
+                        <span style={{ color: "#e2e8f0", fontSize: "14px", fontWeight: 600 }}>
+                          {rider.riderName || `Rider ${index + 1}`}
+                        </span>
+                        {isVerified && (
+                          <span
+                            style={{
+                              alignItems: "center",
+                              color: "#22c55e",
+                              display: "flex",
+                              fontSize: "14px",
+                              gap: "4px",
+                            }}
+                          >
+                            <FaCheckCircle /> Verified
+                          </span>
+                        )}
+                      </div>
+
+                      {!isVerified && (
+                        <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                          <input
+                            type="text"
+                            value={riderOtp}
+                            onChange={(e) => {
+                              const value = e.target.value.replace(/[^0-9]/g, "").slice(0, 4);
+                              setRiderOtpInputs((prev) => ({ ...prev, [rider.rideId]: value }));
+                            }}
+                            placeholder="0000"
+                            style={{
+                              background: "rgba(15, 23, 42, 0.8)",
+                              border: "1px solid rgba(59, 130, 246, 0.5)",
+                              borderRadius: "8px",
+                              color: "white",
+                              flex: 1,
+                              fontSize: "18px",
+                              fontWeight: "bold",
+                              letterSpacing: "4px",
+                              outline: "none",
+                              padding: "10px 12px",
+                              textAlign: "center",
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleSubmitOtp(rider.rideId, riderOtp)}
+                            disabled={isVerifying || riderOtp.length !== 4}
+                            style={{
+                              background: "linear-gradient(90deg, #22c55e, #16a34a)",
+                              border: "none",
+                              borderRadius: "8px",
+                              color: "white",
+                              cursor:
+                                isVerifying || riderOtp.length !== 4 ? "not-allowed" : "pointer",
+                              fontSize: "14px",
+                              fontWeight: 600,
+                              opacity: isVerifying || riderOtp.length !== 4 ? 0.7 : 1,
+                              padding: "10px 16px",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {isVerifying ? "..." : "Verify"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              /* Single Ride - Original OTP input */
+              <input
+                type="text"
+                value={otpInput}
+                onChange={(e) => setOtpInput(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))}
+                placeholder="0000"
+                style={{
+                  background: "rgba(15, 23, 42, 0.5)",
+                  border: "2px solid rgba(59, 130, 246, 0.5)",
+                  borderRadius: "12px",
+                  color: "white",
+                  fontSize: "32px",
+                  fontWeight: "bold",
+                  letterSpacing: "8px",
+                  marginBottom: "24px",
+                  outline: "none",
+                  padding: "16px",
+                  textAlign: "center",
+                  width: "100%",
+                }}
+              />
+            )}
 
             <div style={{ display: "flex", gap: "12px" }}>
               <button
@@ -1372,25 +1603,28 @@ export default function DriverLiveMap({
               >
                 Cancel
               </button>
-              <button
-                onClick={handleSubmitOtp}
-                type="button"
-                disabled={submittingOtp || otpInput.length !== 4}
-                style={{
-                  background: "linear-gradient(90deg, #22c55e, #16a34a)",
-                  border: "none",
-                  borderRadius: "12px",
-                  color: "white",
-                  cursor: submittingOtp || otpInput.length !== 4 ? "not-allowed" : "pointer",
-                  flex: 1,
-                  fontSize: "16px",
-                  fontWeight: 600,
-                  opacity: submittingOtp || otpInput.length !== 4 ? 0.7 : 1,
-                  padding: "12px",
-                }}
-              >
-                {submittingOtp ? "Verifying..." : "Start Trip"}
-              </button>
+              {/* Show Start Trip button only for single rides or when all pooled riders are verified */}
+              {(!assignedRide?.riders || assignedRide.riders.length <= 1) && (
+                <button
+                  onClick={() => handleSubmitOtp()}
+                  type="button"
+                  disabled={submittingOtp || otpInput.length !== 4}
+                  style={{
+                    background: "linear-gradient(90deg, #22c55e, #16a34a)",
+                    border: "none",
+                    borderRadius: "12px",
+                    color: "white",
+                    cursor: submittingOtp || otpInput.length !== 4 ? "not-allowed" : "pointer",
+                    flex: 1,
+                    fontSize: "16px",
+                    fontWeight: 600,
+                    opacity: submittingOtp || otpInput.length !== 4 ? 0.7 : 1,
+                    padding: "12px",
+                  }}
+                >
+                  {submittingOtp ? "Verifying..." : "Start Trip"}
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -1461,7 +1695,8 @@ export default function DriverLiveMap({
               type="button"
               onClick={() => {
                 setShowPaymentPopup(false);
-                setFinishedRideId(null);
+                // Remove processed payment from queue
+                setPaymentQueue((prev) => prev.slice(1));
               }}
               style={{
                 background: "linear-gradient(90deg, #22c55e, #16a34a)",

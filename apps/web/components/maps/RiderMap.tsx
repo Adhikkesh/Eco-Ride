@@ -23,7 +23,6 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FaBriefcase,
-  FaCar,
   FaCheckCircle,
   FaClock,
   FaEdit,
@@ -2126,8 +2125,8 @@ export default function RiderMap({
                 ) : (
                   <button
                     type="button"
-                    onClick={handleFindRide}
-                    disabled={!canRequestRide}
+                    onClick={handleGetEstimate}
+                    disabled={!canRequestRide || estimating}
                     style={canRequestRide ? styles.actionButton : styles.actionButtonDisabled}
                     onMouseEnter={(e) => {
                       if (canRequestRide) {
@@ -2142,17 +2141,17 @@ export default function RiderMap({
                       }
                     }}
                   >
-                    {rideStatus === "searching" ? (
+                    {estimating ? (
                       <>
                         <FaSpinner
                           style={{ animation: "spin 1s linear infinite", fontSize: "20px" }}
                         />
-                        Finding Driver...
+                        Getting Estimate...
                       </>
                     ) : (
                       <>
-                        <FaCar style={{ fontSize: "20px" }} />
-                        Find a Ride
+                        <FaLeaf style={{ fontSize: "20px" }} />
+                        Get Price Estimate
                       </>
                     )}
                   </button>
