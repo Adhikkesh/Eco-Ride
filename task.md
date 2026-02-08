@@ -23,6 +23,7 @@
     - [x] Implement Error Handling in DriverLiveMap.tsx
     - [x] Verify Fix
 - [/] Debug Ride Decline Error
+    - [x] Improve error reporting
     - [ ] Inspect declineRide controller
     - [ ] Verify frontend payload
     - [ ] Fix 400 Bad Request issue
