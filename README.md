@@ -142,6 +142,11 @@ Eco-Ride exposes the following environment variables. Ensure these are configure
 - **Database**: Firestore (NoSQL)
 - **Tools**: [Turborepo](https://turbo.build/), [Biome](https://biomejs.dev/) (Linting/Formatting)
 
+### Architecture Diagram
+High-level overview of the Eco-Ride system architecture, illustrating the interaction between Frontend, Backend, Database, and External Services.
+
+![Architecture Diagram](./assets/EcoRide-Architecture.png)
+
 ### Diagrams
 
 #### Class Diagram

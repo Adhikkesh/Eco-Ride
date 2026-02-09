@@ -243,6 +243,53 @@ const haversineDistance = (lat1: number, lng1: number, lat2: number, lng2: numbe
   return R * c; // Distance in meters
 };
 
+// Find closest point on a polyline to a given GPS position
+// This "snaps" the driver to the route, eliminating zigzag jitter from GPS/pathfinding
+const findClosestPointOnRoute = (
+  position: { lat: number; lng: number },
+  route: google.maps.DirectionsResult | null,
+): { lat: number; lng: number; heading: number } | null => {
+  if (!route || !route.routes[0]) return null;
+
+  const path = route.routes[0].overview_path;
+  if (!path || path.length === 0) return null;
+
+  let closestPoint = { lat: path[0].lat(), lng: path[0].lng() };
+  let minDistance = Number.MAX_VALUE;
+  let closestIndex = 0;
+
+  // Find the closest point on the route
+  for (let i = 0; i < path.length; i++) {
+    const pathPoint = { lat: path[i].lat(), lng: path[i].lng() };
+    const distance = haversineDistance(position.lat, position.lng, pathPoint.lat, pathPoint.lng);
+
+    if (distance < minDistance) {
+      minDistance = distance;
+      closestPoint = pathPoint;
+      closestIndex = i;
+    }
+  }
+
+  // Calculate heading from the route direction
+  let heading = 0;
+  if (closestIndex < path.length - 1) {
+    const current = closestPoint;
+    const next = { lat: path[closestIndex + 1].lat(), lng: path[closestIndex + 1].lng() };
+
+    // Calculate bearing between two points
+    const dLng = ((next.lng - current.lng) * Math.PI) / 180;
+    const lat1 = (current.lat * Math.PI) / 180;
+    const lat2 = (next.lat * Math.PI) / 180;
+
+    const y = Math.sin(dLng) * Math.cos(lat2);
+    const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+    heading = (Math.atan2(y, x) * 180) / Math.PI;
+    heading = (heading + 360) % 360; // Normalize to 0-360
+  }
+
+  return { ...closestPoint, heading };
+};
+
 // ---------------------------------------------------------
 // Component
 // ---------------------------------------------------------
@@ -287,6 +334,11 @@ export default function RiderMap({
   const [assignedDriverLocation, setAssignedDriverLocation] = useState<{
     lat: number;
     lng: number;
+  } | null>(null);
+  const [animatedAssignedDriver, setAnimatedAssignedDriver] = useState<{
+    lat: number;
+    lng: number;
+    heading: number;
   } | null>(null);
   const [eta, setEta] = useState<string | null>(null);
   const [otp, setOtp] = useState<string | null>(null); // OTP state - fetched at 100m proximity
@@ -654,7 +706,10 @@ export default function RiderMap({
     return () => unsubscribe();
   }, [rideId, handlePaymentSuccess]);
 
-  // Listen to online drivers
+  // Listen to online drivers with throttling to prevent excessive updates
+  const driversBufferRef = useRef<Map<string, DriverLocation>>(new Map());
+  const lastDriversUpdateRef = useRef<number>(0);
+
   useEffect(() => {
     if (!rtdb) return;
 
@@ -667,18 +722,29 @@ export default function RiderMap({
         setLastUpdate(new Date());
 
         const data = snapshot.val();
-        const newDrivers = new Map<string, DriverMarker>();
         const now = Date.now();
         const STALE_THRESHOLD = 5 * 60 * 1000; // 5 minutes
+        const UPDATE_INTERVAL = 3000; // Only update state every 3 seconds
 
         if (data) {
+          // Store in buffer without triggering state update
           Object.entries(data).forEach(([driverId, locationData]) => {
             const location = locationData as DriverLocation;
-            // Filter out stale drivers (older than 5 mins or missing timestamp)
             if (!location.lastUpdated || now - location.lastUpdated > STALE_THRESHOLD) {
-              return;
+              driversBufferRef.current.delete(driverId);
+            } else {
+              driversBufferRef.current.set(driverId, location);
             }
+          });
+        }
 
+        // Throttle state updates to reduce re-renders
+        const timeSinceLastUpdate = now - lastDriversUpdateRef.current;
+        if (timeSinceLastUpdate >= UPDATE_INTERVAL) {
+          lastDriversUpdateRef.current = now;
+
+          const newDrivers = new Map<string, DriverMarker>();
+          driversBufferRef.current.forEach((location, driverId) => {
             newDrivers.set(driverId, {
               animatedLat: location.lat,
               animatedLng: location.lng,
@@ -691,9 +757,9 @@ export default function RiderMap({
               vehicleType: location.vehicleType,
             });
           });
-        }
 
-        setDrivers(newDrivers);
+          setDrivers(newDrivers);
+        }
       },
       (error) => {
         console.error("Firebase listener error:", error);
@@ -701,15 +767,62 @@ export default function RiderMap({
       },
     );
 
+    // Set up interval to push buffered updates even if Firebase doesn't fire
+    const intervalId = setInterval(() => {
+      const now = Date.now();
+      const timeSinceLastUpdate = now - lastDriversUpdateRef.current;
+      if (timeSinceLastUpdate >= 3000 && driversBufferRef.current.size > 0) {
+        lastDriversUpdateRef.current = now;
+
+        const newDrivers = new Map<string, DriverMarker>();
+        const STALE_THRESHOLD = 5 * 60 * 1000;
+
+        driversBufferRef.current.forEach((location, driverId) => {
+          if (location.lastUpdated && now - location.lastUpdated < STALE_THRESHOLD) {
+            newDrivers.set(driverId, {
+              animatedLat: location.lat,
+              animatedLng: location.lng,
+              heading: location.heading ?? 0,
+              id: driverId,
+              lastUpdated: location.lastUpdated,
+              lat: location.lat,
+              lng: location.lng,
+              status: location.status,
+              vehicleType: location.vehicleType,
+            });
+          }
+        });
+
+        setDrivers(newDrivers);
+      }
+    }, 3000);
+
     return () => {
       unsubscribe();
+      clearInterval(intervalId);
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
   }, []);
 
-  // Listen to assigned driver location updates (for both matched and on_trip status)
+  // Listen to assigned driver location updates with route-snapping to eliminate zigzag
+  const assignedDriverBufferRef = useRef<{ lat: number; lng: number; time: number } | null>(null);
+  const lastAssignedUpdateRef = useRef<number>(0);
+  const assignedDriverDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const currentRouteRef = useRef<google.maps.DirectionsResult | null>(null);
+
+  // Store the current active route for snapping
+  useEffect(() => {
+    if (rideStatus === "matched" && directionsToPickup) {
+      currentRouteRef.current = directionsToPickup;
+    } else if (rideStatus === "on_trip" && directionsToDestination) {
+      currentRouteRef.current = directionsToDestination;
+    } else {
+      currentRouteRef.current = null;
+    }
+  }, [rideStatus, directionsToPickup, directionsToDestination]);
+
   useEffect(() => {
     if (!rtdb || !assignedDriverId || (rideStatus !== "matched" && rideStatus !== "on_trip"))
       return;
@@ -718,12 +831,81 @@ export default function RiderMap({
 
     const unsubscribe = onValue(driverRef, (snapshot) => {
       const data = snapshot.val() as DriverLocation | null;
-      if (data) {
-        setAssignedDriverLocation({ lat: data.lat, lng: data.lng });
+      if (!data) return;
+
+      let newLocation = { lat: data.lat, lng: data.lng };
+      const now = Date.now();
+
+      // ROUTE SNAPPING: Snap driver position to the route to eliminate GPS jitter & zigzag
+      if (currentRouteRef.current) {
+        const snapped = findClosestPointOnRoute(newLocation, currentRouteRef.current);
+        if (snapped) {
+          console.log(
+            `🧲 Snapped driver from (${newLocation.lat.toFixed(5)}, ${newLocation.lng.toFixed(5)}) to route`,
+          );
+          newLocation = { lat: snapped.lat, lng: snapped.lng };
+          // Also update heading from route direction (more accurate than GPS heading)
+          data.heading = snapped.heading;
+        }
       }
+
+      // Constants for filtering (now even more lenient since we're route-snapping)
+      const MIN_DISTANCE_METERS = 5; // Reduced from 12 since snapping reduces noise
+      const MIN_UPDATE_INTERVAL = 1500; // Reduced from 2500
+      const MAX_UPDATE_INTERVAL = 4000; // Reduced from 5000
+      const DEBOUNCE_DELAY = 500; // Reduced from 800
+
+      // Clear any pending debounced update
+      if (assignedDriverDebounceRef.current) {
+        clearTimeout(assignedDriverDebounceRef.current);
+      }
+
+      // Debounce the update to prevent rapid-fire changes
+      assignedDriverDebounceRef.current = setTimeout(() => {
+        const timeSinceLastUpdate = now - lastAssignedUpdateRef.current;
+        let shouldUpdate = false;
+
+        if (!assignedDriverBufferRef.current) {
+          // First update, always accept
+          shouldUpdate = true;
+        } else {
+          const distance = haversineDistance(
+            assignedDriverBufferRef.current.lat,
+            assignedDriverBufferRef.current.lng,
+            newLocation.lat,
+            newLocation.lng,
+          );
+
+          // Update only if significant distance AND enough time passed
+          if (distance >= MIN_DISTANCE_METERS && timeSinceLastUpdate >= MIN_UPDATE_INTERVAL) {
+            shouldUpdate = true;
+          } else if (timeSinceLastUpdate >= MAX_UPDATE_INTERVAL) {
+            // Force update after max interval to catch slow movements
+            shouldUpdate = true;
+          }
+        }
+
+        if (shouldUpdate) {
+          assignedDriverBufferRef.current = { ...newLocation, time: now };
+          lastAssignedUpdateRef.current = now;
+          setAssignedDriverLocation(newLocation);
+          console.log(
+            `✅ Driver location updated: ${newLocation.lat.toFixed(4)}, ${newLocation.lng.toFixed(4)}`,
+          );
+        } else {
+          console.log(
+            `⏭️  Driver update filtered (distance: ${assignedDriverBufferRef.current ? haversineDistance(assignedDriverBufferRef.current.lat, assignedDriverBufferRef.current.lng, newLocation.lat, newLocation.lng).toFixed(1) : "N/A"}m)`,
+          );
+        }
+      }, DEBOUNCE_DELAY);
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      if (assignedDriverDebounceRef.current) {
+        clearTimeout(assignedDriverDebounceRef.current);
+      }
+    };
   }, [assignedDriverId, rideStatus]);
 
   // Listen for ride status updates from RTDB (e.g., driver accepts, trip starts)
@@ -1005,7 +1187,7 @@ export default function RiderMap({
         }
       });
 
-      // Interpolate positions in ref (no React state update)
+      // Interpolate positions in ref with adaptive smoothing
       let hasSignificantChange = false;
       animatedDriversRef.current.forEach((animated, id) => {
         const driver = drivers.get(id);
@@ -1015,8 +1197,23 @@ export default function RiderMap({
         const targetLng = driver.lng;
         const targetHeading = driver.heading;
 
-        // Smooth position interpolation
-        const posLerp = 0.12;
+        // Calculate distance for adaptive interpolation
+        const distance = haversineDistance(animated.lat, animated.lng, targetLat, targetLng);
+
+        // Adaptive interpolation: slower when very close to prevent oscillation
+        let posLerp: number;
+        if (distance < 5) {
+          posLerp = 0.04; // Ultra slow for micro-movements
+        } else if (distance < 15) {
+          posLerp = 0.06; // Very slow for small movements
+        } else if (distance < 50) {
+          posLerp = 0.08; // Slow for normal movements
+        } else if (distance < 100) {
+          posLerp = 0.1; // Medium for longer distances
+        } else {
+          posLerp = 0.12; // Faster catch-up for large distances
+        }
+
         const newLat = animated.lat + (targetLat - animated.lat) * posLerp;
         const newLng = animated.lng + (targetLng - animated.lng) * posLerp;
 
@@ -1024,15 +1221,15 @@ export default function RiderMap({
         let headingDiff = targetHeading - animated.heading;
         if (headingDiff > 180) headingDiff -= 360;
         if (headingDiff < -180) headingDiff += 360;
-        const headingLerp = 0.15;
+        const headingLerp = 0.12; // Slower heading interpolation
         let newHeading = animated.heading + headingDiff * headingLerp;
         if (newHeading < 0) newHeading += 360;
         if (newHeading >= 360) newHeading -= 360;
 
         // Check for significant change
         if (
-          Math.abs(newLat - animated.lat) > 0.00001 ||
-          Math.abs(newLng - animated.lng) > 0.00001 ||
+          Math.abs(newLat - animated.lat) > 0.000005 ||
+          Math.abs(newLng - animated.lng) > 0.000005 ||
           Math.abs(newHeading - animated.heading) > 0.5
         ) {
           hasSignificantChange = true;
@@ -1043,9 +1240,9 @@ export default function RiderMap({
         animated.heading = newHeading;
       });
 
-      // Only trigger React state update every 100ms (10 FPS) to reduce re-renders
+      // Only trigger React state update every 200ms (5 FPS) to reduce re-renders
       const timeSinceLastUpdate = timestamp - lastAnimationUpdateRef.current;
-      if (hasSignificantChange && timeSinceLastUpdate > 100) {
+      if (hasSignificantChange && timeSinceLastUpdate > 200) {
         lastAnimationUpdateRef.current = timestamp;
         setDrivers((prev) => {
           const updated = new Map(prev);
@@ -1075,6 +1272,88 @@ export default function RiderMap({
       }
     };
   }, [drivers]);
+
+  // Separate ultra-smooth animation specifically for assigned driver
+  const assignedDriverAnimFrameRef = useRef<number | null>(null);
+  const assignedDriverAnimatedRef = useRef<{ lat: number; lng: number; heading: number } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!assignedDriverLocation) {
+      setAnimatedAssignedDriver(null);
+      assignedDriverAnimatedRef.current = null;
+      return;
+    }
+
+    // Initialize animated position
+    if (!assignedDriverAnimatedRef.current) {
+      assignedDriverAnimatedRef.current = {
+        heading: 0,
+        lat: assignedDriverLocation.lat,
+        lng: assignedDriverLocation.lng,
+      };
+      setAnimatedAssignedDriver(assignedDriverAnimatedRef.current);
+    }
+
+    const animate = () => {
+      if (!assignedDriverLocation || !assignedDriverAnimatedRef.current) return;
+
+      const target = assignedDriverLocation;
+      const current = assignedDriverAnimatedRef.current;
+
+      // Ultra-smooth interpolation for assigned driver (user's primary focus)
+      const distance = haversineDistance(current.lat, current.lng, target.lat, target.lng);
+
+      // Very slow interpolation for buttery-smooth movement
+      const posLerp = distance < 10 ? 0.03 : distance < 30 ? 0.05 : 0.07;
+
+      const newLat = current.lat + (target.lat - current.lat) * posLerp;
+      const newLng = current.lng + (target.lng - current.lng) * posLerp;
+
+      // Calculate heading from movement direction
+      let newHeading = current.heading;
+      if (distance > 1) {
+        // Only update heading if actually moving
+        const dLng = ((target.lng - current.lng) * Math.PI) / 180;
+        const lat1 = (current.lat * Math.PI) / 180;
+        const lat2 = (target.lat * Math.PI) / 180;
+
+        const y = Math.sin(dLng) * Math.cos(lat2);
+        const x =
+          Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+        const bearing = (Math.atan2(y, x) * 180) / Math.PI;
+        const targetHeading = (bearing + 360) % 360;
+
+        // Smooth heading transition
+        let headingDiff = targetHeading - current.heading;
+        if (headingDiff > 180) headingDiff -= 360;
+        if (headingDiff < -180) headingDiff += 360;
+        newHeading = current.heading + headingDiff * 0.08; // Very smooth heading
+        if (newHeading < 0) newHeading += 360;
+        if (newHeading >= 360) newHeading -= 360;
+      }
+
+      // Update animated state
+      assignedDriverAnimatedRef.current = {
+        heading: newHeading,
+        lat: newLat,
+        lng: newLng,
+      };
+
+      setAnimatedAssignedDriver({ ...assignedDriverAnimatedRef.current });
+
+      assignedDriverAnimFrameRef.current = requestAnimationFrame(animate);
+    };
+
+    assignedDriverAnimFrameRef.current = requestAnimationFrame(animate);
+
+    return () => {
+      if (assignedDriverAnimFrameRef.current) {
+        cancelAnimationFrame(assignedDriverAnimFrameRef.current);
+      }
+    };
+  }, [assignedDriverLocation]);
 
   const onLoad = useCallback((map: google.maps.Map) => {
     mapRef.current = map;
@@ -2916,14 +3195,17 @@ export default function RiderMap({
                     />
                   )}
 
-                  {/* Assigned Driver Marker (when matched) */}
-                  {rideStatus === "matched" && assignedDriverLocation && (
+                  {/* Assigned Driver Marker (when matched) - with ultra-smooth animation */}
+                  {rideStatus === "matched" && animatedAssignedDriver && (
                     <Marker
-                      position={assignedDriverLocation}
+                      position={{
+                        lat: animatedAssignedDriver.lat,
+                        lng: animatedAssignedDriver.lng,
+                      }}
                       icon={{
                         anchor: new google.maps.Point(25, 25),
                         scaledSize: new google.maps.Size(50, 50),
-                        url: createRotatedCarIcon(0, "#3b82f6", 50), // Blue for assigned driver
+                        url: createRotatedCarIcon(animatedAssignedDriver.heading, "#3b82f6", 50), // Blue for assigned driver
                       }}
                       title="Your Driver"
                     />
