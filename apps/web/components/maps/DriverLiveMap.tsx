@@ -7,7 +7,8 @@ import {
   Marker,
   useJsApiLoader,
 } from "@react-google-maps/api";
-import { onDisconnect, onValue, ref, remove, set } from "firebase/database";
+import { onAuthStateChanged } from "firebase/auth";
+import { onDisconnect, onValue, ref, remove, set, update } from "firebase/database";
 import * as geofire from "geofire-common";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -207,6 +208,13 @@ const haversineDistance = (lat1: number, lng1: number, lat2: number, lng2: numbe
   return R * c;
 };
 
+const getErrorMessage = (err: unknown, fallback: string): string => {
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+  return fallback;
+};
+
 // Location selection mode before going online
 type LocationMode = "select" | "gps" | "map" | "ready";
 
@@ -279,9 +287,24 @@ export default function DriverLiveMap({
   const sessionIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
 
-  const userId = auth?.currentUser?.uid || `test-driver-${Date.now()}`;
+  const [userId, setUserId] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState(false);
 
   const [driverName, setDriverName] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!auth) {
+      setAuthReady(true);
+      return;
+    }
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUserId(user?.uid ?? null);
+      setAuthReady(true);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // Check if driver is already online in RTDB on mount (handles page refresh)
   useEffect(() => {
@@ -359,21 +382,12 @@ export default function DriverLiveMap({
   statusRef.current = status;
 
   // Update Firebase ONLY when status changes (position is handled by simulator)
+  // Use update() instead of set() so we only touch the status field
+  // and never overwrite the position the simulator is managing.
   useEffect(() => {
-    const pos = positionRef.current;
-    if (isOnline && pos && rtdb) {
+    if (isOnline && rtdb && userId) {
       const driverRef = ref(rtdb, `drivers-online/${userId}`);
-      const hash = geofire.geohashForLocation([pos.lat, pos.lng]);
-      const locationData: DriverLocation = {
-        geohash: hash,
-        heading: pos.heading,
-        lastUpdated: Date.now(),
-        lat: pos.lat,
-        lng: pos.lng,
-        status,
-        vehicleType: "CAR",
-      };
-      set(driverRef, locationData).catch((err) => {
+      update(driverRef, { lastUpdated: Date.now(), status }).catch((err) => {
         console.error("Failed to update status:", err);
       });
     }
@@ -598,10 +612,13 @@ export default function DriverLiveMap({
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.message || `Server returned ${res.status}`);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error accepting ride:", err);
       alert(
-        err.message || "Network error: Could not connect to server. Please check your connection.",
+        getErrorMessage(
+          err,
+          "Network error: Could not connect to server. Please check your connection.",
+        ),
       );
     } finally {
       setAcceptingRide(false);
@@ -644,9 +661,9 @@ export default function DriverLiveMap({
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.message || `Server returned ${res.status}`);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error declining ride:", err);
-      alert(err.message || "Network error: Could not decline ride.");
+      alert(getErrorMessage(err, "Network error: Could not decline ride."));
     } finally {
       setDecliningRide(false);
     }
@@ -695,9 +712,9 @@ export default function DriverLiveMap({
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.message || `Server returned ${res.status}`);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error starting ride:", err);
-      alert(err.message || "Network error: Could not start ride. Please try again.");
+      alert(getErrorMessage(err, "Network error: Could not start ride. Please try again."));
     } finally {
       setSubmittingOtp(false);
     }
@@ -738,9 +755,9 @@ export default function DriverLiveMap({
         console.error("Failed to complete ride:", errorData.message);
         alert(errorData.message || `Failed to complete ride (Status: ${res.status})`);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error completing ride:", err);
-      alert(err.message || "Network error while completing ride");
+      alert(getErrorMessage(err, "Network error while completing ride"));
     }
   };
 
@@ -845,26 +862,29 @@ export default function DriverLiveMap({
   }, [position, assignedRide, rideStatus]);
 
   // Update ETA every 10 seconds during ride
+  // Use positionRef so the interval stays stable and doesn't restart on every
+  // position tick from the simulator.
   useEffect(() => {
-    if (!isLoaded || !assignedRide || !position) return;
+    if (!isLoaded || !assignedRide) return;
 
     if (!directionsServiceRef.current) {
       directionsServiceRef.current = new google.maps.DirectionsService();
     }
 
     const updateEta = () => {
-      if (!directionsServiceRef.current || !assignedRide || !position) return;
+      const pos = positionRef.current;
+      if (!directionsServiceRef.current || !assignedRide || !pos) return;
 
       if (rideStatus === "MATCHED") {
         // ETA: Driver → Pickup
         directionsServiceRef.current.route(
           {
             destination: assignedRide.pickup,
-            origin: { lat: position.lat, lng: position.lng },
+            origin: { lat: pos.lat, lng: pos.lng },
             travelMode: google.maps.TravelMode.DRIVING,
           },
-          (result, status) => {
-            if (status === google.maps.DirectionsStatus.OK && result) {
+          (result, dirStatus) => {
+            if (dirStatus === google.maps.DirectionsStatus.OK && result) {
               const leg = result.routes[0]?.legs[0];
               if (leg?.duration?.text) {
                 setEtaToPickup(leg.duration.text);
@@ -878,11 +898,11 @@ export default function DriverLiveMap({
         directionsServiceRef.current.route(
           {
             destination: assignedRide.drop,
-            origin: { lat: position.lat, lng: position.lng },
+            origin: { lat: pos.lat, lng: pos.lng },
             travelMode: google.maps.TravelMode.DRIVING,
           },
-          (result, status) => {
-            if (status === google.maps.DirectionsStatus.OK && result) {
+          (result, dirStatus) => {
+            if (dirStatus === google.maps.DirectionsStatus.OK && result) {
               const leg = result.routes[0]?.legs[0];
               if (leg?.duration?.text) {
                 setEtaToDestination(leg.duration.text);
@@ -898,10 +918,10 @@ export default function DriverLiveMap({
     // Initial calculation
     updateEta();
 
-    // Update every 10 seconds
+    // Update every 10 seconds (stable interval, not restarted on position changes)
     const interval = setInterval(updateEta, 10000);
     return () => clearInterval(interval);
-  }, [isLoaded, assignedRide, rideStatus, position]);
+  }, [isLoaded, assignedRide, rideStatus]); // position intentionally excluded — read from positionRef
 
   const formatTime = (seconds: number): string => {
     const hrs = Math.floor(seconds / 3600);
@@ -914,7 +934,7 @@ export default function DriverLiveMap({
 
   const writeLocationToFirebase = useCallback(
     async (pos: Position) => {
-      if (!rtdb) return;
+      if (!rtdb || !userId) return;
       const driverRef = ref(rtdb, `drivers-online/${userId}`);
       // Calculate geohash for efficient geo-queries
       const hash = geofire.geohashForLocation([pos.lat, pos.lng]);
@@ -1008,6 +1028,14 @@ export default function DriverLiveMap({
       setError("Firebase not initialized");
       return;
     }
+    if (!authReady) {
+      setError("Please wait for authentication to initialize");
+      return;
+    }
+    if (!userId) {
+      setError("Please sign in to go online");
+      return;
+    }
 
     setIsGettingGPS(true);
     setError(null);
@@ -1036,7 +1064,7 @@ export default function DriverLiveMap({
       },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 },
     );
-  }, []);
+  }, [authReady, userId]);
 
   // Handler: Pick location on map
   const handlePickOnMap = useCallback(() => {
@@ -1048,6 +1076,10 @@ export default function DriverLiveMap({
   const handleConfirmAndGoOnline = useCallback(async () => {
     if (!selectedStartLocation || !rtdb) {
       setError("Please select a starting location first");
+      return;
+    }
+    if (!userId) {
+      setError("Please sign in to go online");
       return;
     }
 
@@ -1084,7 +1116,7 @@ export default function DriverLiveMap({
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
     }
-    if (rtdb) {
+    if (rtdb && userId) {
       const driverRef = ref(rtdb, `drivers-online/${userId}`);
       try {
         await remove(driverRef);
@@ -1236,7 +1268,7 @@ export default function DriverLiveMap({
             <div
               style={{
                 borderRadius: "16px",
-                height: "450px",
+                height: "600px",
                 overflow: "hidden",
                 position: "relative",
               }}

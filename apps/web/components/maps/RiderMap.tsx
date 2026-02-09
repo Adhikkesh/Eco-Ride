@@ -334,6 +334,7 @@ export default function RiderMap({
   const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
   const pickupAutocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
   const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
+  const lastMatchedDirectionUpdateRef = useRef<number>(0); // Throttle direction updates in matched state
 
   // Get current location
   useEffect(() => {
@@ -885,8 +886,14 @@ export default function RiderMap({
       );
     }
 
-    // CASE 2: MATCHED (Driver coming to pickup)
+    // CASE 2: MATCHED (Driver coming to pickup) - Throttle updates to prevent flickering
     else if (rideStatus === "matched" && assignedDriverLocation && pickup) {
+      // Skip if last update was less than 3 seconds ago (prevents excessive API calls)
+      const now = Date.now();
+      if (now - lastMatchedDirectionUpdateRef.current < 3000) {
+        return;
+      }
+      lastMatchedDirectionUpdateRef.current = now;
       // Calculate route: Driver -> Pickup
       directionsServiceRef.current.route(
         {
@@ -2022,8 +2029,8 @@ export default function RiderMap({
               </div>
             )}
 
-            {/* Search Card - Hide when matched */}
-            {rideStatus !== "matched" && (
+            {/* Search Card - Only show when idle or error (hide during active ride) */}
+            {(rideStatus === "idle" || rideStatus === "error") && (
               <div style={styles.card}>
                 <div style={{ marginBottom: "16px" }}>
                   <h2
@@ -2734,19 +2741,8 @@ export default function RiderMap({
                       }
                     }}
                   >
-                    {rideStatus === "searching" ? (
-                      <>
-                        <FaSpinner
-                          style={{ animation: "spin 1s linear infinite", fontSize: "20px" }}
-                        />
-                        Finding Driver...
-                      </>
-                    ) : (
-                      <>
-                        <FaCar style={{ fontSize: "20px" }} />
-                        Find a Ride
-                      </>
-                    )}
+                    <FaCar style={{ fontSize: "20px" }} />
+                    Find a Ride
                   </button>
                 )}
               </div>
@@ -2757,7 +2753,7 @@ export default function RiderMap({
               <div
                 style={{
                   borderRadius: "16px",
-                  height: "450px",
+                  height: "600px",
                   overflow: "hidden",
                   position: "relative",
                 }}
