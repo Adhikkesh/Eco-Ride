@@ -8,6 +8,7 @@
     "husky": "^9.1.7",
     "lint-staged": "^16.2.7",
     "turbo": "^2.7.3",
+    "typedoc": "^0.28.16",
     "typescript": "5.9.2"
   },
   "engines": {
@@ -22,6 +23,7 @@
     "check-types": "turbo run check-types",
     "check:fix": "biome check --write .",
     "dev": "turbo run dev",
+    "docs": "typedoc",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint .",
