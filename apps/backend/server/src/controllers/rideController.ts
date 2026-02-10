@@ -81,22 +81,32 @@ export const requestRide = async (req: Request, res: Response) => {
       declinedDrivers = [],
     } = req.body;
 
+    const pickupLatNum = Number(pickupLat);
+    const pickupLngNum = Number(pickupLng);
+    const dropLatNum = Number(dropLat);
+    const dropLngNum = Number(dropLng);
+
     // Validate required fields
-    // Changed ! check to undefined check to allow coordinates that are 0
-    if (
-      riderId === undefined ||
-      pickupLat === undefined ||
-      pickupLng === undefined ||
-      dropLat === undefined ||
-      dropLng === undefined
-    ) {
+    if (!riderId) {
       return res.status(400).json({
-        message: "Missing required fields: riderId, pickupLat, pickupLng, dropLat, dropLng",
+        message: "Missing required field: riderId",
         success: false,
       });
     }
 
-    const center: [number, number] = [pickupLat, pickupLng];
+    if (
+      !Number.isFinite(pickupLatNum) ||
+      !Number.isFinite(pickupLngNum) ||
+      !Number.isFinite(dropLatNum) ||
+      !Number.isFinite(dropLngNum)
+    ) {
+      return res.status(400).json({
+        message: "Invalid coordinates: pickupLat, pickupLng, dropLat, dropLng must be numbers",
+        success: false,
+      });
+    }
+
+    const center: [number, number] = [pickupLatNum, pickupLngNum];
     const radiusIncrement = 5; // 5km increments
     const maxRadius = 100; // Maximum search radius to prevent infinite loops
 
@@ -152,26 +162,23 @@ export const requestRide = async (req: Request, res: Response) => {
             continue;
           }
 
-          console.log(
-            `Driver ${driverId}: status=${driver.status}, lat=${driver.lat}, lng=${driver.lng}`,
-          );
-
-          // Only consider AVAILABLE drivers
-          if (driver.status !== "AVAILABLE") {
-            console.log(`  -> Skipping: status is ${driver.status}, not AVAILABLE`);
+          const driverLat = typeof driver.lat === "number" ? driver.lat : Number(driver.lat);
+          const driverLng = typeof driver.lng === "number" ? driver.lng : Number(driver.lng);
+          if (!Number.isFinite(driverLat) || !Number.isFinite(driverLng)) {
+            console.log(`  -> Skipping: invalid coordinates for driver ${driverId}`);
             continue;
           }
 
           // Calculate distance from pickup location
-          const distanceInKm = geofire.distanceBetween([driver.lat, driver.lng], center);
+          const distanceInKm = geofire.distanceBetween([driverLat, driverLng], center);
           console.log(`  -> Distance: ${distanceInKm.toFixed(2)} km`);
 
           if (distanceInKm <= currentRadius) {
             matchingDrivers.push({
               distance: distanceInKm,
               driverId,
-              lat: driver.lat,
-              lng: driver.lng,
+              lat: driverLat,
+              lng: driverLng,
               status: driver.status,
             });
             console.log(`  -> ADDED to matching drivers`);
@@ -179,7 +186,6 @@ export const requestRide = async (req: Request, res: Response) => {
             console.log(`  -> Skipping: outside ${currentRadius}km radius`);
           }
         } catch (driverErr) {
-          // Isolate errors per driver to prevent one malformed entry from crashing the whole request
           console.error(`Error processing driver ${driverId}:`, driverErr);
         }
       }
@@ -280,11 +286,11 @@ export const requestRide = async (req: Request, res: Response) => {
       declinedDrivers: declinedDrivers || [],
       driverId: assignedDriver.driverId,
       driverName,
-      drop: { lat: dropLat, lng: dropLng },
+      drop: { lat: dropLatNum, lng: dropLngNum },
       fare: fare || null,
       otp: Math.floor(1000 + Math.random() * 9000).toString(), // Generate 4-digit OTP (hidden until 100m)
       otpRevealed: false, // OTP is not revealed until driver is within 100m
-      pickup: { lat: pickupLat, lng: pickupLng },
+      pickup: { lat: pickupLatNum, lng: pickupLngNum },
       riderId,
       riderName,
       riderPhone,
@@ -297,9 +303,9 @@ export const requestRide = async (req: Request, res: Response) => {
     // STEP 4.1: WRITE TO PENDING RIDES IN RTDB FOR DRIVER TO ACCEPT/DECLINE
     // ---------------------------------------------------------
     const pendingRideData = {
-      drop: { lat: dropLat, lng: dropLng },
+      drop: { lat: dropLatNum, lng: dropLngNum },
       fare: fare || null,
-      pickup: { lat: pickupLat, lng: pickupLng },
+      pickup: { lat: pickupLatNum, lng: pickupLngNum },
       rideId: rideRef.id,
       riderId,
       riderName,

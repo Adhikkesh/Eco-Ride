@@ -69,7 +69,7 @@ const ARRIVAL_THRESHOLD_M = 20;
 const MIN_UPDATE_DISTANCE_M = 10;
 
 // Waiting time at pickup (ms)
-const PICKUP_WAIT_TIME_MS = 5000;
+const _PICKUP_WAIT_TIME_MS = 5000;
 
 // Google Maps API
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY || "";
@@ -105,6 +105,9 @@ export class DriverAgent {
 
   // Payment waiting state
   private paymentListenerUnsubscribe: (() => void) | null = null;
+
+  // OTP verification waiting state
+  private otpListenerUnsubscribe: (() => void) | null = null;
 
   constructor(
     driverId: string,
@@ -146,6 +149,18 @@ export class DriverAgent {
     this.isRunning = false;
     this.routePoints = [];
     this.currentAssignment = null;
+
+    // Cleanup OTP listener if active
+    if (this.otpListenerUnsubscribe) {
+      this.otpListenerUnsubscribe();
+      this.otpListenerUnsubscribe = null;
+    }
+
+    // Cleanup payment listener if active
+    if (this.paymentListenerUnsubscribe) {
+      this.paymentListenerUnsubscribe();
+      this.paymentListenerUnsubscribe = null;
+    }
 
     console.log(`  ⏹️  Agent ${this.driverId} stopped`);
   }
@@ -260,13 +275,44 @@ export class DriverAgent {
   }
 
   /**
-   * Start WAITING mode - wait for passenger boarding
+   * Start WAITING mode - wait for OTP verification via RTDB
+   * Driver stays at pickup until OTP is verified by driver app
    */
   private async startWaitingMode(): Promise<void> {
+    if (!this.currentAssignment) return;
+
     this.mode = "WAITING";
     this.waitStartTime = Date.now();
 
-    console.log(`  ⏳ ${this.driverId} waiting for passenger...`);
+    console.log(`  ⏳ ${this.driverId} waiting for OTP verification...`);
+
+    // Listen for ride status change (OTP verified = IN_PROGRESS)
+    const assignmentRef = rtdb.ref(`rides-assigned/${this.driverId}`);
+
+    const callback = async (snapshot: import("firebase-admin/database").DataSnapshot) => {
+      const data = snapshot.val();
+
+      // When OTP is verified, backend sets status to IN_PROGRESS
+      if (data?.status === "IN_PROGRESS") {
+        console.log(`  ✅ ${this.driverId} OTP verified, starting trip!`);
+
+        // Cleanup listener
+        if (this.otpListenerUnsubscribe) {
+          this.otpListenerUnsubscribe();
+          this.otpListenerUnsubscribe = null;
+        }
+
+        this.waitStartTime = null;
+        await this.startTripMode();
+      }
+    };
+
+    assignmentRef.on("value", callback);
+
+    // Store unsubscribe function
+    this.otpListenerUnsubscribe = () => {
+      assignmentRef.off("value", callback);
+    };
   }
 
   /**
@@ -332,8 +378,18 @@ export class DriverAgent {
       return;
     }
 
-    // If route complete but not arrived (edge case), regenerate route
+    // If route complete but not arrived, check if we're already very close
+    // to avoid repeatedly re-fetching routes which causes oscillation
     if (this.isRouteComplete()) {
+      // If we're within 500m, just snap to pickup directly instead of re-routing
+      if (distanceToPickup <= 500) {
+        // Move directly toward pickup without re-fetching route
+        this.currentPosition = { ...this.currentAssignment.pickup };
+        console.log(`  📍 ${this.driverId} snapped to pickup location (close enough)`);
+        await this.startWaitingMode();
+        return;
+      }
+      // Only re-fetch route if we're still far from pickup
       await this.fetchRoute(this.currentPosition, this.currentAssignment.pickup);
     }
 
@@ -342,19 +398,29 @@ export class DriverAgent {
   }
 
   /**
-   * Tick for WAITING mode
+   * Tick for WAITING mode - fallback timeout in case OTP verification takes too long
+   * The RTDB listener in startWaitingMode will trigger immediate trip start when OTP is verified.
+   * This fallback ensures the simulation doesn't hang forever if OTP isn't entered.
    */
   private async tickWaiting(): Promise<void> {
-    if (!this.waitStartTime) {
-      this.waitStartTime = Date.now();
-    }
+    // Fallback: if waiting for more than 30 seconds without OTP verification,
+    // auto-start the trip to keep simulation running
+    if (this.waitStartTime) {
+      const waitDuration = Date.now() - this.waitStartTime;
+      const FALLBACK_WAIT_TIME_MS = 30000; // 30 seconds
 
-    const waitDuration = Date.now() - this.waitStartTime;
+      if (waitDuration >= FALLBACK_WAIT_TIME_MS) {
+        console.log(`  ⏰ ${this.driverId} OTP timeout - auto-starting trip after 30s`);
 
-    if (waitDuration >= PICKUP_WAIT_TIME_MS) {
-      console.log(`  ✅ ${this.driverId} passenger boarded!`);
-      this.waitStartTime = null;
-      await this.startTripMode();
+        // Cleanup listener if active
+        if (this.otpListenerUnsubscribe) {
+          this.otpListenerUnsubscribe();
+          this.otpListenerUnsubscribe = null;
+        }
+
+        this.waitStartTime = null;
+        await this.startTripMode();
+      }
     }
   }
 
