@@ -14,14 +14,18 @@ import {
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   FaBriefcase,
   FaCalendarAlt,
   FaCamera,
+  FaCar,
+  FaCheckCircle,
   FaChevronLeft,
   FaClock,
   FaEnvelope,
+  FaExternalLinkAlt,
+  FaFileAlt,
   FaHeart,
   FaHistory,
   FaHome,
@@ -30,7 +34,9 @@ import {
   FaPhone,
   FaSignOutAlt,
   FaSpinner,
+  FaStar,
   FaUser,
+  FaWallet,
 } from "react-icons/fa";
 import { Button } from "@/components/ui/button";
 import { auth, db, storage } from "@/lib/firebase";
@@ -58,6 +64,18 @@ export default function ProfilePage() {
   const [pastRides, setPastRides] = useState<Ride[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
+  // Driver Specific State
+  const [trustScore, setTrustScore] = useState<number>(0);
+  const [vehicleDetails, setVehicleDetails] = useState<{ model: string; plate: string } | null>(
+    null,
+  );
+  const [kycData, setKycData] = useState<{
+    verified: boolean;
+    kycUrl: string;
+    licenseUrl: string;
+  } | null>(null);
+  const [walletBalance, setWalletBalance] = useState<number>(0);
+
   // Form State
   const [displayName, setDisplayName] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
@@ -78,20 +96,24 @@ export default function ProfilePage() {
   });
 
   useEffect(() => {
+    let isMounted = true;
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (!currentUser) {
-        router.push("/");
+        if (isMounted) router.push("/");
         return;
       }
 
-      setUser(currentUser);
-      setDisplayName(currentUser.displayName || "");
-      setPhotoURL(currentUser.photoURL || "");
+      if (isMounted) {
+        setUser(currentUser);
+        setDisplayName(currentUser.displayName || "");
+        setPhotoURL(currentUser.photoURL || "");
+      }
 
       try {
         if (db) {
           const userDoc = await getDoc(doc(db, "users", currentUser.uid));
-          if (userDoc.exists()) {
+          if (userDoc.exists() && isMounted) {
             const userData = userDoc.data();
             const phone = userData.phoneNumber || "";
             const hAddress = userData.homeAddress || "";
@@ -105,28 +127,59 @@ export default function ProfilePage() {
             setFavAddress(fAddress);
             setUserRole(role);
             setGreenPoints(userData.green_points || 0);
+            setTrustScore(userData.trust_score || 0);
 
             setInitialData({
               displayName: currentUser.displayName || "",
-              favAddress: hAddress, // Fixed: should be hAddress, wAddress, fAddress
+              favAddress: fAddress,
               homeAddress: hAddress,
               phoneNumber: phone,
               role: role,
               workAddress: wAddress,
             });
 
-            // Fetch past rides if user is a rider
-            if (role === "rider") {
-              const fetchPastRides = async () => {
-                if (!db) return;
-                setLoadingHistory(true);
-                try {
-                  const ridesQuery = query(
-                    collection(db, "rides"),
-                    where("riderId", "==", currentUser.uid),
-                    limit(20), // Fetch more to allow for better in-memory sorting
+            // Fetch Additional Data Based on Role
+            const fetchRoleData = async () => {
+              try {
+                if (role === "driver") {
+                  // Vehicle details
+                  const vehicleQuery = query(
+                    collection(db, "vehicle"),
+                    where("driver_uid", "==", currentUser.uid),
+                    limit(1),
                   );
-                  const querySnapshot = await getDocs(ridesQuery);
+                  const vehicleSnapshot = await getDocs(vehicleQuery);
+                  if (isMounted && !vehicleSnapshot.empty) {
+                    const vData = vehicleSnapshot.docs[0].data();
+                    setVehicleDetails({
+                      model: vData.model || "Unknown",
+                      plate: vData.plate_number || "Unknown",
+                    });
+                  }
+
+                  // Driver profile
+                  const profileDoc = await getDoc(doc(db, "driver_profile", currentUser.uid));
+                  if (isMounted && profileDoc.exists()) {
+                    const pData = profileDoc.data();
+                    setKycData({
+                      kycUrl: pData.kyc_url || "",
+                      licenseUrl: pData.license_url || "",
+                      verified: pData.kyc_verified || false,
+                    });
+                    setWalletBalance(pData.wallet_balance || 0);
+                  }
+                }
+
+                // Ride history (for both roles)
+                if (isMounted) setLoadingHistory(true);
+                const isRider = role === "rider";
+                const ridesQuery = query(
+                  collection(db, "rides"),
+                  where(isRider ? "riderId" : "driverId", "==", currentUser.uid),
+                  limit(20),
+                );
+                const querySnapshot = await getDocs(ridesQuery);
+                if (isMounted) {
                   const ridesArray = querySnapshot.docs
                     .map((doc) => ({
                       id: doc.id,
@@ -137,28 +190,52 @@ export default function ProfilePage() {
                       const timeB = b.timestamp?.seconds || b.createdAt?.seconds || 0;
                       return timeB - timeA;
                     })
-                    .slice(0, 5); // Keep only the latest 5
-
+                    .slice(0, 5);
                   setPastRides(ridesArray);
-                } catch (error) {
-                  console.error("Error fetching past rides:", error);
-                } finally {
-                  setLoadingHistory(false);
                 }
-              };
-              fetchPastRides();
-            }
+              } catch (err) {
+                console.error("Error fetching secondary data:", err);
+              } finally {
+                if (isMounted) setLoadingHistory(false);
+              }
+            };
+
+            await fetchRoleData();
           }
         }
       } catch (error) {
         console.error("Error fetching user data:", error);
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, [router]);
+
+  // Derived / Calculated State for Fallbacks
+  const displayWalletBalance = useMemo(() => {
+    // If the database has a balance, use it
+    if (walletBalance > 0) return walletBalance;
+    // Fallback: Sum up fares from completed rides for drivers
+    if (userRole === "driver" && pastRides.length > 0) {
+      return pastRides.reduce((acc, ride) => {
+        const fare = Number(ride.fare) || 0;
+        return acc + fare;
+      }, 0);
+    }
+    return 0;
+  }, [walletBalance, userRole, pastRides]);
+
+  const displayTrustScore = useMemo(() => {
+    // Ensure trust score is shown as a float with 1 decimal place, e.g., 4.5
+    // Default to a realistic starting rating if it's 0 (optional, but makes it look better)
+    if (trustScore === 0) return "0.0";
+    return trustScore.toFixed(1);
+  }, [trustScore]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -831,213 +908,485 @@ export default function ProfilePage() {
               </>
             )}
 
-            {/* Ride History - Only for Riders */}
-            {userRole === "rider" && (
-              <div
-                style={{
-                  backdropFilter: "blur(12px)",
-                  background: darkMode ? "rgba(30, 41, 59, 0.7)" : "white",
-                  border: darkMode
-                    ? "1px solid rgba(255,255,255,0.1)"
-                    : "1px solid rgba(0,0,0,0.1)",
-                  borderRadius: "24px",
-                  boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "24px",
-                  padding: "32px",
-                }}
-              >
+            {/* Driver Specific Sections */}
+            {userRole === "driver" && (
+              <>
+                {/* Driver Stats (Rating and Earnings) */}
+                <div style={{ display: "grid", gap: "24px", gridTemplateColumns: "1fr 1fr" }}>
+                  {/* Rating Card */}
+                  <div
+                    style={{
+                      backdropFilter: "blur(12px)",
+                      background:
+                        "linear-gradient(135deg, rgba(234, 179, 8, 0.2), rgba(202, 138, 4, 0.2))",
+                      border: "1px solid rgba(234, 179, 8, 0.3)",
+                      borderRadius: "24px",
+                      padding: "24px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        alignItems: "center",
+                        display: "flex",
+                        gap: "12px",
+                        marginBottom: "8px",
+                      }}
+                    >
+                      <FaStar color="#eab308" size={20} />
+                      <span
+                        style={{
+                          color: "#eab308",
+                          fontSize: "14px",
+                          fontWeight: "700",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        Rating
+                      </span>
+                    </div>
+                    <p
+                      style={{
+                        color: darkMode ? "white" : "#1e293b",
+                        fontSize: "28px",
+                        fontWeight: "800",
+                      }}
+                    >
+                      {displayTrustScore}
+                    </p>
+                    <p style={{ color: "#94a3b8", fontSize: "12px" }}>Driver Trust Score</p>
+                  </div>
+
+                  {/* Earnings Card */}
+                  <div
+                    style={{
+                      backdropFilter: "blur(12px)",
+                      background:
+                        "linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(16, 185, 129, 0.2))",
+                      border: "1px solid rgba(34, 197, 94, 0.3)",
+                      borderRadius: "24px",
+                      padding: "24px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        alignItems: "center",
+                        display: "flex",
+                        gap: "12px",
+                        marginBottom: "8px",
+                      }}
+                    >
+                      <FaWallet color="#22c55e" size={20} />
+                      <span
+                        style={{
+                          color: "#22c55e",
+                          fontSize: "14px",
+                          fontWeight: "700",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        Earnings
+                      </span>
+                    </div>
+                    <p
+                      style={{
+                        color: darkMode ? "white" : "#1e293b",
+                        fontSize: "28px",
+                        fontWeight: "800",
+                      }}
+                    >
+                      ₹{displayWalletBalance.toLocaleString()}
+                    </p>
+                    <p style={{ color: "#94a3b8", fontSize: "12px" }}>Total Wallet Balance</p>
+                  </div>
+                </div>
+
+                {/* Vehicle Information */}
                 <div
-                  style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}
+                  style={{
+                    backdropFilter: "blur(12px)",
+                    background: darkMode ? "rgba(30, 41, 59, 0.7)" : "white",
+                    border: darkMode
+                      ? "1px solid rgba(255,255,255,0.1)"
+                      : "1px solid rgba(0,0,0,0.1)",
+                    borderRadius: "24px",
+                    padding: "32px",
+                  }}
                 >
                   <h2
                     style={{
                       color: "#22c55e",
                       fontSize: "16px",
                       fontWeight: "600",
+                      marginBottom: "20px",
                     }}
                   >
-                    Recent Rides
+                    Vehicle Details
                   </h2>
-                  <FaHistory color="#94a3b8" />
+                  <div style={{ display: "flex", gap: "20px" }}>
+                    <div
+                      style={{
+                        alignItems: "center",
+                        background: darkMode ? "rgba(15, 23, 42, 0.6)" : "#f8fafc",
+                        borderRadius: "16px",
+                        display: "flex",
+                        justifyContent: "center",
+                        padding: "24px",
+                        width: "80px",
+                      }}
+                    >
+                      <FaCar color={darkMode ? "#94a3b8" : "#475569"} size={32} />
+                    </div>
+                    <div
+                      style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}
+                    >
+                      <p
+                        style={{
+                          color: darkMode ? "white" : "#1e293b",
+                          fontSize: "18px",
+                          fontWeight: "700",
+                        }}
+                      >
+                        {vehicleDetails?.model || "No registered vehicle"}
+                      </p>
+                      <p
+                        style={{
+                          color: "#94a3b8",
+                          fontSize: "14px",
+                          fontWeight: "600",
+                          letterSpacing: "1px",
+                        }}
+                      >
+                        {vehicleDetails?.plate || "---"}
+                      </p>
+                    </div>
+                  </div>
                 </div>
 
-                {loadingHistory ? (
-                  <div style={{ display: "flex", justifyContent: "center", padding: "20px" }}>
-                    <FaSpinner color="#22c55e" className="animate-spin" size={24} />
-                  </div>
-                ) : pastRides.length > 0 ? (
+                {/* KYC & Documents Status */}
+                <div
+                  style={{
+                    backdropFilter: "blur(12px)",
+                    background: darkMode ? "rgba(30, 41, 59, 0.7)" : "white",
+                    border: darkMode
+                      ? "1px solid rgba(255,255,255,0.1)"
+                      : "1px solid rgba(0,0,0,0.1)",
+                    borderRadius: "24px",
+                    padding: "32px",
+                  }}
+                >
+                  <h2
+                    style={{
+                      color: "#22c55e",
+                      fontSize: "16px",
+                      fontWeight: "600",
+                      marginBottom: "20px",
+                    }}
+                  >
+                    Compliance & KYC
+                  </h2>
                   <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                    {pastRides.map((ride) => (
-                      <div
-                        key={ride.id}
+                    {/* Status Row */}
+                    <div
+                      style={{
+                        alignItems: "center",
+                        display: "flex",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <div style={{ alignItems: "center", display: "flex", gap: "10px" }}>
+                        <FaCheckCircle
+                          color={kycData?.verified ? "#22c55e" : "#94a3b8"}
+                          size={16}
+                        />
+                        <span
+                          style={{
+                            color: darkMode ? "white" : "#1e293b",
+                            fontSize: "14px",
+                            fontWeight: "500",
+                          }}
+                        >
+                          KYC Verification Status
+                        </span>
+                      </div>
+                      <span
                         style={{
-                          background: darkMode ? "rgba(15, 23, 42, 0.4)" : "#f8fafc",
-                          border: darkMode
-                            ? "1px solid rgba(255,255,255,0.05)"
-                            : "1px solid rgba(0,0,0,0.05)",
-                          borderRadius: "16px",
-                          padding: "20px",
+                          background: kycData?.verified
+                            ? "rgba(34, 197, 94, 0.1)"
+                            : "rgba(148, 163, 184, 0.1)",
+                          borderRadius: "6px",
+                          color: kycData?.verified ? "#22c55e" : "#94a3b8",
+                          fontSize: "12px",
+                          fontWeight: "700",
+                          padding: "4px 10px",
+                        }}
+                      >
+                        {kycData?.verified ? "VERIFIED" : "PENDING"}
+                      </span>
+                    </div>
+
+                    {/* Document Links */}
+                    <div style={{ display: "flex", gap: "12px", marginTop: "8px" }}>
+                      <a
+                        href={kycData?.kycUrl || "#"}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          alignItems: "center",
+                          background: darkMode ? "rgba(15, 23, 42, 0.6)" : "#f8fafc",
+                          borderRadius: "12px",
+                          color: darkMode ? "#cbd5e1" : "#475569",
+                          display: "flex",
+                          flex: 1,
+                          fontSize: "13px",
+                          gap: "8px",
+                          opacity: kycData?.kycUrl ? 1 : 0.5,
+                          padding: "12px",
+                          pointerEvents: kycData?.kycUrl ? "auto" : "none",
+                          textDecoration: "none",
                           transition: "all 0.2s",
                         }}
                       >
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            marginBottom: "12px",
-                          }}
-                        >
-                          <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
-                            <FaCalendarAlt color="#94a3b8" size={12} />
-                            <span style={{ color: "#94a3b8", fontSize: "12px" }}>
-                              {ride.timestamp?.seconds
-                                ? new Date(ride.timestamp.seconds * 1000).toLocaleDateString()
-                                : ride.createdAt?.seconds
-                                  ? new Date(ride.createdAt.seconds * 1000).toLocaleDateString()
-                                  : "Recently"}
-                            </span>
-                          </div>
-                          <span
-                            style={{
-                              background: "rgba(34, 197, 94, 0.1)",
-                              borderRadius: "6px",
-                              color: "#22c55e",
-                              fontSize: "10px",
-                              fontWeight: "700",
-                              padding: "4px 8px",
-                              textTransform: "uppercase",
-                            }}
-                          >
-                            Completed
+                        <FaFileAlt size={14} />
+                        <span>KYC Document</span>
+                        <FaExternalLinkAlt size={10} style={{ marginLeft: "auto" }} />
+                      </a>
+                      <a
+                        href={kycData?.licenseUrl || "#"}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          alignItems: "center",
+                          background: darkMode ? "rgba(15, 23, 42, 0.6)" : "#f8fafc",
+                          borderRadius: "12px",
+                          color: darkMode ? "#cbd5e1" : "#475569",
+                          display: "flex",
+                          flex: 1,
+                          fontSize: "13px",
+                          gap: "8px",
+                          opacity: kycData?.licenseUrl ? 1 : 0.5,
+                          padding: "12px",
+                          pointerEvents: kycData?.licenseUrl ? "auto" : "none",
+                          textDecoration: "none",
+                          transition: "all 0.2s",
+                        }}
+                      >
+                        <FaFileAlt size={14} />
+                        <span>Driver License</span>
+                        <FaExternalLinkAlt size={10} style={{ marginLeft: "auto" }} />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Ride History - For both Riders and Drivers */}
+            <div
+              style={{
+                backdropFilter: "blur(12px)",
+                background: darkMode ? "rgba(30, 41, 59, 0.7)" : "white",
+                border: darkMode ? "1px solid rgba(255,255,255,0.1)" : "1px solid rgba(0,0,0,0.1)",
+                borderRadius: "24px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "24px",
+                padding: "32px",
+              }}
+            >
+              <div
+                style={{
+                  alignItems: "center",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  marginBottom: "8px",
+                }}
+              >
+                <div style={{ alignItems: "center", display: "flex", gap: "10px" }}>
+                  <FaHistory color="#22c55e" size={18} />
+                  <h2
+                    style={{
+                      color: darkMode ? "white" : "#1e293b",
+                      fontSize: "18px",
+                      fontWeight: "700",
+                    }}
+                  >
+                    {userRole === "rider" ? "Recent Rides" : "Driving History"}
+                  </h2>
+                </div>
+              </div>
+
+              {loadingHistory ? (
+                <div style={{ display: "flex", justifyContent: "center", padding: "20px" }}>
+                  <FaSpinner color="#22c55e" className="animate-spin" size={24} />
+                </div>
+              ) : pastRides.length > 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                  {pastRides.map((ride) => (
+                    <div
+                      key={ride.id}
+                      style={{
+                        background: darkMode ? "rgba(15, 23, 42, 0.4)" : "#f8fafc",
+                        border: darkMode
+                          ? "1px solid rgba(255,255,255,0.05)"
+                          : "1px solid rgba(0,0,0,0.05)",
+                        borderRadius: "16px",
+                        padding: "20px",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          marginBottom: "12px",
+                        }}
+                      >
+                        <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                          <FaCalendarAlt color="#94a3b8" size={12} />
+                          <span style={{ color: "#94a3b8", fontSize: "12px" }}>
+                            {ride.timestamp?.seconds
+                              ? new Date(ride.timestamp.seconds * 1000).toLocaleDateString()
+                              : ride.createdAt?.seconds
+                                ? new Date(ride.createdAt.seconds * 1000).toLocaleDateString()
+                                : "Recently"}
                           </span>
                         </div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                          <div style={{ alignItems: "flex-start", display: "flex", gap: "12px" }}>
-                            <div
-                              style={{
-                                alignItems: "center",
-                                display: "flex",
-                                flexDirection: "column",
-                                gap: "4px",
-                                marginTop: "4px",
-                              }}
-                            >
-                              <div
-                                style={{
-                                  background: "#22c55e",
-                                  borderRadius: "50%",
-                                  height: "8px",
-                                  width: "8px",
-                                }}
-                              />
-                              <div
-                                style={{
-                                  background: darkMode
-                                    ? "rgba(255,255,255,0.1)"
-                                    : "rgba(0,0,0,0.1)",
-                                  height: "20px",
-                                  width: "1px",
-                                }}
-                              />
-                              <FaMapMarkerAlt color="#ef4444" size={10} />
-                            </div>
-                            <div style={{ flex: 1 }}>
-                              <p
-                                style={{
-                                  color: darkMode ? "white" : "#1e293b",
-                                  fontSize: "14px",
-                                  fontWeight: "500",
-                                  marginBottom: "8px",
-                                }}
-                              >
-                                {ride.pickupName || "Previous Trip"}
-                              </p>
-                              <p
-                                style={{
-                                  color: darkMode ? "white" : "#1e293b",
-                                  fontSize: "14px",
-                                  fontWeight: "500",
-                                }}
-                              >
-                                {ride.dropName || "View Trip Details"}
-                              </p>
-                            </div>
-                          </div>
+                        <span
+                          style={{
+                            background: "rgba(34, 197, 94, 0.1)",
+                            borderRadius: "6px",
+                            color: "#22c55e",
+                            fontSize: "10px",
+                            fontWeight: "700",
+                            padding: "4px 8px",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          Completed
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                        <div style={{ alignItems: "flex-start", display: "flex", gap: "12px" }}>
                           <div
                             style={{
                               alignItems: "center",
-                              borderTop: darkMode
-                                ? "1px solid rgba(255,255,255,0.05)"
-                                : "1px solid rgba(0,0,0,0.05)",
                               display: "flex",
-                              justifyContent: "space-between",
-                              marginTop: "8px",
-                              paddingTop: "12px",
+                              flexDirection: "column",
+                              gap: "4px",
+                              marginTop: "4px",
                             }}
                           >
-                            <div style={{ alignItems: "center", display: "flex", gap: "16px" }}>
-                              <div style={{ alignItems: "center", display: "flex", gap: "6px" }}>
-                                <FaClock color="#94a3b8" size={14} />
-                                <span
-                                  style={{
-                                    color: darkMode ? "#cbd5e1" : "#475569",
-                                    fontSize: "13px",
-                                  }}
-                                >
-                                  {typeof ride.duration === "number"
-                                    ? ride.duration > 3600
-                                      ? `${Math.floor(ride.duration / 3600)}h ${Math.floor((ride.duration % 3600) / 60)}m`
-                                      : `${Math.floor(ride.duration / 60)}m`
-                                    : ride.duration || "--"}
-                                </span>
-                              </div>
-                              <div style={{ alignItems: "center", display: "flex", gap: "6px" }}>
-                                <FaLeaf color="#22c55e" size={14} />
-                                <span
-                                  style={{ color: "#22c55e", fontSize: "13px", fontWeight: "600" }}
-                                >
-                                  +{ride.greenPointsAwarded || 10} pts
-                                </span>
-                              </div>
-                            </div>
-                            <span
+                            <div
+                              style={{
+                                background: "#22c55e",
+                                borderRadius: "50%",
+                                height: "8px",
+                                width: "8px",
+                              }}
+                            />
+                            <div
+                              style={{
+                                background: darkMode ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.1)",
+                                height: "20px",
+                                width: "1px",
+                              }}
+                            />
+                            <FaMapMarkerAlt color="#ef4444" size={10} />
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <p
                               style={{
                                 color: darkMode ? "white" : "#1e293b",
-                                fontSize: "16px",
-                                fontWeight: "700",
+                                fontSize: "14px",
+                                fontWeight: "500",
+                                marginBottom: "8px",
                               }}
                             >
-                              ₹{ride.fare || "0"}
-                            </span>
+                              {ride.pickupName || "Previous Trip"}
+                            </p>
+                            <p
+                              style={{
+                                color: darkMode ? "white" : "#1e293b",
+                                fontSize: "14px",
+                                fontWeight: "500",
+                              }}
+                            >
+                              {ride.dropName || "View Trip Details"}
+                            </p>
                           </div>
                         </div>
+                        <div
+                          style={{
+                            alignItems: "center",
+                            borderTop: darkMode
+                              ? "1px solid rgba(255,255,255,0.05)"
+                              : "1px solid rgba(0,0,0,0.05)",
+                            display: "flex",
+                            justifyContent: "space-between",
+                            marginTop: "8px",
+                            paddingTop: "12px",
+                          }}
+                        >
+                          <div style={{ alignItems: "center", display: "flex", gap: "16px" }}>
+                            <div style={{ alignItems: "center", display: "flex", gap: "6px" }}>
+                              <FaClock color="#94a3b8" size={14} />
+                              <span
+                                style={{
+                                  color: darkMode ? "#cbd5e1" : "#475569",
+                                  fontSize: "13px",
+                                }}
+                              >
+                                {typeof ride.duration === "number"
+                                  ? ride.duration > 3600
+                                    ? `${Math.floor(ride.duration / 3600)}h ${Math.floor((ride.duration % 3600) / 60)}m`
+                                    : `${Math.floor(ride.duration / 60)}m`
+                                  : ride.duration || "--"}
+                              </span>
+                            </div>
+                            <div style={{ alignItems: "center", display: "flex", gap: "6px" }}>
+                              <FaLeaf color="#22c55e" size={14} />
+                              <span
+                                style={{ color: "#22c55e", fontSize: "13px", fontWeight: "600" }}
+                              >
+                                +{ride.greenPointsAwarded || 10} pts
+                              </span>
+                            </div>
+                          </div>
+                          <span
+                            style={{
+                              color: darkMode ? "white" : "#1e293b",
+                              fontSize: "16px",
+                              fontWeight: "700",
+                            }}
+                          >
+                            ₹{ride.fare || "0"}
+                          </span>
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div
-                    style={{
-                      background: darkMode ? "rgba(15, 23, 42, 0.4)" : "#f8fafc",
-                      border: "1px dashed rgba(148, 163, 184, 0.3)",
-                      borderRadius: "16px",
-                      padding: "40px",
-                      textAlign: "center",
-                    }}
-                  >
-                    <FaHistory
-                      color="#94a3b8"
-                      size={32}
-                      style={{ marginBottom: "12px", opacity: 0.5 }}
-                    />
-                    <p style={{ color: "#94a3b8", fontSize: "14px" }}>
-                      No rides taken yet. Your green journey starts here!
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div
+                  style={{
+                    background: darkMode ? "rgba(15, 23, 42, 0.4)" : "#f8fafc",
+                    border: "1px dashed rgba(148, 163, 184, 0.3)",
+                    borderRadius: "16px",
+                    padding: "40px",
+                    textAlign: "center",
+                  }}
+                >
+                  <FaHistory
+                    color="#94a3b8"
+                    size={32}
+                    style={{ marginBottom: "12px", opacity: 0.5 }}
+                  />
+                  <p style={{ color: "#94a3b8", fontSize: "14px" }}>
+                    No rides taken yet. Your green journey starts here!
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
 
           <div
@@ -1060,12 +1409,14 @@ export default function ProfilePage() {
                     transition: "all 0.2s",
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "#22c55e";
-                    e.currentTarget.style.color = "white";
+                    const target = e.currentTarget;
+                    target.style.background = "#22c55e";
+                    target.style.color = "white";
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "rgba(34, 197, 94, 0.1)";
-                    e.currentTarget.style.color = "#22c55e";
+                    const target = e.currentTarget;
+                    target.style.background = "rgba(34, 197, 94, 0.1)";
+                    target.style.color = "#22c55e";
                   }}
                 >
                   Edit Profile
@@ -1088,12 +1439,14 @@ export default function ProfilePage() {
                       transition: "all 0.2s",
                     }}
                     onMouseEnter={(e) => {
-                      e.currentTarget.style.background = "rgba(239, 68, 68, 0.1)";
-                      e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.6)";
+                      const target = e.currentTarget;
+                      target.style.background = "rgba(239, 68, 68, 0.1)";
+                      target.style.borderColor = "rgba(239, 68, 68, 0.6)";
                     }}
                     onMouseLeave={(e) => {
-                      e.currentTarget.style.background = "transparent";
-                      e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.3)";
+                      const target = e.currentTarget;
+                      target.style.background = "transparent";
+                      target.style.borderColor = "rgba(239, 68, 68, 0.3)";
                     }}
                   >
                     Cancel
@@ -1137,12 +1490,14 @@ export default function ProfilePage() {
                   transition: "all 0.2s",
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "rgba(239, 68, 68, 0.1)";
-                  e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.6)";
+                  const target = e.currentTarget;
+                  target.style.background = "rgba(239, 68, 68, 0.1)";
+                  target.style.borderColor = "rgba(239, 68, 68, 0.6)";
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "transparent";
-                  e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.3)";
+                  const target = e.currentTarget;
+                  target.style.background = "transparent";
+                  target.style.borderColor = "rgba(239, 68, 68, 0.3)";
                 }}
               >
                 <FaSignOutAlt />
