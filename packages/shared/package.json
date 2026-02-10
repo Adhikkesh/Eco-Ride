@@ -1,12 +1,14 @@
 {
   "devDependencies": {
     "@repo/typescript-config": "workspace:*",
-    "typescript": "^5.3.0"
+    "typescript": "^5.7.3"
   },
   "main": "./src/index.ts",
   "name": "@repo/shared",
+  "private": true,
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "dev": "tsc -w"
   },
   "types": "./src/index.ts",
   "version": "0.0.0"

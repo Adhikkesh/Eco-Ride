@@ -56,7 +56,8 @@ interface DriverMatch {
  * Request Ride Controller
  * @description Handles new ride requests from riders. Implements an expanding radius
  *              search algorithm to find the nearest available driver within 100km.
- *              Creates ride record in Firestore and notifies matched driver via RTDB.
+ *              Creates ride record in Firestore with PENDING_ACCEPTANCE status.
+ *              Driver must accept/decline before ride proceeds.
  * @route POST /ride/request
  * @param {Object} req.body - Ride request parameters
  * @param {string} req.body.riderId - The rider's unique identifier
@@ -65,27 +66,47 @@ interface DriverMatch {
  * @param {number} req.body.dropLat - Drop-off location latitude
  * @param {number} req.body.dropLng - Drop-off location longitude
  * @param {number} [req.body.fare] - Pre-calculated fare (optional)
- * @returns {Object} JSON response with matched driver details, ride ID, OTP, and ETA
+ * @param {string[]} [req.body.declinedDrivers] - Drivers who already declined (for re-matching)
+ * @returns {Object} JSON response with matched driver details, ride ID, and ETA
  */
 export const requestRide = async (req: Request, res: Response) => {
   try {
-    const { pickup, drop, fare } = req.body;
-    const riderId = req.user?.uid;
+    const {
+      riderId,
+      pickupLat,
+      pickupLng,
+      dropLat,
+      dropLng,
+      fare,
+      declinedDrivers = [],
+    } = req.body;
 
-    const pickupLat = pickup?.lat;
-    const pickupLng = pickup?.lng;
-    const dropLat = drop?.lat;
-    const dropLng = drop?.lng;
+    const pickupLatNum = Number(pickupLat);
+    const pickupLngNum = Number(pickupLng);
+    const dropLatNum = Number(dropLat);
+    const dropLngNum = Number(dropLng);
 
     // Validate required fields
-    if (!riderId || !pickupLat || !pickupLng || !dropLat || !dropLng) {
+    if (!riderId) {
       return res.status(400).json({
-        message: "Missing required fields: riderId, pickup coordinates, or drop coordinates",
+        message: "Missing required field: riderId",
         success: false,
       });
     }
 
-    const center: [number, number] = [pickupLat, pickupLng];
+    if (
+      !Number.isFinite(pickupLatNum) ||
+      !Number.isFinite(pickupLngNum) ||
+      !Number.isFinite(dropLatNum) ||
+      !Number.isFinite(dropLngNum)
+    ) {
+      return res.status(400).json({
+        message: "Invalid coordinates: pickupLat, pickupLng, dropLat, dropLng must be numbers",
+        success: false,
+      });
+    }
+
+    const center: [number, number] = [pickupLatNum, pickupLngNum];
     const radiusIncrement = 5; // 5km increments
     const maxRadius = 100; // Maximum search radius to prevent infinite loops
 
@@ -107,9 +128,11 @@ export const requestRide = async (req: Request, res: Response) => {
     // ---------------------------------------------------------
     const matchingDrivers: DriverMatch[] = [];
     let currentRadius = radiusIncrement;
+    const declinedSet = new Set(declinedDrivers as string[]);
 
     console.log("=== RIDE REQUEST DEBUG ===");
     console.log("Total drivers online:", Object.keys(driversData).length);
+    console.log("Declined drivers:", declinedDrivers);
 
     // Keep expanding radius until we find drivers or hit max radius
     while (matchingDrivers.length === 0 && currentRadius <= maxRadius) {
@@ -117,6 +140,12 @@ export const requestRide = async (req: Request, res: Response) => {
 
       for (const [driverId, locationData] of Object.entries(driversData)) {
         const driver = locationData as DriverLocation;
+
+        // Skip declined drivers
+        if (declinedSet.has(driverId)) {
+          console.log(`  -> Skipping ${driverId}: previously declined`);
+          continue;
+        }
 
         console.log(
           `Driver ${driverId}: status=${driver.status}, lat=${driver.lat}, lng=${driver.lng}`,
@@ -128,16 +157,23 @@ export const requestRide = async (req: Request, res: Response) => {
           continue;
         }
 
+        const driverLat = typeof driver.lat === "number" ? driver.lat : Number(driver.lat);
+        const driverLng = typeof driver.lng === "number" ? driver.lng : Number(driver.lng);
+        if (!Number.isFinite(driverLat) || !Number.isFinite(driverLng)) {
+          console.log(`  -> Skipping: invalid coordinates for driver ${driverId}`);
+          continue;
+        }
+
         // Calculate distance from pickup location
-        const distanceInKm = geofire.distanceBetween([driver.lat, driver.lng], center);
+        const distanceInKm = geofire.distanceBetween([driverLat, driverLng], center);
         console.log(`  -> Distance: ${distanceInKm.toFixed(2)} km`);
 
         if (distanceInKm <= currentRadius) {
           matchingDrivers.push({
             distance: distanceInKm,
             driverId,
-            lat: driver.lat,
-            lng: driver.lng,
+            lat: driverLat,
+            lng: driverLng,
             status: driver.status,
           });
           console.log(`  -> ADDED to matching drivers`);
@@ -168,7 +204,6 @@ export const requestRide = async (req: Request, res: Response) => {
     // ---------------------------------------------------------
     // STEP 3: RESERVE THE NEAREST DRIVER (Direct Update)
     // ---------------------------------------------------------
-    // Note: For production, consider using transactions for race condition handling
     let assignedDriver: DriverMatch | null = null;
 
     for (const driver of matchingDrivers) {
@@ -183,7 +218,7 @@ export const requestRide = async (req: Request, res: Response) => {
         console.log(`Current data for ${driver.driverId}:`, currentData);
 
         if (currentData && currentData.status === "AVAILABLE") {
-          // Update status to RESERVED
+          // Update status to RESERVED (pending acceptance)
           await driverRef.update({ status: "RESERVED" });
           assignedDriver = driver;
           console.log(`Successfully reserved driver: ${driver.driverId}`);
@@ -206,7 +241,6 @@ export const requestRide = async (req: Request, res: Response) => {
     // ---------------------------------------------------------
     // STEP 4: CREATE RIDE DOCUMENT IN FIRESTORE
     // ---------------------------------------------------------
-    // Fetch driver name from Firestore BEFORE creating the ride
     let driverName = "Unknown Driver";
     try {
       const userDoc = await db.collection("users").doc(assignedDriver.driverId).get();
@@ -217,45 +251,54 @@ export const requestRide = async (req: Request, res: Response) => {
       console.error("Error fetching driver name:", err);
     }
 
+    // Create ride with PENDING_ACCEPTANCE status - driver must accept first
     const rideData = {
       createdAt: FieldValue.serverTimestamp(),
+      declinedDrivers: declinedDrivers || [],
       driverId: assignedDriver.driverId,
       driverName,
-      drop: { lat: dropLat, lng: dropLng },
+      drop: { lat: dropLatNum, lng: dropLngNum },
       fare: fare || null,
-      matchedAt: FieldValue.serverTimestamp(),
-      otp: Math.floor(1000 + Math.random() * 9000).toString(), // Generate 4-digit OTP
-      pickup: { lat: pickupLat, lng: pickupLng },
+      otp: Math.floor(1000 + Math.random() * 9000).toString(), // Generate 4-digit OTP (hidden until 100m)
+      otpRevealed: false, // OTP is not revealed until driver is within 100m
+      pickup: { lat: pickupLatNum, lng: pickupLngNum },
       riderId,
-      status: "MATCHED",
+      status: "PENDING_ACCEPTANCE", // NEW: Driver must accept before proceeding
     };
 
     const rideRef = await db.collection("rides").add(rideData);
 
     // ---------------------------------------------------------
-    // STEP 4.1: WRITE RIDE ASSIGNMENT TO RTDB FOR DRIVER
+    // STEP 4.1: WRITE TO PENDING RIDES IN RTDB FOR DRIVER TO ACCEPT/DECLINE
     // ---------------------------------------------------------
-    // This allows the driver to listen in real-time for assigned rides
-    const assignedRideData = {
-      drop: { lat: dropLat, lng: dropLng },
-      pickup: { lat: pickupLat, lng: pickupLng },
+    const pendingRideData = {
+      drop: { lat: dropLatNum, lng: dropLngNum },
+      fare: fare || null,
+      pickup: { lat: pickupLatNum, lng: pickupLngNum },
       rideId: rideRef.id,
       riderId,
+      status: "PENDING_ACCEPTANCE",
       timestamp: Date.now(),
     };
 
-    await rtdb.ref(`rides-assigned/${assignedDriver.driverId}`).set(assignedRideData);
-    console.log(`Ride assignment published to RTDB for driver: ${assignedDriver.driverId}`);
+    // Write to rides-pending (driver listens here for acceptance prompt)
+    await rtdb.ref(`rides-pending/${assignedDriver.driverId}`).set(pendingRideData);
+    console.log(`Pending ride published to RTDB for driver: ${assignedDriver.driverId}`);
+
+    // Also write to rides node for rider to track status
+    await rtdb.ref(`rides/${rideRef.id}`).set({
+      driverId: assignedDriver.driverId,
+      driverLocation: { lat: assignedDriver.lat, lng: assignedDriver.lng },
+      status: "PENDING_ACCEPTANCE",
+    });
 
     // ---------------------------------------------------------
     // STEP 5: RETURN SUCCESS RESPONSE
     // ---------------------------------------------------------
-
-    // Estimate ETA based on distance (rough estimate: 2 min per km)
     const etaMinutes = Math.ceil(assignedDriver.distance * 2);
 
     return res.status(200).json({
-      distance: Math.round(assignedDriver.distance * 1000), // in meters
+      distance: Math.round(assignedDriver.distance * 1000),
       driverId: assignedDriver.driverId,
       driverLocation: {
         lat: assignedDriver.lat,
@@ -263,10 +306,11 @@ export const requestRide = async (req: Request, res: Response) => {
       },
       driverName,
       eta: `${etaMinutes} min`,
-      message: "Driver matched successfully!",
-      otp: rideData.otp, // Return OTP to rider
+      message: "Waiting for driver to accept the ride",
       rideId: rideRef.id,
+      status: "PENDING_ACCEPTANCE",
       success: true,
+      // NOTE: OTP is NOT returned here - it will be fetched when driver is within 100m
     });
   } catch (error) {
     console.error("Ride Request Error:", error);
@@ -420,10 +464,11 @@ export const completeRide = async (req: Request, res: Response) => {
       status: "COMPLETED",
     });
 
-    // 2. Free up the driver
+    // 2. Remove ride assignment but keep driver BUSY until payment is confirmed
+    // Driver status will be set to AVAILABLE after payment confirmation
     if (driverId) {
       await rtdb.ref(`rides-assigned/${driverId}`).remove();
-      await rtdb.ref(`drivers-online/${driverId}`).update({ status: "AVAILABLE" });
+      // NOTE: Driver stays BUSY until payment is confirmed via confirmPayment
     }
 
     // 3. Sync to RTDB for frontend listener
@@ -462,7 +507,7 @@ export const getActiveRide = async (req: Request, res: Response) => {
     const ridesRef = db.collection("rides");
     const snapshot = await ridesRef
       .where("riderId", "==", riderId)
-      .where("status", "in", ["MATCHED", "IN_PROGRESS"])
+      .where("status", "in", ["PENDING_ACCEPTANCE", "MATCHED", "IN_PROGRESS"])
       .limit(1)
       .get();
 
@@ -513,5 +558,376 @@ export const getActiveRide = async (req: Request, res: Response) => {
       message: "Internal server error fetching active ride",
       success: false,
     });
+  }
+};
+
+/**
+ * Accept Ride Controller
+ * @description Driver accepts a pending ride request.
+ *              Moves ride from PENDING_ACCEPTANCE to MATCHED status.
+ *              Transfers assignment from rides-pending to rides-assigned.
+ * @route POST /ride/accept
+ * @param {Object} req.body - Request body
+ * @param {string} req.body.rideId - The unique identifier of the ride
+ * @returns {Object} JSON response with acceptance status
+ */
+export const acceptRide = async (req: Request, res: Response) => {
+  try {
+    const { rideId } = req.body;
+    const driverId = req.user?.uid;
+
+    if (!rideId) {
+      return res.status(400).json({ message: "Missing rideId", success: false });
+    }
+
+    if (!driverId) {
+      return res.status(401).json({ message: "Unauthorized", success: false });
+    }
+
+    // Get ride details
+    const rideRef = db.collection("rides").doc(rideId);
+    const rideDoc = await rideRef.get();
+
+    if (!rideDoc.exists) {
+      return res.status(404).json({ message: "Ride not found", success: false });
+    }
+
+    const rideData = rideDoc.data();
+
+    // Verify this driver is assigned to this ride
+    if (rideData?.driverId !== driverId) {
+      return res
+        .status(403)
+        .json({ message: "Not authorized to accept this ride", success: false });
+    }
+
+    // Verify ride is in pending acceptance state
+    if (rideData?.status !== "PENDING_ACCEPTANCE") {
+      return res.status(400).json({
+        message: `Cannot accept ride with status: ${rideData?.status}`,
+        success: false,
+      });
+    }
+
+    // 1. Update Firestore ride status to MATCHED
+    await rideRef.update({
+      matchedAt: FieldValue.serverTimestamp(),
+      status: "MATCHED",
+    });
+
+    // 2. Remove from rides-pending and add to rides-assigned
+    await rtdb.ref(`rides-pending/${driverId}`).remove();
+
+    const assignedRideData = {
+      drop: rideData.drop,
+      pickup: rideData.pickup,
+      rideId,
+      riderId: rideData.riderId,
+      status: "MATCHED",
+      timestamp: Date.now(),
+    };
+    await rtdb.ref(`rides-assigned/${driverId}`).set(assignedRideData);
+
+    // 3. Update driver status to BUSY
+    await rtdb.ref(`drivers-online/${driverId}`).update({ status: "BUSY" });
+
+    // 4. Update rides node for rider tracking
+    await rtdb.ref(`rides/${rideId}`).update({
+      status: "MATCHED",
+    });
+
+    console.log(`Driver ${driverId} accepted ride ${rideId}`);
+
+    return res.status(200).json({
+      message: "Ride accepted successfully",
+      rideId,
+      success: true,
+    });
+  } catch (error) {
+    console.error("Accept Ride Error:", error);
+    return res.status(500).json({ message: "Error accepting ride", success: false });
+  }
+};
+
+/**
+ * Decline Ride Controller
+ * @description Driver declines a pending ride request.
+ *              Adds driver to declined list and re-matches with another driver.
+ * @route POST /ride/decline
+ * @param {Object} req.body - Request body
+ * @param {string} req.body.rideId - The unique identifier of the ride
+ * @returns {Object} JSON response with decline status and re-match info
+ */
+export const declineRide = async (req: Request, res: Response) => {
+  try {
+    const { rideId } = req.body;
+    const driverId = req.user?.uid;
+
+    console.log("Decline Ride Request:", { body: req.body, driverId });
+
+    if (!rideId) {
+      console.error("Decline Ride Error: Missing rideId");
+      return res.status(400).json({ message: "Missing rideId", success: false });
+    }
+
+    if (!driverId) {
+      return res.status(401).json({ message: "Unauthorized", success: false });
+    }
+
+    // Get ride details
+    const rideRef = db.collection("rides").doc(rideId);
+    const rideDoc = await rideRef.get();
+
+    if (!rideDoc.exists) {
+      return res.status(404).json({ message: "Ride not found", success: false });
+    }
+
+    const rideData = rideDoc.data();
+
+    // Verify this driver is assigned to this ride
+    if (rideData?.driverId !== driverId) {
+      return res
+        .status(403)
+        .json({ message: "Not authorized to decline this ride", success: false });
+    }
+
+    // Verify ride is in pending acceptance state
+    if (rideData?.status !== "PENDING_ACCEPTANCE") {
+      console.error(`Decline Ride Error: Invalid status ${rideData?.status} for ride ${rideId}`);
+      return res.status(400).json({
+        message: `Cannot decline ride with status: ${rideData?.status}`,
+        success: false,
+      });
+    }
+
+    // 1. Add driver to declined list in Firestore
+    const declinedDrivers = rideData.declinedDrivers || [];
+    declinedDrivers.push(driverId);
+
+    await rideRef.update({
+      declinedDrivers,
+      driverId: null,
+      driverName: null,
+      status: "SEARCHING", // Back to searching for a new driver
+    });
+
+    // 2. Remove from rides-pending and reset driver status
+    await rtdb.ref(`rides-pending/${driverId}`).remove();
+    await rtdb.ref(`drivers-online/${driverId}`).update({ status: "AVAILABLE" });
+
+    // 3. Update rides node for rider tracking
+    await rtdb.ref(`rides/${rideId}`).update({
+      driverId: null,
+      status: "SEARCHING",
+    });
+
+    console.log(`Driver ${driverId} declined ride ${rideId}. Re-matching...`);
+
+    // 4. Attempt to re-match with another driver (excluding declined drivers)
+    const pickup = rideData.pickup;
+    const drop = rideData.drop;
+    const center: [number, number] = [pickup.lat, pickup.lng];
+    const declinedSet = new Set(declinedDrivers);
+
+    // Fetch online drivers
+    const driversSnapshot = await rtdb.ref("drivers-online").once("value");
+    const driversData = driversSnapshot.val();
+
+    let newDriver: DriverMatch | null = null;
+
+    if (driversData) {
+      const matchingDrivers: DriverMatch[] = [];
+
+      for (const [candidateId, locationData] of Object.entries(driversData)) {
+        const driver = locationData as DriverLocation;
+
+        // Skip declined drivers
+        if (declinedSet.has(candidateId)) continue;
+
+        // Only AVAILABLE drivers
+        if (driver.status !== "AVAILABLE") continue;
+
+        const distanceInKm = geofire.distanceBetween([driver.lat, driver.lng], center);
+
+        if (distanceInKm <= 100) {
+          matchingDrivers.push({
+            distance: distanceInKm,
+            driverId: candidateId,
+            lat: driver.lat,
+            lng: driver.lng,
+            status: driver.status,
+          });
+        }
+      }
+
+      // Sort by distance
+      matchingDrivers.sort((a, b) => a.distance - b.distance);
+
+      // Try to reserve the nearest available driver
+      for (const driver of matchingDrivers) {
+        const driverRef = rtdb.ref(`drivers-online/${driver.driverId}`);
+        const snapshot = await driverRef.once("value");
+        const currentData = snapshot.val() as DriverLocation | null;
+
+        if (currentData && currentData.status === "AVAILABLE") {
+          await driverRef.update({ status: "RESERVED" });
+          newDriver = driver;
+          break;
+        }
+      }
+    }
+
+    if (newDriver) {
+      // Fetch new driver's name
+      let newDriverName = "Unknown Driver";
+      try {
+        const userDoc = await db.collection("users").doc(newDriver.driverId).get();
+        if (userDoc.exists) {
+          newDriverName = userDoc.data()?.name || "Unknown Driver";
+        }
+      } catch (err) {
+        console.error("Error fetching new driver name:", err);
+      }
+
+      // Update ride with new driver
+      await rideRef.update({
+        driverId: newDriver.driverId,
+        driverName: newDriverName,
+        status: "PENDING_ACCEPTANCE",
+      });
+
+      // Write to new driver's pending rides
+      const pendingRideData = {
+        drop,
+        fare: rideData.fare,
+        pickup,
+        rideId,
+        riderId: rideData.riderId,
+        status: "PENDING_ACCEPTANCE",
+        timestamp: Date.now(),
+      };
+      await rtdb.ref(`rides-pending/${newDriver.driverId}`).set(pendingRideData);
+
+      // Update rides node
+      await rtdb.ref(`rides/${rideId}`).update({
+        driverId: newDriver.driverId,
+        driverLocation: { lat: newDriver.lat, lng: newDriver.lng },
+        status: "PENDING_ACCEPTANCE",
+      });
+
+      console.log(`Re-matched ride ${rideId} to driver ${newDriver.driverId}`);
+
+      return res.status(200).json({
+        message: "Ride declined. Re-matched to another driver.",
+        newDriverId: newDriver.driverId,
+        newDriverName,
+        rideId,
+        success: true,
+      });
+    }
+
+    // No other drivers available
+    await rideRef.update({ status: "NO_DRIVERS" });
+    await rtdb.ref(`rides/${rideId}`).update({ status: "NO_DRIVERS" });
+
+    return res.status(200).json({
+      message: "Ride declined. No other drivers available.",
+      rideId,
+      success: true,
+    });
+  } catch (error) {
+    console.error("Decline Ride Error:", error);
+    return res.status(500).json({ message: "Error declining ride", success: false });
+  }
+};
+
+/**
+ * Get OTP Controller
+ * @description Returns the OTP for a ride, but ONLY if driver is within 100m of pickup.
+ *              This ensures OTP is shared only when driver is near for pickup verification.
+ * @route GET /ride/otp/:rideId
+ * @param {string} req.params.rideId - The unique identifier of the ride
+ * @returns {Object} JSON response with OTP if within range, or error message
+ */
+export const getOtp = async (req: Request, res: Response) => {
+  try {
+    const { rideId } = req.params;
+    const userId = req.user?.uid;
+
+    if (!rideId) {
+      return res.status(400).json({ message: "Missing rideId", success: false });
+    }
+
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized", success: false });
+    }
+
+    // Get ride details
+    const rideRef = db.collection("rides").doc(Array.isArray(rideId) ? rideId[0] : rideId);
+    const rideDoc = await rideRef.get();
+
+    if (!rideDoc.exists) {
+      return res.status(404).json({ message: "Ride not found", success: false });
+    }
+
+    const rideData = rideDoc.data();
+
+    // Verify user is either the rider or driver of this ride
+    if (rideData?.riderId !== userId && rideData?.driverId !== userId) {
+      return res
+        .status(403)
+        .json({ message: "Not authorized to access this ride", success: false });
+    }
+
+    // Verify ride is in MATCHED status (driver accepted, heading to pickup)
+    if (rideData?.status !== "MATCHED") {
+      return res.status(400).json({
+        message: `OTP not available for ride status: ${rideData?.status}`,
+        success: false,
+      });
+    }
+
+    // Get driver's current location from RTDB
+    const driverSnapshot = await rtdb.ref(`drivers-online/${rideData.driverId}`).once("value");
+    const driverData = driverSnapshot.val() as DriverLocation | null;
+
+    if (!driverData) {
+      return res.status(404).json({ message: "Driver location not found", success: false });
+    }
+
+    // Calculate distance between driver and pickup
+    const pickup = rideData.pickup;
+    const driverPos: [number, number] = [driverData.lat, driverData.lng];
+    const pickupPos: [number, number] = [pickup.lat, pickup.lng];
+    const distanceInKm = geofire.distanceBetween(driverPos, pickupPos);
+    const distanceInMeters = Math.round(distanceInKm * 1000);
+
+    console.log(`Driver distance to pickup: ${distanceInMeters}m`);
+
+    // Only reveal OTP if driver is within 100 meters
+    if (distanceInMeters > 100) {
+      return res.status(200).json({
+        distanceToPickup: distanceInMeters,
+        message: `Driver is ${distanceInMeters}m away. OTP will be shown when driver is within 100m.`,
+        otpAvailable: false,
+        success: true,
+      });
+    }
+
+    // Mark OTP as revealed in Firestore
+    if (!rideData.otpRevealed) {
+      await rideRef.update({ otpRevealed: true });
+    }
+
+    return res.status(200).json({
+      distanceToPickup: distanceInMeters,
+      message: "Driver is nearby. Share this OTP with the driver.",
+      otp: rideData.otp,
+      otpAvailable: true,
+      success: true,
+    });
+  } catch (error) {
+    console.error("Get OTP Error:", error);
+    return res.status(500).json({ message: "Error fetching OTP", success: false });
   }
 };

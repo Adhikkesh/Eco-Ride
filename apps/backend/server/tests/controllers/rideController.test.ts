@@ -41,7 +41,7 @@ import { describe, expect, it } from "vitest";
  * Checks for existence of riderId and all coordinate fields.
  * @param body - The request body
  */
-const validateRideRequest = (body: any) => {
+const validateRideRequest = (body: Record<string, unknown>) => {
   const { riderId, pickupLat, pickupLng, dropLat, dropLng } = body;
 
   if (!riderId || !pickupLat || !pickupLng || !dropLat || !dropLng) {
@@ -55,7 +55,7 @@ const validateRideRequest = (body: any) => {
 };
 
 // Validate rideId for operations
-const validateRideId = (body: any) => {
+const validateRideId = (body: Record<string, unknown>) => {
   if (!body.rideId) {
     return { message: "Missing rideId", valid: false };
   }
@@ -63,7 +63,7 @@ const validateRideId = (body: any) => {
 };
 
 // Validate OTP
-const validateOTP = (body: any) => {
+const validateOTP = (body: Record<string, unknown>) => {
   if (!body.otp) {
     return { message: "Missing OTP", valid: false };
   }
@@ -92,17 +92,17 @@ const calculateETA = (distanceKm: number) => {
 };
 
 // Filter available drivers
-const filterAvailableDrivers = (drivers: any[]) => {
+const filterAvailableDrivers = (drivers: { status: string; id: string }[]) => {
   return drivers.filter((d) => d.status === "AVAILABLE");
 };
 
 // Sort drivers by distance
-const sortDriversByDistance = (drivers: any[]) => {
+const sortDriversByDistance = (drivers: { distance: number; id: string }[]) => {
   return [...drivers].sort((a, b) => a.distance - b.distance);
 };
 
 // Check if driver can be matched
-const canMatchDriver = (driver: any) => {
+const canMatchDriver = (driver: { status: string }) => {
   return driver.status === "AVAILABLE";
 };
 

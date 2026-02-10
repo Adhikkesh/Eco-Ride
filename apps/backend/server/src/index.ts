@@ -21,7 +21,7 @@ const __dirname = path.dirname(__filename);
  * Path to the root .env file.
  * Environment variables are loaded from the monorepo root for consistent configuration.
  */
-const envPath = path.join(__dirname, "../../../.env");
+const envPath = path.join(__dirname, "../../../../.env");
 console.log("Loading .env from:", envPath);
 dotenv.config({ path: envPath });
 

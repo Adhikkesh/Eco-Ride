@@ -37,7 +37,7 @@ import { describe, expect, it } from "vitest";
  * Validates authentication status.
  * @param user - The user object from request
  */
-const validateAuth = (user: any) => {
+const validateAuth = (user: unknown) => {
   if (!user) {
     return { message: "Unauthorized", valid: false };
   }
@@ -61,6 +61,7 @@ const validateLocationType = (type: string) => {
 };
 
 // Validate location structure
+// biome-ignore lint/suspicious/noExplicitAny: Validation function needs to handle any input
 const validateLocationFormat = (location: any) => {
   if (location === null) {
     return { valid: true }; // null is valid (for deleting)
@@ -145,7 +146,7 @@ describe("Saved Locations Controller - Validation Logic", () => {
     });
 
     it("should reject undefined type", () => {
-      const result = validateLocationType(undefined as any);
+      const result = validateLocationType(undefined as unknown as string);
       expect(result.valid).toBe(false);
     });
 

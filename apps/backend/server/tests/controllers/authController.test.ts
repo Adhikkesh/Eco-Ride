@@ -22,13 +22,14 @@
  * @date 2026-02-03
  */
 
-import type { NextFunction, Request, Response } from "express";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Request, Response } from "express";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 /**
  * Mock response helper
  */
 interface MockResponse extends Partial<Response> {
+  // biome-ignore lint/suspicious/noExplicitAny: Test mock helper needs flexible return type
   _getData: () => any;
   _getStatusCode: () => number;
 }
@@ -40,12 +41,14 @@ interface MockResponse extends Partial<Response> {
  */
 const createMockResponse = (): MockResponse => {
   let statusCode = 200;
+  // biome-ignore lint/suspicious/noExplicitAny: Test mock stores arbitrary response data
   let data: any = null;
 
+  // biome-ignore lint/suspicious/noExplicitAny: Mocking complex express response object
   const res: any = {
     _getData: () => data,
     _getStatusCode: () => statusCode,
-    json: vi.fn((responseData: any) => {
+    json: vi.fn((responseData: unknown) => {
       data = responseData;
       return res;
     }),
