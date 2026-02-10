@@ -47,7 +47,10 @@ interface AssignedRide {
   pickup: { lat: number; lng: number };
   drop: { lat: number; lng: number };
   timestamp: number;
-  status?: "MATCHED" | "IN_PROGRESS";
+  status?: "MATCHED" | "IN_PROGRESS" | "ARRIVED";
+  arrivedAt?: number;
+  riderName?: string;
+  riderPhone?: string;
 }
 
 interface PendingRide {
@@ -58,6 +61,8 @@ interface PendingRide {
   fare?: number;
   timestamp: number;
   status: "PENDING_ACCEPTANCE";
+  riderName?: string;
+  riderPhone?: string;
 }
 
 const styles = {
@@ -235,7 +240,7 @@ export default function DriverLiveMap({
   // New: Location selection before going online
   const [locationMode, setLocationMode] = useState<LocationMode>("select");
   const [selectedStartLocation, setSelectedStartLocation] = useState<Position | null>(null);
-  const [isGettingGPS, setIsGettingGPS] = useState(false);
+  const [isGettingGPS, _setIsGettingGPS] = useState(false);
 
   // OTP State
   const [showOtpModal, setShowOtpModal] = useState(false);
@@ -260,6 +265,8 @@ export default function DriverLiveMap({
   // Distance and ETA tracking
   const [distanceToPickup, setDistanceToPickup] = useState<number | null>(null);
   const [distanceToDestination, setDistanceToDestination] = useState<number | null>(null);
+  const [waitingTimer, setWaitingTimer] = useState<number | null>(null); // Remaining seconds
+  const [isArrived, setIsArrived] = useState(false);
   const [etaToPickup, setEtaToPickup] = useState<string | null>(null);
   const [etaToDestination, setEtaToDestination] = useState<string | null>(null);
   const [waitingForPayment, setWaitingForPayment] = useState(false);
@@ -592,16 +599,23 @@ export default function DriverLiveMap({
           // The rides-assigned listener will pick up the ride
         } else {
           console.error("Failed to accept ride:", data.message);
+          // If ride is already cancelled, close the modal
+          if (data.message?.includes("CANCELLED")) {
+            setShowAcceptModal(false);
+            setPendingRide(null);
+          }
           alert(data.message || "Failed to accept ride");
         }
       } else {
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.message || `Server returned ${res.status}`);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error accepting ride:", err);
       alert(
-        err.message || "Network error: Could not connect to server. Please check your connection.",
+        err instanceof Error
+          ? err.message
+          : "Network error: Could not connect to server. Please check your connection.",
       );
     } finally {
       setAcceptingRide(false);
@@ -638,21 +652,28 @@ export default function DriverLiveMap({
           // Driver returns to AVAILABLE and waits for new rides
         } else {
           console.error("Failed to decline ride:", data.message);
+          // If ride is already cancelled, close the modal
+          if (data.message?.includes("CANCELLED")) {
+            setShowAcceptModal(false);
+            setPendingRide(null);
+          }
           alert(data.message || "Failed to decline ride");
         }
       } else {
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.message || `Server returned ${res.status}`);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error declining ride:", err);
-      alert(err.message || "Network error: Could not decline ride.");
+      alert(err instanceof Error ? err.message : "Network error: Could not decline ride.");
     } finally {
       setDecliningRide(false);
     }
   };
 
-  const [rideStatus, setRideStatus] = useState<"MATCHED" | "IN_PROGRESS" | "COMPLETED">("MATCHED");
+  const [rideStatus, setRideStatus] = useState<"MATCHED" | "IN_PROGRESS" | "COMPLETED" | "ARRIVED">(
+    "MATCHED",
+  );
 
   const handleStartRideClick = () => {
     setShowOtpModal(true);
@@ -695,9 +716,13 @@ export default function DriverLiveMap({
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.message || `Server returned ${res.status}`);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error starting ride:", err);
-      alert(err.message || "Network error: Could not start ride. Please try again.");
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Network error: Could not start ride. Please try again.",
+      );
     } finally {
       setSubmittingOtp(false);
     }
@@ -738,9 +763,9 @@ export default function DriverLiveMap({
         console.error("Failed to complete ride:", errorData.message);
         alert(errorData.message || `Failed to complete ride (Status: ${res.status})`);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error completing ride:", err);
-      alert(err.message || "Network error while completing ride");
+      alert(err instanceof Error ? err.message : "Network error while completing ride");
     }
   };
 
@@ -799,7 +824,7 @@ export default function DriverLiveMap({
     );
   }, [isLoaded, assignedRide, position]);
 
-  // Track distance to pickup and auto-show OTP when driver arrives
+  // Track distance to pickup
   useEffect(() => {
     if (!assignedRide || !position || rideStatus !== "MATCHED") return;
 
@@ -810,13 +835,35 @@ export default function DriverLiveMap({
       assignedRide.pickup.lng,
     );
     setDistanceToPickup(Math.round(dist));
+  }, [position, assignedRide, rideStatus]);
 
-    // Auto-show OTP modal when within 100m of pickup
-    if (dist <= 100 && !showOtpModal) {
-      setShowOtpModal(true);
-      setOtpInput("");
+  // Handle waiting timer countdown based on server timestamp to avoid drift
+  useEffect(() => {
+    if (rideStatus !== "ARRIVED" || !assignedRide?.arrivedAt) {
+      setWaitingTimer(null);
+      return;
     }
-  }, [position, assignedRide, rideStatus, showOtpModal]);
+
+    const calculateRemaining = () => {
+      const elapsedMs = Date.now() - assignedRide.arrivedAt!;
+      const remainingSec = Math.max(0, 300 - Math.floor(elapsedMs / 1000));
+      setWaitingTimer(remainingSec);
+    };
+
+    calculateRemaining();
+    const interval = setInterval(calculateRemaining, 1000);
+
+    return () => clearInterval(interval);
+  }, [rideStatus, assignedRide?.arrivedAt]);
+
+  // Sync isArrived state with rideStatus
+  useEffect(() => {
+    if (rideStatus === "ARRIVED") {
+      setIsArrived(true);
+    } else {
+      setIsArrived(false);
+    }
+  }, [rideStatus]);
 
   // Track distance to destination during trip and auto-complete at 100m
   // biome-ignore lint/correctness/useExhaustiveDependencies: handleCompleteRide is guarded by autoCompleteTriggeredRef
@@ -953,7 +1000,9 @@ export default function DriverLiveMap({
         console.log("GPS Location:", latitude, longitude, "Accuracy:", accuracy);
 
         // Update local state
-        setPosition({ heading: heading ?? 0, lat: latitude, lng: longitude });
+        const newPos = { heading: heading ?? 0, lat: latitude, lng: longitude };
+        setPosition(newPos);
+        setSelectedStartLocation(newPos);
         setLocationMode("ready");
 
         // Write to Firebase
@@ -1002,41 +1051,6 @@ export default function DriverLiveMap({
 
     return () => unsubscribe();
   }, [finishedRideId]);
-
-  const _goOnline = useCallback(async () => {
-    if (!rtdb) {
-      setError("Firebase not initialized");
-      return;
-    }
-
-    setIsGettingGPS(true);
-    setError(null);
-
-    navigator.geolocation.getCurrentPosition(
-      (geoPosition) => {
-        const newPos: Position = {
-          heading: 0,
-          lat: geoPosition.coords.latitude,
-          lng: geoPosition.coords.longitude,
-        };
-        setSelectedStartLocation(newPos);
-        setLocationMode("ready");
-        setIsGettingGPS(false);
-        // Pan map to selected location
-        if (mapRef.current) {
-          mapRef.current.panTo({ lat: newPos.lat, lng: newPos.lng });
-          mapRef.current.setZoom(16);
-        }
-      },
-      (err) => {
-        console.error("GPS error:", err);
-        setError("Could not get GPS location. Please pick a location on the map instead.");
-        setLocationMode("map");
-        setIsGettingGPS(false);
-      },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 },
-    );
-  }, []);
 
   // Handler: Pick location on map
   const handlePickOnMap = useCallback(() => {
@@ -1129,6 +1143,33 @@ export default function DriverLiveMap({
     map.setCenter(TAMIL_NADU_CENTER);
     map.setZoom(10);
   }, []);
+
+  // Handle marking arrival at pickup
+  const handleArriveAtPickup = async () => {
+    if (!assignedRide) return;
+
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch(`${backendUrl}/ride/arrive`, {
+        body: JSON.stringify({ rideId: assignedRide.rideId }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || "Failed to mark arrival");
+      }
+
+      // Status and timer will sync via RTDB listener
+    } catch (error) {
+      console.error("Error marking arrival:", error);
+      alert(error instanceof Error ? error.message : "Error marking arrival");
+    }
+  };
 
   const onUnmount = useCallback(() => {
     mapRef.current = null;
@@ -1622,27 +1663,103 @@ export default function DriverLiveMap({
                   </div>
                 </div>
 
-                {rideStatus === "MATCHED" ? (
-                  distanceToPickup != null && distanceToPickup <= 100 ? (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                {/* Rider Information Section */}
+                {(assignedRide?.riderName || assignedRide?.riderPhone) && (
+                  <div
+                    style={{
+                      background: "rgba(30, 41, 59, 0.5)",
+                      borderRadius: "16px",
+                      marginBottom: "20px",
+                      padding: "16px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        alignItems: "center",
+                        display: "flex",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <div>
+                        <p
+                          style={{
+                            color: "#94a3b8",
+                            fontSize: "11px",
+                            margin: "0 0 4px",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          Rider
+                        </p>
+                        <p style={{ color: "white", fontSize: "15px", fontWeight: 600, margin: 0 }}>
+                          {assignedRide?.riderName || "Unknown Rider"}
+                        </p>
+                      </div>
+                      {assignedRide?.riderPhone && (
+                        <div style={{ textAlign: "right" }}>
+                          <p
+                            style={{
+                              color: "#94a3b8",
+                              fontSize: "11px",
+                              margin: "0 0 4px",
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            Mobile
+                          </p>
+                          <p
+                            style={{
+                              color: "#3b82f6",
+                              fontSize: "15px",
+                              fontWeight: 600,
+                              margin: 0,
+                            }}
+                          >
+                            {assignedRide?.riderPhone}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {rideStatus === "MATCHED" || rideStatus === "ARRIVED" ? (
+                  isArrived ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                       <div
                         style={{
                           alignItems: "center",
-                          animation: "pulse 2s infinite",
-                          background: "rgba(34, 197, 94, 0.15)",
-                          border: "1px solid rgba(34, 197, 94, 0.4)",
+                          background: "rgba(34, 197, 94, 0.1)",
+                          border: "1px solid rgba(34, 197, 94, 0.3)",
                           borderRadius: "12px",
                           display: "flex",
+                          flexDirection: "column",
                           gap: "8px",
                           justifyContent: "center",
-                          marginBottom: "4px",
-                          padding: "10px",
+                          padding: "16px",
                         }}
                       >
-                        <FaCheckCircle style={{ color: "#4ade80" }} />
-                        <span style={{ color: "#4ade80", fontSize: "14px", fontWeight: 600 }}>
-                          You have arrived at pickup!
-                        </span>
+                        <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                          <FaCheckCircle style={{ color: "#4ade80" }} />
+                          <span style={{ color: "#4ade80", fontSize: "14px", fontWeight: 600 }}>
+                            You have arrived!
+                          </span>
+                        </div>
+                        {waitingTimer !== null && (
+                          <div
+                            style={{
+                              alignItems: "center",
+                              color: waitingTimer < 60 ? "#f87171" : "#94a3b8",
+                              display: "flex",
+                              fontSize: "13px",
+                              gap: "6px",
+                            }}
+                          >
+                            <FaClock />
+                            Waiting for rider: {Math.floor(waitingTimer / 60)}:
+                            {(waitingTimer % 60).toString().padStart(2, "0")}
+                          </div>
+                        )}
                       </div>
                       <button
                         type="button"
@@ -1668,7 +1785,7 @@ export default function DriverLiveMap({
                       </button>
                     </div>
                   ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                       <div
                         style={{
                           alignItems: "center",
@@ -1683,22 +1800,22 @@ export default function DriverLiveMap({
                       >
                         <FaCar style={{ color: "#60a5fa" }} />
                         <span style={{ color: "#60a5fa", fontSize: "14px", fontWeight: 600 }}>
-                          Navigating to Pickup...
+                          {distanceToPickup != null && distanceToPickup > 1000
+                            ? `Navigating to Pickup (${(distanceToPickup / 1000).toFixed(1)}km)`
+                            : `Navigating to Pickup (${distanceToPickup}m)`}
                         </span>
                       </div>
                       <button
                         type="button"
-                        onClick={() => {
-                          handleStartRideClick();
-                        }}
+                        onClick={handleArriveAtPickup}
                         style={{
-                          background: "rgba(71, 85, 105, 0.5)",
+                          background: "linear-gradient(90deg, #10b981, #059669)",
                           border: "none",
                           borderRadius: "12px",
-                          color: "#94a3b8",
+                          color: "white",
                           cursor: "pointer",
                           display: "flex",
-                          fontSize: "14px",
+                          fontSize: "16px",
                           fontWeight: 600,
                           gap: "8px",
                           justifyContent: "center",
@@ -1706,7 +1823,7 @@ export default function DriverLiveMap({
                           width: "100%",
                         }}
                       >
-                        <FaPlay /> Enter OTP (at pickup)
+                        <FaCheckCircle /> Reached Rider Location
                       </button>
                     </div>
                   )
@@ -2226,7 +2343,7 @@ export default function DriverLiveMap({
                 </div>
                 <p style={{ color: "#e2e8f0", fontSize: "15px", margin: 0, paddingLeft: "22px" }}>
                   {pickupLocationName ||
-                    `${pendingRide.pickup.lat.toFixed(4)}, ${pendingRide.pickup.lng.toFixed(4)}`}
+                    `${pendingRide?.pickup?.lat?.toFixed(4)}, ${pendingRide?.pickup?.lng?.toFixed(4)}`}
                 </p>
               </div>
 
@@ -2253,7 +2370,7 @@ export default function DriverLiveMap({
                 </div>
                 <p style={{ color: "#e2e8f0", fontSize: "15px", margin: 0, paddingLeft: "22px" }}>
                   {dropLocationName ||
-                    `${pendingRide.drop.lat.toFixed(4)}, ${pendingRide.drop.lng.toFixed(4)}`}
+                    `${pendingRide?.drop?.lat?.toFixed(4)}, ${pendingRide?.drop?.lng?.toFixed(4)}`}
                 </p>
               </div>
 
