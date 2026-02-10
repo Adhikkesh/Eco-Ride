@@ -15,8 +15,10 @@ import { VerifyTokenController } from "../controllers/authController.js";
 import { calculateFare } from "../controllers/fareController.js";
 import { GetMeController, HealthCheckController } from "../controllers/index.js";
 import { confirmPayment, createPaymentIntent } from "../controllers/paymentController.js";
+import { SubmitRatingController } from "../controllers/ratingController.js";
 import {
   acceptRide,
+  arriveAtPickup,
   cancelRide,
   completeRide,
   declineRide,
@@ -93,8 +95,14 @@ router.post("/ride/start", verifyToken, startRide);
 /** Complete a ride at destination */
 router.post("/ride/complete", verifyToken, completeRide);
 
+/** Mark arrival at pickup location */
+router.post("/ride/arrive", verifyToken, arriveAtPickup);
+
 /** Calculate fare estimate for a route */
 router.post("/ride/estimate", verifyToken, calculateFare);
+
+/** Submit driver rating and feedback */
+router.post("/ride/rate", verifyToken, SubmitRatingController);
 
 // ============================================================================
 // Payment Routes
