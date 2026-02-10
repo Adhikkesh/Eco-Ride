@@ -1,0 +1,47 @@
+{
+  "client": [
+    {
+      "api_key": [
+        {
+          "current_key": "AIzaSyDHoP8QsCN--bvJlWE7RDc5qh8lVU_wZ5Q"
+        }
+      ],
+      "client_info": {
+        "android_client_info": {
+          "package_name": "com.ecoride.eco_ride_mobile"
+        },
+        "mobilesdk_app_id": "1:657562697192:android:80ea68083821034a00f85d"
+      },
+      "oauth_client": [
+        {
+          "client_id": "657562697192-ukr9jkm19g5acfq039hirceqctmgg9a5.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "657562697192-ukr9jkm19g5acfq039hirceqctmgg9a5.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "657562697192-inf2h9o4j373rf08porfjgl3qcuk55tb.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.ecoride.ecoRideMobile"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1",
+  "project_info": {
+    "firebase_url": "https://eco-ride-07-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "eco-ride-07",
+    "project_number": "657562697192",
+    "storage_bucket": "eco-ride-07.firebasestorage.app"
+  }
+}
