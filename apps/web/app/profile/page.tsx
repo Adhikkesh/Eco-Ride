@@ -1077,13 +1077,23 @@ export default function ProfilePage() {
                     onClick={handleCancel}
                     variant="outline"
                     style={{
-                      borderColor: darkMode ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.2)",
+                      background: "transparent",
+                      border: "1px solid rgba(239, 68, 68, 0.3)",
                       borderRadius: "12px",
-                      color: darkMode ? "#94a3b8" : "#64748b",
+                      color: "#ef4444",
                       fontSize: "14px",
                       fontWeight: "600",
                       height: "auto",
                       padding: "12px 24px",
+                      transition: "all 0.2s",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "rgba(239, 68, 68, 0.1)";
+                      e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.6)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "transparent";
+                      e.currentTarget.style.borderColor = "rgba(239, 68, 68, 0.3)";
                     }}
                   >
                     Cancel
