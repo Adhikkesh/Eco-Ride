@@ -1,3 +1,12 @@
+/**
+ * @fileoverview Simulator Firebase Configuration
+ * @description Initializes and exports Firebase Admin SDK services for the
+ *              driver simulation engine. Shares the same Firebase project as
+ *              the main server but runs as a separate Node.js process.
+ *              Provides Firestore and Realtime Database access.
+ * @module simulator/config/firebase
+ */
+
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type App, cert, getApps, initializeApp } from "firebase-admin/app";
@@ -7,10 +16,18 @@ import { type Firestore, getFirestore } from "firebase-admin/firestore";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+/**
+ * Absolute path to the shared Firebase service account credentials.
+ * Points to the server package's credential file to avoid duplication.
+ */
 const serviceAccount = path.resolve(__dirname, "../../../server/firebase_credential.json");
 
 let app: App;
 
+/**
+ * Initialize Firebase Admin SDK if not already initialized.
+ * Prevents duplicate initialization errors when module is imported multiple times.
+ */
 if (!getApps().length) {
   app = initializeApp({
     credential: cert(serviceAccount),
@@ -20,5 +37,14 @@ if (!getApps().length) {
   app = getApps()[0];
 }
 
+/**
+ * Firestore database instance.
+ * Used by the simulator for reading driver/ride data and updating ride status.
+ */
 export const db: Firestore = getFirestore(app);
+
+/**
+ * Firebase Realtime Database instance.
+ * Used by the simulator for real-time driver location updates and ride state tracking.
+ */
 export const rtdb: Database = getDatabase(app);
