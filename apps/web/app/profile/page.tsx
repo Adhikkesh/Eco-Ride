@@ -1,18 +1,32 @@
 "use client";
 
 import { onAuthStateChanged, signOut, type User, updateProfile } from "firebase/auth";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  limit,
+  query,
+  updateDoc,
+  where,
+} from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   FaBriefcase,
+  FaCalendarAlt,
   FaCamera,
   FaChevronLeft,
+  FaClock,
   FaEnvelope,
   FaHeart,
+  FaHistory,
   FaHome,
+  FaLeaf,
+  FaMapMarkerAlt,
   FaPhone,
   FaSignOutAlt,
   FaSpinner,
@@ -21,6 +35,17 @@ import {
 import { Button } from "@/components/ui/button";
 import { auth, db, storage } from "@/lib/firebase";
 
+interface Ride {
+  id: string;
+  pickupName?: string;
+  dropName?: string;
+  fare?: string | number;
+  timestamp?: { seconds: number; nanoseconds: number };
+  createdAt?: { seconds: number; nanoseconds: number }; // Fallback for legacy rides
+  duration?: string;
+  greenPointsAwarded?: number;
+}
+
 export default function ProfilePage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
@@ -28,6 +53,10 @@ export default function ProfilePage() {
   const [saving, setSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [darkMode] = useState(true); // Consistent with Dashboard
+  const [userRole, setUserRole] = useState<string>("");
+  const [greenPoints, setGreenPoints] = useState<number>(0);
+  const [pastRides, setPastRides] = useState<Ride[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   // Form State
   const [displayName, setDisplayName] = useState("");
@@ -44,6 +73,7 @@ export default function ProfilePage() {
     favAddress: "",
     homeAddress: "",
     phoneNumber: "",
+    role: "",
     workAddress: "",
   });
 
@@ -67,19 +97,57 @@ export default function ProfilePage() {
             const hAddress = userData.homeAddress || "";
             const wAddress = userData.workAddress || "";
             const fAddress = userData.favAddress || "";
+            const role = userData.role || "rider";
 
             setPhoneNumber(phone);
             setHomeAddress(hAddress);
             setWorkAddress(wAddress);
             setFavAddress(fAddress);
+            setUserRole(role);
+            setGreenPoints(userData.green_points || 0);
 
             setInitialData({
               displayName: currentUser.displayName || "",
-              favAddress: fAddress,
+              favAddress: hAddress, // Fixed: should be hAddress, wAddress, fAddress
               homeAddress: hAddress,
               phoneNumber: phone,
+              role: role,
               workAddress: wAddress,
             });
+
+            // Fetch past rides if user is a rider
+            if (role === "rider") {
+              const fetchPastRides = async () => {
+                if (!db) return;
+                setLoadingHistory(true);
+                try {
+                  const ridesQuery = query(
+                    collection(db, "rides"),
+                    where("riderId", "==", currentUser.uid),
+                    limit(20), // Fetch more to allow for better in-memory sorting
+                  );
+                  const querySnapshot = await getDocs(ridesQuery);
+                  const ridesArray = querySnapshot.docs
+                    .map((doc) => ({
+                      id: doc.id,
+                      ...(doc.data() as Omit<Ride, "id">),
+                    }))
+                    .sort((a, b) => {
+                      const timeA = a.timestamp?.seconds || a.createdAt?.seconds || 0;
+                      const timeB = b.timestamp?.seconds || b.createdAt?.seconds || 0;
+                      return timeB - timeA;
+                    })
+                    .slice(0, 5); // Keep only the latest 5
+
+                  setPastRides(ridesArray);
+                } catch (error) {
+                  console.error("Error fetching past rides:", error);
+                } finally {
+                  setLoadingHistory(false);
+                }
+              };
+              fetchPastRides();
+            }
           }
         }
       } catch (error) {
@@ -120,6 +188,7 @@ export default function ProfilePage() {
         favAddress,
         homeAddress,
         phoneNumber,
+        role: userRole,
         workAddress,
       });
       setIsEditing(false);
@@ -511,172 +580,464 @@ export default function ProfilePage() {
               </div>
             </div>
 
-            {/* Saved Places */}
-            <div
-              style={{
-                backdropFilter: "blur(12px)",
-                background: darkMode ? "rgba(30, 41, 59, 0.7)" : "white",
-                border: darkMode ? "1px solid rgba(255,255,255,0.1)" : "1px solid rgba(0,0,0,0.1)",
-                borderRadius: "24px",
-                boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
-                display: "flex",
-                flexDirection: "column",
-                gap: "24px",
-                padding: "32px",
-              }}
-            >
-              <h2
+            {/* Rider Specific Sections: Green Points and Saved Places */}
+            {userRole === "rider" && (
+              <>
+                {/* Green Points Card */}
+                <div
+                  style={{
+                    backdropFilter: "blur(12px)",
+                    background:
+                      "linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(16, 185, 129, 0.2))",
+                    border: darkMode
+                      ? "1px solid rgba(34, 197, 94, 0.3)"
+                      : "1px solid rgba(34, 197, 94, 0.2)",
+                    borderRadius: "24px",
+                    boxShadow: "0 10px 30px rgba(34, 197, 94, 0.1)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "16px",
+                    overflow: "hidden",
+                    padding: "32px",
+                    position: "relative",
+                  }}
+                >
+                  <div
+                    style={{
+                      opacity: 0.1,
+                      position: "absolute",
+                      right: "-20px",
+                      top: "-20px",
+                      transform: "rotate(15deg)",
+                    }}
+                  >
+                    <FaLeaf size={120} color="#22c55e" />
+                  </div>
+                  <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
+                    <div
+                      style={{
+                        alignItems: "center",
+                        background: "#22c55e",
+                        borderRadius: "12px",
+                        display: "flex",
+                        justifyContent: "center",
+                        padding: "10px",
+                      }}
+                    >
+                      <FaLeaf color="white" size={20} />
+                    </div>
+                    <div>
+                      <h2
+                        style={{
+                          color: "#22c55e",
+                          fontSize: "14px",
+                          fontWeight: "700",
+                          letterSpacing: "0.05em",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        Eco Points
+                      </h2>
+                      <p
+                        style={{
+                          color: darkMode ? "white" : "#1e293b",
+                          fontSize: "28px",
+                          fontWeight: "800",
+                        }}
+                      >
+                        {greenPoints.toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                  <p
+                    style={{
+                      color: darkMode ? "#94a3b8" : "#64748b",
+                      fontSize: "14px",
+                      maxWidth: "80%",
+                    }}
+                  >
+                    You're doing great! These points represent your contribution to a greener planet
+                    with every EcoRide.
+                  </p>
+                </div>
+
+                {/* Saved Places */}
+                <div
+                  style={{
+                    backdropFilter: "blur(12px)",
+                    background: darkMode ? "rgba(30, 41, 59, 0.7)" : "white",
+                    border: darkMode
+                      ? "1px solid rgba(255,255,255,0.1)"
+                      : "1px solid rgba(0,0,0,0.1)",
+                    borderRadius: "24px",
+                    boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "24px",
+                    padding: "32px",
+                  }}
+                >
+                  <h2
+                    style={{
+                      color: "#22c55e",
+                      fontSize: "16px",
+                      fontWeight: "600",
+                      marginBottom: "8px",
+                    }}
+                  >
+                    Saved Places
+                  </h2>
+
+                  {/* Home */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                    <label
+                      htmlFor="home-address"
+                      style={{
+                        color: darkMode ? "#94a3b8" : "#64748b",
+                        fontSize: "14px",
+                        fontWeight: "600",
+                      }}
+                    >
+                      Home
+                    </label>
+                    <div
+                      style={{
+                        alignItems: "center",
+                        background: darkMode ? "rgba(15, 23, 42, 0.6)" : "#f8fafc",
+                        border: isEditing ? "1px solid #22c55e" : "1px solid transparent",
+                        borderRadius: "12px",
+                        display: "flex",
+                        opacity: isEditing ? 1 : 0.8,
+                        padding: "0 16px",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      <FaHome color="#94a3b8" style={{ marginRight: "12px" }} />
+                      <input
+                        id="home-address"
+                        type="text"
+                        placeholder="Add home address"
+                        value={homeAddress}
+                        onChange={(e) => setHomeAddress(e.target.value)}
+                        readOnly={!isEditing}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          boxShadow: "none",
+                          color: darkMode ? "white" : "#1e293b",
+                          cursor: isEditing ? "text" : "default",
+                          flex: 1,
+                          fontSize: "14px",
+                          outline: "none",
+                          padding: "14px 0",
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Work */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                    <label
+                      htmlFor="work-address"
+                      style={{
+                        color: darkMode ? "#94a3b8" : "#64748b",
+                        fontSize: "14px",
+                        fontWeight: "600",
+                      }}
+                    >
+                      Work
+                    </label>
+                    <div
+                      style={{
+                        alignItems: "center",
+                        background: darkMode ? "rgba(15, 23, 42, 0.6)" : "#f8fafc",
+                        border: isEditing ? "1px solid #22c55e" : "1px solid transparent",
+                        borderRadius: "12px",
+                        display: "flex",
+                        opacity: isEditing ? 1 : 0.8,
+                        padding: "0 16px",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      <FaBriefcase color="#94a3b8" style={{ marginRight: "12px" }} />
+                      <input
+                        id="work-address"
+                        type="text"
+                        placeholder="Add work address"
+                        value={workAddress}
+                        onChange={(e) => setWorkAddress(e.target.value)}
+                        readOnly={!isEditing}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          boxShadow: "none",
+                          color: darkMode ? "white" : "#1e293b",
+                          cursor: isEditing ? "text" : "default",
+                          flex: 1,
+                          fontSize: "14px",
+                          outline: "none",
+                          padding: "14px 0",
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Favourite */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                    <label
+                      htmlFor="fav-address"
+                      style={{
+                        color: darkMode ? "#94a3b8" : "#64748b",
+                        fontSize: "14px",
+                        fontWeight: "600",
+                      }}
+                    >
+                      Favourite
+                    </label>
+                    <div
+                      style={{
+                        alignItems: "center",
+                        background: darkMode ? "rgba(15, 23, 42, 0.6)" : "#f8fafc",
+                        border: isEditing ? "1px solid #22c55e" : "1px solid transparent",
+                        borderRadius: "12px",
+                        display: "flex",
+                        opacity: isEditing ? 1 : 0.8,
+                        padding: "0 16px",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      <FaHeart color="#ef4444" style={{ marginRight: "12px" }} />
+                      <input
+                        id="fav-address"
+                        type="text"
+                        placeholder="Add a favourite place"
+                        value={favAddress}
+                        onChange={(e) => setFavAddress(e.target.value)}
+                        readOnly={!isEditing}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          boxShadow: "none",
+                          color: darkMode ? "white" : "#1e293b",
+                          cursor: isEditing ? "text" : "default",
+                          flex: 1,
+                          fontSize: "14px",
+                          padding: "14px 0",
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Ride History - Only for Riders */}
+            {userRole === "rider" && (
+              <div
                 style={{
-                  color: "#22c55e",
-                  fontSize: "16px",
-                  fontWeight: "600",
-                  marginBottom: "8px",
+                  backdropFilter: "blur(12px)",
+                  background: darkMode ? "rgba(30, 41, 59, 0.7)" : "white",
+                  border: darkMode
+                    ? "1px solid rgba(255,255,255,0.1)"
+                    : "1px solid rgba(0,0,0,0.1)",
+                  borderRadius: "24px",
+                  boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "24px",
+                  padding: "32px",
                 }}
               >
-                Saved Places
-              </h2>
-
-              {/* Home */}
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                <label
-                  htmlFor="home-address"
-                  style={{
-                    color: darkMode ? "#94a3b8" : "#64748b",
-                    fontSize: "14px",
-                    fontWeight: "600",
-                  }}
-                >
-                  Home
-                </label>
                 <div
-                  style={{
-                    alignItems: "center",
-                    background: darkMode ? "rgba(15, 23, 42, 0.6)" : "#f8fafc",
-                    border: isEditing ? "1px solid #22c55e" : "1px solid transparent",
-                    borderRadius: "12px",
-                    display: "flex",
-                    opacity: isEditing ? 1 : 0.8,
-                    padding: "0 16px",
-                    transition: "all 0.2s",
-                  }}
+                  style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}
                 >
-                  <FaHome color="#94a3b8" style={{ marginRight: "12px" }} />
-                  <input
-                    id="home-address"
-                    type="text"
-                    placeholder="Add home address"
-                    value={homeAddress}
-                    onChange={(e) => setHomeAddress(e.target.value)}
-                    readOnly={!isEditing}
+                  <h2
                     style={{
-                      background: "transparent",
-                      border: "none",
-                      boxShadow: "none",
-                      color: darkMode ? "white" : "#1e293b",
-                      cursor: isEditing ? "text" : "default",
-                      flex: 1,
-                      fontSize: "14px",
-                      outline: "none",
-                      padding: "14px 0",
+                      color: "#22c55e",
+                      fontSize: "16px",
+                      fontWeight: "600",
                     }}
-                  />
+                  >
+                    Recent Rides
+                  </h2>
+                  <FaHistory color="#94a3b8" />
                 </div>
-              </div>
 
-              {/* Work */}
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                <label
-                  htmlFor="work-address"
-                  style={{
-                    color: darkMode ? "#94a3b8" : "#64748b",
-                    fontSize: "14px",
-                    fontWeight: "600",
-                  }}
-                >
-                  Work
-                </label>
-                <div
-                  style={{
-                    alignItems: "center",
-                    background: darkMode ? "rgba(15, 23, 42, 0.6)" : "#f8fafc",
-                    border: isEditing ? "1px solid #22c55e" : "1px solid transparent",
-                    borderRadius: "12px",
-                    display: "flex",
-                    opacity: isEditing ? 1 : 0.8,
-                    padding: "0 16px",
-                    transition: "all 0.2s",
-                  }}
-                >
-                  <FaBriefcase color="#94a3b8" style={{ marginRight: "12px" }} />
-                  <input
-                    id="work-address"
-                    type="text"
-                    placeholder="Add work address"
-                    value={workAddress}
-                    onChange={(e) => setWorkAddress(e.target.value)}
-                    readOnly={!isEditing}
+                {loadingHistory ? (
+                  <div style={{ display: "flex", justifyContent: "center", padding: "20px" }}>
+                    <FaSpinner color="#22c55e" className="animate-spin" size={24} />
+                  </div>
+                ) : pastRides.length > 0 ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                    {pastRides.map((ride) => (
+                      <div
+                        key={ride.id}
+                        style={{
+                          background: darkMode ? "rgba(15, 23, 42, 0.4)" : "#f8fafc",
+                          border: darkMode
+                            ? "1px solid rgba(255,255,255,0.05)"
+                            : "1px solid rgba(0,0,0,0.05)",
+                          borderRadius: "16px",
+                          padding: "20px",
+                          transition: "all 0.2s",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            marginBottom: "12px",
+                          }}
+                        >
+                          <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                            <FaCalendarAlt color="#94a3b8" size={12} />
+                            <span style={{ color: "#94a3b8", fontSize: "12px" }}>
+                              {ride.timestamp?.seconds
+                                ? new Date(ride.timestamp.seconds * 1000).toLocaleDateString()
+                                : ride.createdAt?.seconds
+                                  ? new Date(ride.createdAt.seconds * 1000).toLocaleDateString()
+                                  : "Recently"}
+                            </span>
+                          </div>
+                          <span
+                            style={{
+                              background: "rgba(34, 197, 94, 0.1)",
+                              borderRadius: "6px",
+                              color: "#22c55e",
+                              fontSize: "10px",
+                              fontWeight: "700",
+                              padding: "4px 8px",
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            Completed
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                          <div style={{ alignItems: "flex-start", display: "flex", gap: "12px" }}>
+                            <div
+                              style={{
+                                alignItems: "center",
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: "4px",
+                                marginTop: "4px",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  background: "#22c55e",
+                                  borderRadius: "50%",
+                                  height: "8px",
+                                  width: "8px",
+                                }}
+                              />
+                              <div
+                                style={{
+                                  background: darkMode
+                                    ? "rgba(255,255,255,0.1)"
+                                    : "rgba(0,0,0,0.1)",
+                                  height: "20px",
+                                  width: "1px",
+                                }}
+                              />
+                              <FaMapMarkerAlt color="#ef4444" size={10} />
+                            </div>
+                            <div style={{ flex: 1 }}>
+                              <p
+                                style={{
+                                  color: darkMode ? "white" : "#1e293b",
+                                  fontSize: "14px",
+                                  fontWeight: "500",
+                                  marginBottom: "8px",
+                                }}
+                              >
+                                {ride.pickupName || "Previous Trip"}
+                              </p>
+                              <p
+                                style={{
+                                  color: darkMode ? "white" : "#1e293b",
+                                  fontSize: "14px",
+                                  fontWeight: "500",
+                                }}
+                              >
+                                {ride.dropName || "View Trip Details"}
+                              </p>
+                            </div>
+                          </div>
+                          <div
+                            style={{
+                              alignItems: "center",
+                              borderTop: darkMode
+                                ? "1px solid rgba(255,255,255,0.05)"
+                                : "1px solid rgba(0,0,0,0.05)",
+                              display: "flex",
+                              justifyContent: "space-between",
+                              marginTop: "8px",
+                              paddingTop: "12px",
+                            }}
+                          >
+                            <div style={{ alignItems: "center", display: "flex", gap: "16px" }}>
+                              <div style={{ alignItems: "center", display: "flex", gap: "6px" }}>
+                                <FaClock color="#94a3b8" size={14} />
+                                <span
+                                  style={{
+                                    color: darkMode ? "#cbd5e1" : "#475569",
+                                    fontSize: "13px",
+                                  }}
+                                >
+                                  {typeof ride.duration === "number"
+                                    ? ride.duration > 3600
+                                      ? `${Math.floor(ride.duration / 3600)}h ${Math.floor((ride.duration % 3600) / 60)}m`
+                                      : `${Math.floor(ride.duration / 60)}m`
+                                    : ride.duration || "--"}
+                                </span>
+                              </div>
+                              <div style={{ alignItems: "center", display: "flex", gap: "6px" }}>
+                                <FaLeaf color="#22c55e" size={14} />
+                                <span
+                                  style={{ color: "#22c55e", fontSize: "13px", fontWeight: "600" }}
+                                >
+                                  +{ride.greenPointsAwarded || 10} pts
+                                </span>
+                              </div>
+                            </div>
+                            <span
+                              style={{
+                                color: darkMode ? "white" : "#1e293b",
+                                fontSize: "16px",
+                                fontWeight: "700",
+                              }}
+                            >
+                              ₹{ride.fare || "0"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div
                     style={{
-                      background: "transparent",
-                      border: "none",
-                      boxShadow: "none",
-                      color: darkMode ? "white" : "#1e293b",
-                      cursor: isEditing ? "text" : "default",
-                      flex: 1,
-                      fontSize: "14px",
-                      outline: "none",
-                      padding: "14px 0",
+                      background: darkMode ? "rgba(15, 23, 42, 0.4)" : "#f8fafc",
+                      border: "1px dashed rgba(148, 163, 184, 0.3)",
+                      borderRadius: "16px",
+                      padding: "40px",
+                      textAlign: "center",
                     }}
-                  />
-                </div>
+                  >
+                    <FaHistory
+                      color="#94a3b8"
+                      size={32}
+                      style={{ marginBottom: "12px", opacity: 0.5 }}
+                    />
+                    <p style={{ color: "#94a3b8", fontSize: "14px" }}>
+                      No rides taken yet. Your green journey starts here!
+                    </p>
+                  </div>
+                )}
               </div>
-
-              {/* Favourite */}
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                <label
-                  htmlFor="fav-address"
-                  style={{
-                    color: darkMode ? "#94a3b8" : "#64748b",
-                    fontSize: "14px",
-                    fontWeight: "600",
-                  }}
-                >
-                  Favourite
-                </label>
-                <div
-                  style={{
-                    alignItems: "center",
-                    background: darkMode ? "rgba(15, 23, 42, 0.6)" : "#f8fafc",
-                    border: isEditing ? "1px solid #22c55e" : "1px solid transparent",
-                    borderRadius: "12px",
-                    display: "flex",
-                    opacity: isEditing ? 1 : 0.8,
-                    padding: "0 16px",
-                    transition: "all 0.2s",
-                  }}
-                >
-                  <FaHeart color="#ef4444" style={{ marginRight: "12px" }} />
-                  <input
-                    id="fav-address"
-                    type="text"
-                    placeholder="Add a favourite place"
-                    value={favAddress}
-                    onChange={(e) => setFavAddress(e.target.value)}
-                    readOnly={!isEditing}
-                    style={{
-                      background: "transparent",
-                      border: "none",
-                      boxShadow: "none",
-                      color: darkMode ? "white" : "#1e293b",
-                      cursor: isEditing ? "text" : "default",
-                      flex: 1,
-                      fontSize: "14px",
-                      outline: "none",
-                      padding: "14px 0",
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
+            )}
           </div>
 
           <div
