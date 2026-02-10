@@ -778,7 +778,7 @@ export const acceptRide = async (req: Request, res: Response) => {
         driverPhone = driverDoc.data()?.phone_number || "No Phone";
       }
 
-      if (riderDoc && riderDoc.exists) {
+      if (riderDoc?.exists) {
         riderName = riderDoc.data()?.name || riderName;
         riderPhone = riderDoc.data()?.phone || riderPhone;
       }
