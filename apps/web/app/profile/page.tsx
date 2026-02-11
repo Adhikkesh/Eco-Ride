@@ -75,6 +75,7 @@ export default function ProfilePage() {
     licenseUrl: string;
   } | null>(null);
   const [walletBalance, setWalletBalance] = useState<number>(0);
+  const [allTimeEarnings, setAllTimeEarnings] = useState<number>(0);
 
   // Form State
   const [displayName, setDisplayName] = useState("");
@@ -172,6 +173,18 @@ export default function ProfilePage() {
                     });
                     setWalletBalance(pData.wallet_balance || 0);
                   }
+
+                  // Calculate total all-time earnings from rides
+                  const allRidesQuery = query(
+                    collection(db, "rides"),
+                    where("driverId", "==", currentUser.uid),
+                  );
+                  const allRidesSnapshot = await getDocs(allRidesQuery);
+                  const total = allRidesSnapshot.docs.reduce(
+                    (acc, doc) => acc + (Number(doc.data().fare) || 0),
+                    0,
+                  );
+                  if (isMounted) setAllTimeEarnings(total);
                 }
 
                 // Ride history (for both roles)
@@ -222,17 +235,13 @@ export default function ProfilePage() {
 
   // Derived / Calculated State for Fallbacks
   const displayWalletBalance = useMemo(() => {
-    // If the database has a balance, use it
+    if (allTimeEarnings > 0) return allTimeEarnings;
     if (walletBalance > 0) return walletBalance;
-    // Fallback: Sum up fares from completed rides for drivers
     if (userRole === "driver" && pastRides.length > 0) {
-      return pastRides.reduce((acc, ride) => {
-        const fare = Number(ride.fare) || 0;
-        return acc + fare;
-      }, 0);
+      return pastRides.reduce((acc, ride) => acc + Number(ride.fare || 0), 0);
     }
     return 0;
-  }, [walletBalance, userRole, pastRides]);
+  }, [allTimeEarnings, walletBalance, userRole, pastRides]);
 
   const displayTrustScore = useMemo(() => {
     // Ensure trust score is shown as a float with 1 decimal place, e.g., 4.5
@@ -1004,7 +1013,7 @@ export default function ProfilePage() {
                     >
                       ₹{displayWalletBalance.toLocaleString()}
                     </p>
-                    <p style={{ color: "#94a3b8", fontSize: "12px" }}>Total Wallet Balance</p>
+                    <p style={{ color: "#94a3b8", fontSize: "12px" }}>Total Earnings</p>
                   </div>
                 </div>
 
