@@ -30,6 +30,7 @@
 
 - [Intro](#intro)
 - [About](#about)
+- [How It Works](#how-it-works)
 - [Features](#features)
 - [Monorepo Structure](#monorepo-structure)
 - [Installing and Updating](#installing-and-updating)
@@ -59,6 +60,42 @@ Eco-Ride is designed to provide a seamless transportation experience while promo
 - **Cross-Platform**: Accessible via a responsive Web App (Next.js) and Mobile App (React Native).
 
 The platform leverages a monorepo structure managed by **Turborepo**, ensuring efficient development, shared configurations, and optimized build processes.
+
+## How It Works
+
+The complete ride booking lifecycle from request to payment:
+
+```mermaid
+flowchart LR
+    A["📱 Rider Requests Ride"] --> B["🔍 Finding Nearest Driver"]
+    B --> C{"🚗 Driver Found?"}
+    C -- "Yes" --> D["📨 Ride Request Sent to Driver"]
+    C -- "No (Expand Radius)" --> B
+    D --> E{"Driver Response"}
+    E -- "✅ Accepts" --> F["🔗 Matched!"]
+    E -- "❌ Declines" --> B
+    F --> G["🔑 OTP Verification at Pickup"]
+    G --> H["🛣️ Ride In Progress — Live Tracking"]
+    H --> I["📍 Destination Reached"]
+    I --> J{"💳 Payment"}
+    J -- "Stripe" --> K["💰 Card Payment Processed"]
+    J -- "Cash" --> L["💵 Cash Collected by Driver"]
+    K --> M["✅ Ride Complete!"]
+    L --> M
+```
+
+### Detailed Flow
+
+| Step | Actor | Action | System Response |
+|------|-------|--------|-----------------|
+| 1 | **Rider** | Enters pickup & destination | Calculates ETA, fare estimate, and finds nearby drivers |
+| 2 | **System** | Expanding radius search (up to 100km) | Matches the nearest available driver |
+| 3 | **Driver** | Accepts or declines the request | If declined, auto re-matches with next closest driver |
+| 4 | **Driver** | Arrives at pickup location | OTP is revealed to rider only when driver is within 100m |
+| 5 | **Rider** | Shares 4-digit OTP with driver | Driver verifies OTP → ride status becomes `IN_PROGRESS` |
+| 6 | **System** | Real-time GPS tracking | Live car movement rendered on both rider & driver maps |
+| 7 | **Driver** | Reaches destination & completes ride | Rider is prompted for payment (Stripe or Cash) |
+| 8 | **Rider** | Completes payment | Ride marked complete, driver freed for new rides |
 
 ## Features
 
