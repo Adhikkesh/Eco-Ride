@@ -121,7 +121,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       }
 
       // Initial location check before starting stream
-      final initialLocation = await _location.getLocation().timeout(const Duration(seconds: 10));
+      final initialLocation = await _location.getLocation().timeout(const Duration(seconds: 20));
       setState(() {
         _currentPosition = LatLng(initialLocation.latitude!, initialLocation.longitude!);
         _isOnline = true;
