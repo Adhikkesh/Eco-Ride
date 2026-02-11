@@ -1134,3 +1134,63 @@ export const getOtp = async (req: Request, res: Response) => {
     return res.status(500).json({ message: "Error fetching OTP", success: false });
   }
 };
+
+/**
+ * Verify OTP Controller
+ * @description Verifies the OTP provided by the rider/driver for a ride.
+ *              Validates that the OTP matches the one stored in the ride document.
+ *              Can be called independently from starting the ride.
+ * @route POST /ride/verify-otp/:rideId
+ * @param {Object} req.params - URL parameters
+ * @param {string} req.params.rideId - The unique identifier of the ride
+ * @param {Object} req.body - Request body
+ * @param {string} req.body.otp - The OTP entered by the user
+ * @returns {Object} JSON response with verification status
+ */
+export const verifyOtp = async (req: Request, res: Response) => {
+  try {
+    const { rideId } = req.params;
+    const { otp } = req.body;
+
+    // Validate input
+    if (!rideId) {
+      return res.status(400).json({ message: "Missing rideId", success: false });
+    }
+
+    if (!otp) {
+      return res.status(400).json({ message: "Missing OTP", success: false });
+    }
+
+    // Get ride details
+    const rideIdValue = Array.isArray(rideId) ? rideId[0] : rideId;
+    const rideRef = db.collection("rides").doc(rideIdValue);
+    const rideDoc = await rideRef.get();
+
+    if (!rideDoc.exists) {
+      return res.status(404).json({ message: "Ride not found", success: false });
+    }
+
+    const rideData = rideDoc.data();
+
+    // Verify ride has OTP available (should be in MATCHED or ARRIVED status)
+    if (rideData?.status !== "MATCHED" && rideData?.status !== "ARRIVED") {
+      return res.status(400).json({
+        message: `OTP not available for ride status: ${rideData?.status}`,
+        success: false,
+      });
+    }
+
+    // Compare OTP
+    if (rideData?.otp !== otp) {
+      return res.status(400).json({ message: "Invalid OTP", success: false });
+    }
+
+    return res.status(200).json({
+      message: "OTP verified successfully",
+      success: true,
+    });
+  } catch (error) {
+    console.error("Verify OTP Error:", error);
+    return res.status(500).json({ message: "Error verifying OTP", success: false });
+  }
+};

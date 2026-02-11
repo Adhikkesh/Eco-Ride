@@ -950,9 +950,15 @@ export default function RiderMap({
     setEta(null);
     setDirectionsToPickup(null);
     setDirectionsToDestination(null);
+    setDecodedPolyline([]);
     setErrorMessage(null);
     setManualPickupMode(false);
     setOtp(null);
+    setPickupLocation(null);
+    setSelectedDestination(null);
+    setSearchDestination("");
+    setDropOffLocation(null);
+    autoCompleteTriggeredRef.current = false;
   }, []);
 
   // Listen for ride status updates from RTDB (e.g., driver accepts, trip starts)
@@ -1217,8 +1223,13 @@ export default function RiderMap({
       );
     }
 
-    // CASE 4: IDLE or COMPLETED - Clear all routes
-    else if (rideStatus === "idle") {
+    // CASE 4: IDLE, COMPLETED, or CANCELLED - Clear all routes
+    else if (
+      rideStatus === "idle" ||
+      rideStatus === "error" ||
+      (rideStatus as string) === "COMPLETED" ||
+      (rideStatus as string) === "CANCELLED"
+    ) {
       setDirectionsToDestination(null);
       setDirectionsToPickup(null);
     }
@@ -1556,54 +1567,6 @@ export default function RiderMap({
     clearEstimate();
     setDecodedPolyline([]);
   };
-
-  // Auto-estimate when both pickup and destination are set
-  const prevAutoEstKeyRef = useRef<string>("");
-  useEffect(() => {
-    if (!selectedDestination || rideStatus !== "idle") return;
-
-    const pickup = pickupLocation || currentLocation;
-    if (!pickup) return;
-
-    const key = `${pickup.lat},${pickup.lng}-${selectedDestination.lat},${selectedDestination.lng}`;
-    if (key === prevAutoEstKeyRef.current) return;
-    prevAutoEstKeyRef.current = key;
-
-    // Clear old estimate & auto-calculate
-    clearEstimate();
-    setDecodedPolyline([]);
-
-    const autoEstimate = async () => {
-      const result = await getEstimate(pickup, {
-        lat: selectedDestination.lat,
-        lng: selectedDestination.lng,
-      });
-      if (result?.polyline) {
-        try {
-          const decoded = polylineUtil.decode(result.polyline);
-          const path = decoded.map((p: number[]) => ({ lat: p[0], lng: p[1] }));
-          setDecodedPolyline(path);
-          if (mapRef.current) {
-            const bounds = new google.maps.LatLngBounds();
-            for (const p of path) {
-              bounds.extend(p);
-            }
-            mapRef.current.fitBounds(bounds);
-          }
-        } catch (e) {
-          console.error("Polyline decode error", e);
-        }
-      }
-    };
-    autoEstimate();
-  }, [
-    selectedDestination,
-    pickupLocation,
-    currentLocation,
-    rideStatus,
-    getEstimate,
-    clearEstimate,
-  ]);
 
   const handleFindRide = async () => {
     if (!currentLocation || !selectedDestination) {

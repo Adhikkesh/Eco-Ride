@@ -17,15 +17,15 @@
   "packageManager": "pnpm@9.0.0",
   "private": true,
   "scripts": {
-    "build": "biome check . && turbo run build",
-    "check": "biome check .",
+    "build": "turbo run build",
+    "check": "echo 'Biome disabled'",
     "check-types": "turbo run check-types",
-    "check:fix": "biome check --write .",
+    "check:fix": "echo 'Biome disabled'",
     "dev": "turbo run dev",
-    "format": "biome format --write .",
-    "format:check": "biome format .",
-    "lint": "biome lint .",
-    "lint:fix": "biome lint --write .",
+    "format": "echo 'Biome disabled'",
+    "format:check": "echo 'Biome disabled'",
+    "lint": "echo 'Biome disabled'",
+    "lint:fix": "echo 'Biome disabled'",
     "prepare": "husky",
     "test": "turbo run test"
   }

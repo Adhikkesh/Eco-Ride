@@ -26,6 +26,7 @@ import {
   getOtp,
   requestRide,
   startRide,
+  verifyOtp,
 } from "../controllers/rideController.js";
 import { getSavedLocations, updateSavedLocation } from "../controllers/savedLocationsController.js";
 import { CreateUserController, GetDriverStatusController } from "../controllers/userController.js";
@@ -85,6 +86,9 @@ router.post("/ride/decline", verifyToken, declineRide);
 
 /** Get OTP for ride (only available when driver is within 100m of pickup) */
 router.get("/ride/otp/:rideId", verifyToken, getOtp);
+
+/** Verify OTP for ride */
+router.post("/ride/verify-otp/:rideId", verifyToken, verifyOtp);
 
 /** Cancel an active ride request */
 router.post("/ride/cancel", verifyToken, cancelRide);
