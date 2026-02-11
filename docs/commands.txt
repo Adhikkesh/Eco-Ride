@@ -1,5 +1,0 @@
-cd apps/server
-pnpm test              # Run all tests
-pnpm test:watch        # Watch mode
-pnpm test:coverage     # Coverage report
-pnpm test -- --reporter=verbose #detailed response

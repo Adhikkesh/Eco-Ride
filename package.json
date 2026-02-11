@@ -8,6 +8,7 @@
     "husky": "^9.1.7",
     "lint-staged": "^16.2.7",
     "turbo": "^2.7.3",
+    "typedoc": "^0.28.16",
     "typescript": "5.9.2"
   },
   "engines": {
@@ -18,14 +19,15 @@
   "private": true,
   "scripts": {
     "build": "turbo run build",
-    "check": "echo 'Biome disabled'",
     "check-types": "turbo run check-types",
-    "check:fix": "echo 'Biome disabled'",
+    "check:biome": "biome check .",
+    "check:fix:biome": "biome check --write .",
     "dev": "turbo run dev",
-    "format": "echo 'Biome disabled'",
-    "format:check": "echo 'Biome disabled'",
-    "lint": "echo 'Biome disabled'",
-    "lint:fix": "echo 'Biome disabled'",
+    "docs": "typedoc",
+    "format:biome": "biome format --write .",
+    "format:check:biome": "biome format .",
+    "lint:biome": "biome lint .",
+    "lint:fix:biome": "biome lint --write .",
     "prepare": "husky",
     "test": "turbo run test"
   }

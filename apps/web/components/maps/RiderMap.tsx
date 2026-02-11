@@ -1604,11 +1604,16 @@ export default function RiderMap({
 
       const response = await fetch(`${backendUrl}/ride/request`, {
         body: JSON.stringify({
+          co2Saved: estimate?.co2_saved_g || 0,
+          distance: estimate?.distance_km || null,
           dropLat: selectedDestination.lat,
           dropLng: selectedDestination.lng,
+          dropName: selectedDestination.name,
+          duration: estimate?.details?.duration_s || null,
           fare: estimate?.fare || null,
           pickupLat: pickup.lat,
           pickupLng: pickup.lng,
+          pickupName: pickupSearchText || "Current Location",
           riderId: user.uid,
         }),
         headers: {

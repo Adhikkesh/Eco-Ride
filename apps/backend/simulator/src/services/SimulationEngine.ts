@@ -25,6 +25,13 @@ const TICK_INTERVAL_MS = 1000;
 // SIMULATION ENGINE
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/**
+ * Central coordinator for the driver simulation.
+ *
+ * The engine maintains a map of active {@link DriverAgent} instances and
+ * drives the simulation forward with a 1-second tick loop. It is designed
+ * to be started once at process boot and shut down on `SIGINT`/`SIGTERM`.
+ */
 export class SimulationEngine {
   private agents: Map<string, DriverAgent> = new Map();
   private tickInterval: NodeJS.Timeout | null = null;
@@ -45,7 +52,11 @@ export class SimulationEngine {
   // ═══════════════════════════════════════════════════════════════════════════════
 
   /**
-   * Initialize and start the simulation engine
+   * Boots the simulation engine.
+   *
+   * Seeds dummy drivers if needed, starts RTDB listeners for driver
+   * presence, ride assignments, and checks for any existing assignments
+   * before kicking off the tick loop.
    */
   async start(): Promise<void> {
     if (this.isRunning) {
@@ -76,7 +87,10 @@ export class SimulationEngine {
   }
 
   /**
-   * Stop the simulation engine
+   * Gracefully shuts down the simulation.
+   *
+   * Stops all active agents, detaches RTDB listeners, and clears the
+   * tick interval so the process can exit cleanly.
    */
   stop(): void {
     this.isRunning = false;
@@ -106,7 +120,9 @@ export class SimulationEngine {
   }
 
   /**
-   * Get current status
+   * Returns a diagnostic summary of all active agents.
+   *
+   * @returns An object containing the running status, number of active agents, and a list of driver IDs.
    */
   getStatus(): { running: boolean; activeAgents: number; agents: string[] } {
     return {
@@ -121,7 +137,10 @@ export class SimulationEngine {
   // ═══════════════════════════════════════════════════════════════════════════════
 
   /**
-   * Listen for drivers coming online/offline
+   * Subscribes to `drivers-online/` in RTDB.
+   *
+   * When a driver node appears the engine spawns a new {@link DriverAgent};
+   * when a node is removed the engine stops and disposes the agent.
    */
   private listenForDriverPresence(): void {
     const driversRef = rtdb.ref("drivers-online");
@@ -171,7 +190,10 @@ export class SimulationEngine {
   // ═══════════════════════════════════════════════════════════════════════════════
 
   /**
-   * Create a new agent for an online driver
+   * Creates a new {@link DriverAgent} for a driver that just came online.
+   *
+   * @param driverId - Firebase UID of the driver.
+   * @param driverData - Current RTDB snapshot with location and status.
    */
   private async createAgent(
     driverId: string,
@@ -218,7 +240,10 @@ export class SimulationEngine {
   }
 
   /**
-   * Remove an agent when driver goes offline - also clean up RTDB data
+   * Stops and removes the agent for a driver that went offline.
+   * Also cleans up any associated RTDB data (e.g., pending ride assignments).
+   *
+   * @param driverId - Firebase UID of the driver.
    */
   private async removeAgent(driverId: string): Promise<void> {
     const agent = this.agents.get(driverId);
@@ -239,7 +264,10 @@ export class SimulationEngine {
   }
 
   /**
-   * Clean up RTDB data when driver goes offline
+   * Cleans up Realtime Database entries associated with a driver who has gone offline.
+   * Specifically removes any pending ride assignments and related ride status.
+   *
+   * @param driverId - Firebase UID of the driver.
    */
   private async cleanupDriverRTDB(driverId: string): Promise<void> {
     try {
@@ -271,7 +299,13 @@ export class SimulationEngine {
   // ═══════════════════════════════════════════════════════════════════════════════
 
   /**
-   * Listen for ride assignments for a specific driver
+   * Subscribes to `rides-assigned/{driverId}` for every active agent.
+   *
+   * When an assignment appears the engine forwards it to the relevant
+   * agent via {@link DriverAgent.handleRideAssignment}.
+   *
+   * @param driverId - Firebase UID of the driver.
+   * @param agent - The {@link DriverAgent} instance to which assignments will be routed.
    */
   private listenForRideAssignment(driverId: string, agent: DriverAgent): void {
     const assignmentRef = rtdb.ref(`rides-assigned/${driverId}`);
@@ -309,7 +343,14 @@ export class SimulationEngine {
   }
 
   /**
-   * Check if there's already a pending assignment when driver comes online
+   * Scans `rides-assigned/` for pre-existing assignments when a driver comes online.
+   *
+   * This handles the case where the simulation engine restarts or a driver
+   * reconnects while a ride is already in progress, ensuring agents pick up
+   * where they left off.
+   *
+   * @param driverId - Firebase UID of the driver.
+   * @param agent - The {@link DriverAgent} instance to check for existing assignments.
    */
   private async checkExistingAssignment(driverId: string, agent: DriverAgent): Promise<void> {
     try {
@@ -344,7 +385,11 @@ export class SimulationEngine {
   // ═══════════════════════════════════════════════════════════════════════════════
 
   /**
-   * Start the global tick loop that moves all agents
+   * Starts the global tick loop (1 Hz).
+   *
+   * On each tick, every active agent's {@link DriverAgent.tick} method is
+   * called with the elapsed delta time. Agents that throw are logged but
+   * do not halt the loop.
    */
   private startTickLoop(): void {
     this.lastTickTime = Date.now();
@@ -374,7 +419,8 @@ export class SimulationEngine {
   }
 
   /**
-   * Log current simulation status
+   * Periodically logs a one-line summary of all agent states for debugging.
+   * This method is called by the tick loop at a lower frequency.
    */
   private logStatus(): void {
     if (this.agents.size === 0) {

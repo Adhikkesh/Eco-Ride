@@ -29,7 +29,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * Mock response helper
  */
 interface MockResponse extends Partial<Response> {
-  _getData: () => unknown;
+  // biome-ignore lint/suspicious/noExplicitAny: Test mock helper needs flexible return type
+  _getData: () => any;
   _getStatusCode: () => number;
 }
 
@@ -40,7 +41,8 @@ interface MockResponse extends Partial<Response> {
  */
 const createMockResponse = (): MockResponse => {
   let statusCode = 200;
-  let data: unknown = null;
+  // biome-ignore lint/suspicious/noExplicitAny: Test mock stores arbitrary response data
+  let data: any = null;
 
   // biome-ignore lint/suspicious/noExplicitAny: Mocking complex express response object
   const res: any = {

@@ -77,10 +77,14 @@ export const requestRide = async (req: Request, res: Response) => {
       pickupLng,
       dropLat,
       dropLng,
+      pickupName,
+      dropName,
+      distance,
+      duration,
+      co2Saved,
       fare,
       declinedDrivers = [],
     } = req.body;
-
     const pickupLatNum = Number(pickupLat);
     const pickupLngNum = Number(pickupLng);
     const dropLatNum = Number(dropLat);
@@ -280,21 +284,30 @@ export const requestRide = async (req: Request, res: Response) => {
       console.error("Error fetching user details:", err);
     }
 
-    // Create ride with PENDING_ACCEPTANCE status - driver must accept first
+    // Calculate Green Points (10 base + 2 per km)
+    const distanceKm = distance ? parseFloat(distance) : 0;
+    const greenPointsAwarded = Math.round(10 + distanceKm * 2);
+
     const rideData = {
-      createdAt: FieldValue.serverTimestamp(),
+      co2Saved: co2Saved || 0,
       declinedDrivers: declinedDrivers || [],
+      distance: distance || null,
       driverId: assignedDriver.driverId,
       driverName,
       drop: { lat: dropLatNum, lng: dropLngNum },
+      dropName: dropName || "Destination",
+      duration: duration || null,
       fare: fare || null,
+      greenPointsAwarded,
       otp: Math.floor(1000 + Math.random() * 9000).toString(), // Generate 4-digit OTP (hidden until 100m)
       otpRevealed: false, // OTP is not revealed until driver is within 100m
       pickup: { lat: pickupLatNum, lng: pickupLngNum },
+      pickupName: pickupName || "Pickup Location",
       riderId,
       riderName,
       riderPhone,
       status: "PENDING_ACCEPTANCE", // NEW: Driver must accept before proceeding
+      timestamp: FieldValue.serverTimestamp(),
     };
 
     const rideRef = await db.collection("rides").add(rideData);
@@ -588,13 +601,39 @@ export const completeRide = async (req: Request, res: Response) => {
 
     if (!rideDoc.exists) return res.status(404).json({ message: "Ride not found", success: false });
 
-    const driverId = rideDoc.data()?.driverId;
+    const rideData = rideDoc.data();
+    const currentStatus = rideData?.status;
+
+    // Idempotency: if ride is already completed/paid, return success without re-processing
+    if (currentStatus === "COMPLETED" || currentStatus === "PAYMENT_CONFIRMED") {
+      console.log(`Ride ${rideId} already ${currentStatus}, returning success (idempotent)`);
+      return res.status(200).json({ message: "Ride already completed", success: true });
+    }
+
+    const driverId = rideData?.driverId;
+    const riderId = rideData?.riderId;
+    const points = rideData?.greenPointsAwarded || 0;
 
     // 1. Update Ride Status
     await rideRef.update({
       completedAt: FieldValue.serverTimestamp(),
       status: "COMPLETED",
     });
+
+    // 1.1 Increment Rider's Green Points
+    if (riderId && points > 0) {
+      try {
+        await db
+          .collection("users")
+          .doc(riderId)
+          .update({
+            green_points: FieldValue.increment(points),
+          });
+        console.log(`Incremented green points for rider ${riderId} by ${points}`);
+      } catch (err) {
+        console.error("Error incrementing green points:", err);
+      }
+    }
 
     // 2. Remove ride assignment but keep driver BUSY until payment is confirmed
     // Driver status will be set to AVAILABLE after payment confirmation
