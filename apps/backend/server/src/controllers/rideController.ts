@@ -470,6 +470,14 @@ export const completeRide = async (req: Request, res: Response) => {
     if (!rideDoc.exists) return res.status(404).json({ message: "Ride not found", success: false });
 
     const rideData = rideDoc.data();
+    const currentStatus = rideData?.status;
+
+    // Idempotency: if ride is already completed/paid, return success without re-processing
+    if (currentStatus === "COMPLETED" || currentStatus === "PAYMENT_CONFIRMED") {
+      console.log(`Ride ${rideId} already ${currentStatus}, returning success (idempotent)`);
+      return res.status(200).json({ message: "Ride already completed", success: true });
+    }
+
     const driverId = rideData?.driverId;
     const riderId = rideData?.riderId;
     const points = rideData?.greenPointsAwarded || 0;
