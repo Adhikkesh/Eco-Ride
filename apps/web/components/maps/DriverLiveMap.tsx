@@ -272,6 +272,10 @@ export default function DriverLiveMap({
   const [etaToDestination, setEtaToDestination] = useState<string | null>(null);
   const [waitingForPayment, setWaitingForPayment] = useState(false);
   const autoCompleteTriggeredRef = useRef(false);
+  // Persist the current ride ID so the payment listener can still subscribe
+  // even after assignedRide is set to null by the RTDB rides-assigned listener.
+  // Must be state (not ref) so the useEffect dependency array triggers re-subscription.
+  const [currentRideId, setCurrentRideId] = useState<string | null>(null);
 
   // Ride assignment state
   const [assignedRide, setAssignedRide] = useState<AssignedRide | null>(null);
@@ -439,6 +443,8 @@ export default function DriverLiveMap({
       if (data) {
         console.log("Ride assigned:", data);
         setAssignedRide(data);
+        // Track ride ID in state so the payment listener effect re-subscribes
+        setCurrentRideId(data.rideId);
         // Reset local ride status to saved status or MATCHED
         setRideStatus(data.status || "MATCHED");
         // Auto-set status to BUSY when assigned
@@ -1006,14 +1012,39 @@ export default function DriverLiveMap({
     );
   }, [userId]);
 
-  // Listen for payment confirmation
+  // Listen for ride COMPLETED status from RTDB (fallback for when rider auto-completes first).
+  // When the rider's auto-complete fires before the driver's, the backend removes
+  // rides-assigned/{driverId} which nullifies assignedRide, preventing the driver's
+  // handleCompleteRide from running. This listener catches that case and sets the
+  // waiting-for-payment state from the RTDB ride status update instead.
   useEffect(() => {
-    if (!finishedRideId || !rtdb) return;
+    if (!currentRideId || !rtdb || !isOnline) return;
 
-    const rideRef = ref(rtdb, `rides/${finishedRideId}`);
+    console.log(`Setting up RTDB ride listener for ride: ${currentRideId}`);
+    const rideRef = ref(rtdb, `rides/${currentRideId}`);
     const unsubscribe = onValue(rideRef, (snapshot) => {
       const data = snapshot.val();
-      if (data && data.paymentStatus === "PAID") {
+      if (!data) return;
+
+      // COMPLETED status: show the yellow "waiting for payment" card
+      if (data.status === "COMPLETED" || data.status === "PAYMENT_CONFIRMED") {
+        if (!showPaymentPopup) {
+          console.log("RTDB ride status listener: ride COMPLETED, enabling waiting-for-payment");
+          setFinishedRideId(currentRideId);
+          setRideStatus("COMPLETED");
+          setWaitingForPayment(true);
+          setAssignedRide(null);
+          setDirectionsToPickup(null);
+          setDirectionsToDestination(null);
+          setDistanceToDestination(null);
+          setEtaToDestination(null);
+          autoCompleteTriggeredRef.current = false;
+        }
+      }
+
+      // PAID status: show the green "payment received" popup
+      if (data.paymentStatus === "PAID") {
+        console.log("RTDB ride status listener: payment PAID, showing popup");
         setReceivedAmount(data.paidAmount || 0);
         setShowPaymentPopup(true);
         setWaitingForPayment(false);
@@ -1021,7 +1052,8 @@ export default function DriverLiveMap({
     });
 
     return () => unsubscribe();
-  }, [finishedRideId]);
+  // currentRideId is the key dep: re-subscribes each time a new ride is assigned
+  }, [currentRideId, isOnline, showPaymentPopup]);
 
   const _goOnline = useCallback(async () => {
     if (!rtdb) {
@@ -2605,6 +2637,7 @@ export default function DriverLiveMap({
               onClick={() => {
                 setShowPaymentPopup(false);
                 setFinishedRideId(null);
+                setCurrentRideId(null);
                 setWaitingForPayment(false);
                 setStatus("AVAILABLE");
               }}

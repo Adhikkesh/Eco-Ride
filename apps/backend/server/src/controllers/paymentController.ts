@@ -7,6 +7,7 @@
  */
 
 import type { Request, Response } from "express";
+import { FieldValue } from "firebase-admin/firestore";
 import Stripe from "stripe";
 import { db, rtdb } from "../config/firebase.js";
 
@@ -169,6 +170,35 @@ export const confirmPayment = async (req: Request, res: Response) => {
     if (driverId) {
       await rtdb.ref(`drivers-online/${driverId}`).update({ status: "AVAILABLE" });
       console.log(`Driver ${driverId} is now AVAILABLE after payment confirmation`);
+
+      // Update Driver's Wallet Balance
+      try {
+        const fareAmount = Number(amount) || 0;
+        await db
+          .collection("driver_profile")
+          .doc(driverId)
+          .update({
+            wallet_balance: FieldValue.increment(fareAmount),
+          });
+        console.log(`Incremented wallet balance for driver ${driverId} by ${fareAmount}`);
+      } catch (err) {
+        console.error("Error updating driver wallet balance:", err);
+      }
+
+      // Update Driver's Trust Score (Rating)
+      try {
+        // Increment trust score by 0.1 for each successful ride, capped later in fetching or logic if needed
+        // For now, simple increment
+        await db
+          .collection("users")
+          .doc(driverId)
+          .update({
+            trust_score: FieldValue.increment(0.1),
+          });
+        console.log(`Incremented trust score for driver ${driverId}`);
+      } catch (err) {
+        console.error("Error updating driver trust score:", err);
+      }
     }
 
     return res.status(200).json({
