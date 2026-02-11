@@ -116,9 +116,13 @@ export default function ProfilePage() {
           if (userDoc.exists() && isMounted) {
             const userData = userDoc.data();
             const phone = userData.phoneNumber || "";
-            const hAddress = userData.homeAddress || "";
-            const wAddress = userData.workAddress || "";
-            const fAddress = userData.favAddress || "";
+
+            // Sync with Dashboard's saved_locations
+            const savedLocs = userData.saved_locations || {};
+            const hAddress = savedLocs.home?.name || userData.homeAddress || "";
+            const wAddress = savedLocs.work?.name || userData.workAddress || "";
+            const fAddress = savedLocs.favourite?.name || userData.favAddress || "";
+
             const role = userData.role || "rider";
 
             setPhoneNumber(phone);
@@ -256,6 +260,10 @@ export default function ProfilePage() {
           homeAddress: homeAddress,
           phoneNumber: phoneNumber,
           photoURL: photoURL,
+          "saved_locations.favourite.name": favAddress,
+          // Sync with Dashboard's saved_locations (update names only)
+          "saved_locations.home.name": homeAddress,
+          "saved_locations.work.name": workAddress,
           workAddress: workAddress,
         });
       }
