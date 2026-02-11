@@ -38,6 +38,7 @@ import { useTripEstimator } from "@/hooks/useTripEstimator";
 import { auth, db, rtdb } from "@/lib/firebase";
 import { darkMapStyles, lightMapStyles } from "@/lib/mapStyles";
 import PaymentModal from "../booking/PaymentModal";
+import RatingModal from "../booking/RatingModal";
 
 // ---------------------------------------------------------
 // Types
@@ -85,7 +86,14 @@ interface SavedLocations {
 
 type LocationType = "home" | "work" | "favourite";
 
-type RideStatus = "idle" | "searching" | "pending_acceptance" | "matched" | "on_trip" | "error";
+type RideStatus =
+  | "idle"
+  | "searching"
+  | "pending_acceptance"
+  | "matched"
+  | "arrived"
+  | "on_trip"
+  | "error";
 
 const libraries: Libraries = ["places"];
 
@@ -331,6 +339,7 @@ export default function RiderMap({
   const [rideId, setRideId] = useState<string | null>(null);
   const [assignedDriverId, setAssignedDriverId] = useState<string | null>(null);
   const [assignedDriverName, setAssignedDriverName] = useState<string | null>(null);
+  const [assignedDriverPhone, setAssignedDriverPhone] = useState<string | null>(null);
   const [assignedDriverLocation, setAssignedDriverLocation] = useState<{
     lat: number;
     lng: number;
@@ -346,6 +355,14 @@ export default function RiderMap({
   const [_otpAvailable, setOtpAvailable] = useState(false); // Whether driver is within 100m
   const [_distanceToPickup, setDistanceToPickup] = useState<number | null>(null); // Distance in meters
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [showRatingModal, setShowRatingModal] = useState(false);
+  const [driverRating, setDriverRating] = useState<number>(0);
+  const [driverRatingCount, setDriverRatingCount] = useState<number>(0);
+  const [ratingPayload, setRatingPayload] = useState<{
+    rideId: string;
+    driverId: string;
+    driverName: string;
+  } | null>(null);
   // Color-coded routes: blue for driver->pickup, green for pickup->destination
   const [directionsToPickup, setDirectionsToPickup] = useState<google.maps.DirectionsResult | null>(
     null,
@@ -565,6 +582,9 @@ export default function RiderMap({
             localStorage.setItem("currentRideId", data.rideId);
             setAssignedDriverId(data.driverId);
             setAssignedDriverName(data.driverName || "Unknown Driver");
+            setAssignedDriverPhone(data.driverPhone || "No Phone");
+            setDriverRating(data.driverRating || 0);
+            setDriverRatingCount(data.driverRatingCount || 0);
 
             // ETA logic
             // We can re-calculate ETA in the effect that watches driver location
@@ -615,14 +635,22 @@ export default function RiderMap({
     setClientSecret(null);
     localStorage.removeItem("currentRideId");
 
+    // Capture rating info before clearing state
+    if (rideId && assignedDriverId) {
+      setRatingPayload({
+        driverId: assignedDriverId,
+        driverName: assignedDriverName || "Driver",
+        rideId,
+      });
+      setShowRatingModal(true);
+    }
+
     // Reset all ride state
     setRideStatus("idle");
     setRideId(null);
     setAssignedDriverId(null);
     setAssignedDriverName(null);
     setAssignedDriverLocation(null);
-    setDirectionsToPickup(null);
-    setDirectionsToDestination(null);
     setDirectionsToPickup(null);
     setDirectionsToDestination(null);
     setEta(null);
@@ -635,10 +663,7 @@ export default function RiderMap({
     setDropOffLocation(null);
     setDecodedPolyline([]);
     autoCompleteTriggeredRef.current = false;
-
-    // Nice success message could go here or in the modal close
-    // alert("Payment Successful! Thank you for riding with EcoRide.");
-  }, [rideId, paymentAmount]);
+  }, [rideId, paymentAmount, assignedDriverId, assignedDriverName]);
 
   // Listen for ride status changes (Start/Complete) via RTDB (Bypasses Firestore permissions)
   useEffect(() => {
@@ -824,7 +849,10 @@ export default function RiderMap({
   }, [rideStatus, directionsToPickup, directionsToDestination]);
 
   useEffect(() => {
-    if (!rtdb || !assignedDriverId || (rideStatus !== "matched" && rideStatus !== "on_trip"))
+    if (
+      !assignedDriverId ||
+      (rideStatus !== "matched" && rideStatus !== "arrived" && rideStatus !== "on_trip")
+    )
       return;
 
     const driverRef = ref(rtdb, `drivers-online/${assignedDriverId}`);
@@ -908,6 +936,31 @@ export default function RiderMap({
     };
   }, [assignedDriverId, rideStatus]);
 
+  const clearLocalRideState = useCallback(() => {
+    // Clear persistence
+    localStorage.removeItem("currentRideId");
+
+    // Reset all ride state
+    setRideStatus("idle");
+    setRideId(null);
+    setAssignedDriverId(null);
+    setAssignedDriverName(null);
+    setAssignedDriverPhone(null);
+    setAssignedDriverLocation(null);
+    setEta(null);
+    setDirectionsToPickup(null);
+    setDirectionsToDestination(null);
+    setDecodedPolyline([]);
+    setErrorMessage(null);
+    setManualPickupMode(false);
+    setOtp(null);
+    setPickupLocation(null);
+    setSelectedDestination(null);
+    setSearchDestination("");
+    setDropOffLocation(null);
+    autoCompleteTriggeredRef.current = false;
+  }, []);
+
   // Listen for ride status updates from RTDB (e.g., driver accepts, trip starts)
   useEffect(() => {
     if (!rtdb || !rideId) return;
@@ -922,13 +975,37 @@ export default function RiderMap({
       if (data.status === "MATCHED" && rideStatus === "pending_acceptance") {
         console.log("Driver accepted the ride!");
         setRideStatus("matched");
-      } else if (data.status === "IN_PROGRESS" && rideStatus === "matched") {
+        if (data.driverName) setAssignedDriverName(data.driverName);
+        if (data.driverPhone) setAssignedDriverPhone(data.driverPhone);
+      } else if (
+        data.status === "ARRIVED" &&
+        (rideStatus === "matched" || rideStatus === "pending_acceptance")
+      ) {
+        console.log("Driver has arrived!");
+        setRideStatus("arrived");
+      } else if (
+        data.status === "IN_PROGRESS" &&
+        (rideStatus === "matched" || rideStatus === "arrived")
+      ) {
         console.log("Trip started!");
         setRideStatus("on_trip");
       } else if (data.status === "SEARCHING" && rideStatus === "pending_acceptance") {
         // Driver declined, system is re-matching
         console.log("Driver declined, searching for new driver...");
         setErrorMessage("Driver unavailable. Finding another driver...");
+      } else if (
+        data.status === "CANCELLED" &&
+        (rideStatus === "matched" ||
+          rideStatus === "arrived" ||
+          rideStatus === "pending_acceptance")
+      ) {
+        console.log("Ride was cancelled!");
+        clearLocalRideState();
+        if (data.cancelReason === "TIMEOUT") {
+          setErrorMessage("Ride cancelled due to no response.");
+        } else {
+          setErrorMessage("The ride was cancelled.");
+        }
       } else if (data.status === "NO_DRIVERS") {
         setRideStatus("error");
         setErrorMessage("No drivers available. Please try again.");
@@ -936,11 +1013,11 @@ export default function RiderMap({
     });
 
     return () => unsubscribe();
-  }, [rideId, rideStatus]);
+  }, [rideId, rideStatus, clearLocalRideState]);
 
-  // Poll for OTP when matched (available at 100m proximity)
+  // Poll for OTP when matched or arrived (available at 100m proximity)
   useEffect(() => {
-    if (rideStatus !== "matched" || !rideId) return;
+    if ((rideStatus !== "matched" && rideStatus !== "arrived") || !rideId) return;
 
     // Polling function to check OTP availability
     const checkOtpAvailability = async () => {
@@ -1146,8 +1223,13 @@ export default function RiderMap({
       );
     }
 
-    // CASE 4: IDLE or COMPLETED - Clear all routes
-    else if (rideStatus === "idle") {
+    // CASE 4: IDLE, COMPLETED, or CANCELLED - Clear all routes
+    else if (
+      rideStatus === "idle" ||
+      rideStatus === "error" ||
+      (rideStatus as string) === "COMPLETED" ||
+      (rideStatus as string) === "CANCELLED"
+    ) {
       setDirectionsToDestination(null);
       setDirectionsToPickup(null);
     }
@@ -1486,54 +1568,6 @@ export default function RiderMap({
     setDecodedPolyline([]);
   };
 
-  // Auto-estimate when both pickup and destination are set
-  const prevAutoEstKeyRef = useRef<string>("");
-  useEffect(() => {
-    if (!selectedDestination || rideStatus !== "idle") return;
-
-    const pickup = pickupLocation || currentLocation;
-    if (!pickup) return;
-
-    const key = `${pickup.lat},${pickup.lng}-${selectedDestination.lat},${selectedDestination.lng}`;
-    if (key === prevAutoEstKeyRef.current) return;
-    prevAutoEstKeyRef.current = key;
-
-    // Clear old estimate & auto-calculate
-    clearEstimate();
-    setDecodedPolyline([]);
-
-    const autoEstimate = async () => {
-      const result = await getEstimate(pickup, {
-        lat: selectedDestination.lat,
-        lng: selectedDestination.lng,
-      });
-      if (result?.polyline) {
-        try {
-          const decoded = polylineUtil.decode(result.polyline);
-          const path = decoded.map((p: number[]) => ({ lat: p[0], lng: p[1] }));
-          setDecodedPolyline(path);
-          if (mapRef.current) {
-            const bounds = new google.maps.LatLngBounds();
-            for (const p of path) {
-              bounds.extend(p);
-            }
-            mapRef.current.fitBounds(bounds);
-          }
-        } catch (e) {
-          console.error("Polyline decode error", e);
-        }
-      }
-    };
-    autoEstimate();
-  }, [
-    selectedDestination,
-    pickupLocation,
-    currentLocation,
-    rideStatus,
-    getEstimate,
-    clearEstimate,
-  ]);
-
   const handleFindRide = async () => {
     if (!currentLocation || !selectedDestination) {
       setErrorMessage("Please select a destination first");
@@ -1591,24 +1625,29 @@ export default function RiderMap({
 
       const data = await response.json();
 
-      if (data.success && data.rideId && data.driverId && data.driverLocation) {
+      if (data.success && data.rideId) {
         // Store ride info
         setRideId(data.rideId);
-        localStorage.setItem("currentRideId", data.rideId);
         setAssignedDriverId(data.driverId);
         setAssignedDriverName(data.driverName || "Unknown Driver");
-        setAssignedDriverLocation(data.driverLocation);
+        setAssignedDriverPhone(data.driverPhone || "No Phone");
+        setDriverRating(data.driverRating || 0);
+        setDriverRatingCount(data.driverRatingCount || 0);
+        localStorage.setItem("currentRideId", data.rideId);
+
+        if (data.driverLocation) {
+          setAssignedDriverLocation(data.driverLocation);
+        }
         setEta(data.eta || null);
 
         // Handle based on status from backend
         if (data.status === "PENDING_ACCEPTANCE") {
           // Driver needs to accept the ride first
           setRideStatus("pending_acceptance");
-          // OTP is NOT returned here - will be fetched at 100m proximity
           setOtp(null);
           setOtpAvailable(false);
         } else if (data.status === "MATCHED") {
-          // Driver already accepted (shouldn't happen in new flow but fallback)
+          // Driver already accepted
           setRideStatus("matched");
           if (data.otp) {
             setOtp(data.otp);
@@ -1642,22 +1681,11 @@ export default function RiderMap({
         method: "POST",
       });
 
-      // Clear persistence
-      localStorage.removeItem("currentRideId");
-
-      // Reset all ride state
-      setRideStatus("idle");
-      setRideId(null);
-      setAssignedDriverId(null);
-      setAssignedDriverName(null);
-      setAssignedDriverLocation(null);
-      setEta(null);
-      setDirectionsToPickup(null);
-      setDirectionsToDestination(null);
-      setErrorMessage(null);
+      clearLocalRideState();
     } catch (error) {
       console.error("Error cancelling ride:", error);
-      setErrorMessage("Failed to cancel ride. Please try again.");
+      // Still clear local state if the ride is already cancelled on backend
+      clearLocalRideState();
     }
   };
 
@@ -2209,109 +2237,155 @@ export default function RiderMap({
             )}
 
             {/* Driver Matched Card */}
-            {(rideStatus === "matched" || rideStatus === "on_trip") && assignedDriverId && (
-              <div style={styles.matchedCard}>
-                <div
-                  style={{
-                    alignItems: "center",
-                    display: "flex",
-                    gap: "16px",
-                    marginBottom: "16px",
-                  }}
-                >
+            {(rideStatus === "matched" || rideStatus === "arrived" || rideStatus === "on_trip") &&
+              assignedDriverId && (
+                <div style={styles.matchedCard}>
                   <div
                     style={{
                       alignItems: "center",
-                      background: "rgba(34, 197, 94, 0.3)",
-                      borderRadius: "50%",
                       display: "flex",
-                      height: "56px",
-                      justifyContent: "center",
-                      width: "56px",
+                      gap: "16px",
+                      marginBottom: "16px",
                     }}
                   >
-                    <FaCheckCircle style={{ color: "#4ade80", fontSize: "28px" }} />
-                  </div>
-                  <div>
-                    <h2 style={{ color: "#4ade80", fontSize: "22px", fontWeight: 700, margin: 0 }}>
-                      {rideStatus === "on_trip" ? "Trip in Progress" : "Driver Assigned!"}
-                    </h2>
-                    <p style={{ color: "#94a3b8", fontSize: "14px", margin: "4px 0 0" }}>
-                      {rideStatus === "on_trip"
-                        ? "Sit back and relax"
-                        : "Your driver is on the way"}
-                    </p>
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    background: "rgba(15, 23, 42, 0.6)",
-                    borderRadius: "16px",
-                    display: "grid",
-                    gap: "16px",
-                    gridTemplateColumns: "1fr 1fr",
-                    padding: "16px",
-                  }}
-                >
-                  <div>
-                    <p style={{ color: "#94a3b8", fontSize: "12px", margin: 0 }}>Driver Name</p>
-                    <p
+                    <div
                       style={{
-                        color: "white",
-                        fontSize: "14px",
-                        fontWeight: 600,
-                        margin: "4px 0 0",
+                        alignItems: "center",
+                        background: "rgba(34, 197, 94, 0.3)",
+                        borderRadius: "50%",
+                        display: "flex",
+                        height: "56px",
+                        justifyContent: "center",
+                        width: "56px",
                       }}
                     >
-                      {assignedDriverName}
-                    </p>
+                      <FaCheckCircle style={{ color: "#4ade80", fontSize: "28px" }} />
+                    </div>
+                    <div>
+                      <h2
+                        style={{ color: "#4ade80", fontSize: "22px", fontWeight: 700, margin: 0 }}
+                      >
+                        {rideStatus === "on_trip"
+                          ? "Trip in Progress"
+                          : rideStatus === "arrived"
+                            ? "Driver has Arrived!"
+                            : "Driver Assigned!"}
+                      </h2>
+                      <p style={{ color: "#94a3b8", fontSize: "14px", margin: "4px 0 0" }}>
+                        {rideStatus === "on_trip"
+                          ? "Sit back and relax"
+                          : "Your driver is on the way"}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p style={{ color: "#94a3b8", fontSize: "12px", margin: 0 }}>ETA</p>
-                    <p
-                      style={{
-                        color: "#4ade80",
-                        fontSize: "20px",
-                        fontWeight: 700,
-                        margin: "4px 0 0",
-                      }}
-                    >
-                      {eta || "Calculating..."}
-                    </p>
-                  </div>
-                </div>
 
-                <button
-                  type="button"
-                  onClick={handleCancelRide}
-                  disabled={rideStatus === "on_trip"}
-                  style={
-                    rideStatus === "on_trip"
-                      ? styles.actionButtonDisabled
-                      : {
-                          alignItems: "center",
-                          background: "rgba(239, 68, 68, 0.2)",
-                          border: "1px solid rgba(239, 68, 68, 0.5)",
-                          borderRadius: "12px",
-                          color: "#f87171",
-                          cursor: "pointer",
-                          display: "flex",
+                  <div
+                    style={{
+                      background: "rgba(15, 23, 42, 0.6)",
+                      borderRadius: "16px",
+                      display: "grid",
+                      gap: "16px",
+                      gridTemplateColumns: "1fr 1fr",
+                      padding: "16px",
+                    }}
+                  >
+                    <div>
+                      <p style={{ color: "#94a3b8", fontSize: "12px", margin: 0 }}>Driver Name</p>
+                      <p
+                        style={{
+                          color: "white",
                           fontSize: "14px",
-                          fontWeight: 500,
-                          gap: "8px",
-                          justifyContent: "center",
-
+                          fontWeight: 600,
+                          margin: "4px 0 0",
+                        }}
+                      >
+                        {assignedDriverName}
+                      </p>
+                      <div
+                        style={{
+                          alignItems: "center",
+                          display: "flex",
+                          gap: "4px",
                           marginTop: "2px",
-                          padding: "12px",
-                          width: "100%",
-                        }
-                  }
-                >
-                  <FaTimes /> {rideStatus === "on_trip" ? "Trip Started" : "Cancel Ride"}
-                </button>
-              </div>
-            )}
+                        }}
+                      >
+                        <FaStar style={{ color: "#fbbf24", fontSize: "12px" }} />
+                        <span style={{ color: "white", fontSize: "13px", fontWeight: 600 }}>
+                          {driverRating > 0 ? driverRating.toFixed(1) : "New"}
+                        </span>
+                        <span style={{ color: "#94a3b8", fontSize: "11px" }}>
+                          ({driverRatingCount})
+                        </span>
+                      </div>
+                      {/* Driver Phone Display */}
+                      <div style={{ marginTop: "12px" }}>
+                        <p
+                          style={{
+                            color: "#94a3b8",
+                            fontSize: "11px",
+                            margin: 0,
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          Mobile
+                        </p>
+                        <p
+                          style={{
+                            color: "#3b82f6",
+                            fontSize: "14px",
+                            fontWeight: 700,
+                            margin: "2px 0 0",
+                          }}
+                        >
+                          {assignedDriverPhone || "No Phone"}
+                        </p>
+                      </div>
+                    </div>
+                    <div>
+                      <p style={{ color: "#94a3b8", fontSize: "12px", margin: 0 }}>ETA</p>
+                      <p
+                        style={{
+                          color: "#4ade80",
+                          fontSize: "20px",
+                          fontWeight: 700,
+                          margin: "4px 0 0",
+                        }}
+                      >
+                        {eta || "Calculating..."}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleCancelRide}
+                    disabled={rideStatus === "on_trip"}
+                    style={
+                      rideStatus === "on_trip"
+                        ? styles.actionButtonDisabled
+                        : {
+                            alignItems: "center",
+                            background: "rgba(239, 68, 68, 0.2)",
+                            border: "1px solid rgba(239, 68, 68, 0.5)",
+                            borderRadius: "12px",
+                            color: "#f87171",
+                            cursor: "pointer",
+                            display: "flex",
+                            fontSize: "14px",
+                            fontWeight: 500,
+                            gap: "8px",
+                            justifyContent: "center",
+
+                            marginTop: "2px",
+                            padding: "12px",
+                            width: "100%",
+                          }
+                    }
+                  >
+                    <FaTimes /> {rideStatus === "on_trip" ? "Trip Started" : "Cancel Ride"}
+                  </button>
+                </div>
+              )}
 
             {/* Search Card - Only show when idle or error (hide during active ride) */}
             {(rideStatus === "idle" || rideStatus === "error") && (
@@ -3042,48 +3116,51 @@ export default function RiderMap({
                   position: "relative",
                 }}
               >
-                {/* Route Legend - Show when matched */}
-                {rideStatus === "matched" && (directionsToPickup || directionsToDestination) && (
-                  <div
-                    style={{
-                      background: "rgba(15, 23, 42, 0.9)",
-                      borderRadius: "12px",
-                      bottom: "16px",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: "8px",
-                      left: "16px",
-                      padding: "12px 16px",
-                      position: "absolute",
-                      zIndex: 10,
-                    }}
-                  >
-                    <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
-                      <div
-                        style={{
-                          background: "#3b82f6",
-                          borderRadius: "2px",
-                          height: "4px",
-                          width: "24px",
-                        }}
-                      />
-                      <span style={{ color: "#94a3b8", fontSize: "12px" }}>Driver approaching</span>
+                {/* Route Legend - Show when matched/arrived */}
+                {(rideStatus === "matched" || rideStatus === "arrived") &&
+                  (directionsToPickup || directionsToDestination) && (
+                    <div
+                      style={{
+                        background: "rgba(15, 23, 42, 0.9)",
+                        borderRadius: "12px",
+                        bottom: "16px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "8px",
+                        left: "16px",
+                        padding: "12px 16px",
+                        position: "absolute",
+                        zIndex: 10,
+                      }}
+                    >
+                      <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                        <div
+                          style={{
+                            background: "#3b82f6",
+                            borderRadius: "2px",
+                            height: "4px",
+                            width: "24px",
+                          }}
+                        />
+                        <span style={{ color: "#94a3b8", fontSize: "12px" }}>
+                          Driver approaching
+                        </span>
+                      </div>
+                      <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                        <div
+                          style={{
+                            background: "#22c55e",
+                            borderRadius: "2px",
+                            height: "4px",
+                            width: "24px",
+                          }}
+                        />
+                        <span style={{ color: "#94a3b8", fontSize: "12px" }}>
+                          Trip to destination
+                        </span>
+                      </div>
                     </div>
-                    <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
-                      <div
-                        style={{
-                          background: "#22c55e",
-                          borderRadius: "2px",
-                          height: "4px",
-                          width: "24px",
-                        }}
-                      />
-                      <span style={{ color: "#94a3b8", fontSize: "12px" }}>
-                        Trip to destination
-                      </span>
-                    </div>
-                  </div>
-                )}
+                  )}
                 {/* Manual pickup mode indicator */}
                 {manualPickupMode && (
                   <div
@@ -3448,7 +3525,7 @@ export default function RiderMap({
       </main>
 
       {/* Rider OTP Modal */}
-      {otp && rideStatus === "matched" && showOtpModal && (
+      {otp && (rideStatus === "matched" || rideStatus === "arrived") && showOtpModal && (
         <div
           style={{
             alignItems: "center",
@@ -3573,6 +3650,23 @@ export default function RiderMap({
           amount={paymentAmount}
           onSuccess={handlePaymentSuccess}
           onClose={() => setShowPayment(false)}
+        />
+      )}
+      {/* Rating Modal */}
+      {showRatingModal && ratingPayload && (
+        <RatingModal
+          rideId={ratingPayload.rideId}
+          driverId={ratingPayload.driverId}
+          driverName={ratingPayload.driverName}
+          onClose={() => {
+            setShowRatingModal(false);
+            setRatingPayload(null);
+          }}
+          onSuccess={() => {
+            setShowRatingModal(false);
+            setRatingPayload(null);
+            alert("Thank you for your feedback!");
+          }}
         />
       )}
     </div>

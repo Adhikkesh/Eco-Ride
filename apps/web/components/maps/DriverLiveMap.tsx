@@ -18,7 +18,6 @@ import {
   FaFlagCheckered,
   FaLeaf,
   FaMapMarkerAlt,
-  FaPlay,
   FaPowerOff,
   FaRoute,
 } from "react-icons/fa";
@@ -48,7 +47,10 @@ interface AssignedRide {
   pickup: { lat: number; lng: number };
   drop: { lat: number; lng: number };
   timestamp: number;
-  status?: "MATCHED" | "IN_PROGRESS";
+  status?: "MATCHED" | "IN_PROGRESS" | "ARRIVED";
+  arrivedAt?: number;
+  riderName?: string;
+  riderPhone?: string;
 }
 
 interface PendingRide {
@@ -59,6 +61,8 @@ interface PendingRide {
   fare?: number;
   timestamp: number;
   status: "PENDING_ACCEPTANCE";
+  riderName?: string;
+  riderPhone?: string;
 }
 
 const styles = {
@@ -268,6 +272,8 @@ export default function DriverLiveMap({
   // Distance and ETA tracking
   const [distanceToPickup, setDistanceToPickup] = useState<number | null>(null);
   const [distanceToDestination, setDistanceToDestination] = useState<number | null>(null);
+  const [waitingTimer, setWaitingTimer] = useState<number | null>(null); // Remaining seconds
+  const [isArrived, setIsArrived] = useState(false);
   const [etaToPickup, setEtaToPickup] = useState<string | null>(null);
   const [etaToDestination, setEtaToDestination] = useState<string | null>(null);
   const [waitingForPayment, setWaitingForPayment] = useState(false);
@@ -399,7 +405,7 @@ export default function DriverLiveMap({
 
   // Listen for position updates from RTDB (simulator updates the driver's position)
   useEffect(() => {
-    if (!rtdb || !isOnline) {
+    if (!rtdb || !isOnline || waitingForPayment) {
       return;
     }
 
@@ -423,11 +429,11 @@ export default function DriverLiveMap({
     });
 
     return () => unsubscribe();
-  }, [isOnline, userId]); // Removed status from dependencies!
+  }, [isOnline, userId, waitingForPayment]); // Removed status from dependencies!
 
   // Listen for ride assignments from RTDB
   useEffect(() => {
-    if (!rtdb || !isOnline) {
+    if (!rtdb || !isOnline || waitingForPayment) {
       setAssignedRide(null);
       setDirectionsToPickup(null);
       setDirectionsToDestination(null);
@@ -497,7 +503,7 @@ export default function DriverLiveMap({
     });
 
     return () => unsubscribe();
-  }, [isOnline, userId, pickupLocationName, dropLocationName]);
+  }, [isOnline, userId, pickupLocationName, dropLocationName, waitingForPayment]);
 
   // Reverse geocode coordinates to a readable landmark name
   // Falls back to coordinates if Geocoding API is not enabled
@@ -546,7 +552,7 @@ export default function DriverLiveMap({
 
   // Listen for PENDING ride requests (driver must accept/decline)
   useEffect(() => {
-    if (!rtdb || !isOnline) {
+    if (!rtdb || !isOnline || waitingForPayment) {
       setPendingRide(null);
       setShowAcceptModal(false);
       setPickupLocationName(null);
@@ -579,7 +585,27 @@ export default function DriverLiveMap({
     });
 
     return () => unsubscribe();
-  }, [isOnline, userId, reverseGeocode]);
+  }, [isOnline, userId, reverseGeocode, waitingForPayment]);
+
+  // Listen for driver location updates from Simulator (via RTDB)
+  useEffect(() => {
+    if (!rtdb || !userId || !isOnline || waitingForPayment) return;
+
+    const driverRef = ref(rtdb, `drivers-online/${userId}`);
+    const unsubscribe = onValue(driverRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const newPos = { heading: data.heading, lat: data.lat, lng: data.lng };
+        setPosition(newPos);
+        prevPositionRef.current = newPos;
+        // Also update positionRef if it exists/is used
+        // Based on Step 294, positionRef is used. Use explicit assignment.
+        // Assuming positionRef is defined in scope (it was in Step 366 view as positionRef, derived from useRef)
+      }
+    });
+
+    return () => unsubscribe();
+  }, [isOnline, userId, waitingForPayment]);
 
   // Handle accepting a pending ride
   const handleAcceptRide = async () => {
@@ -612,6 +638,11 @@ export default function DriverLiveMap({
           // The rides-assigned listener will pick up the ride
         } else {
           console.error("Failed to accept ride:", data.message);
+          // If ride is already cancelled, close the modal
+          if (data.message?.includes("CANCELLED")) {
+            setShowAcceptModal(false);
+            setPendingRide(null);
+          }
           alert(data.message || "Failed to accept ride");
         }
       } else {
@@ -633,6 +664,36 @@ export default function DriverLiveMap({
 
   // Handle declining a pending ride
   const handleDeclineRide = async () => {
+    if (!pendingRide || !userId) return;
+
+    setDecliningRide(true);
+    try {
+      // Optimistically close modal
+      setShowAcceptModal(false);
+
+      const token = await auth.currentUser?.getIdToken();
+      await fetch(`${backendUrl}/ride/decline`, {
+        body: JSON.stringify({
+          driverId: userId,
+          rideId: pendingRide.rideId,
+        }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+
+      setPendingRide(null);
+    } catch (err: unknown) {
+      console.error("Error declining ride:", err);
+      // Re-show modal or alert if critical failure? Usually safe to just ignore and reset
+      setPendingRide(null);
+    } finally {
+      setDecliningRide(false);
+    }
+  };
+  const _handleDeclineRide = async () => {
     if (!pendingRide) return;
 
     if (!backendUrl) {
@@ -661,6 +722,11 @@ export default function DriverLiveMap({
           // Driver returns to AVAILABLE and waits for new rides
         } else {
           console.error("Failed to decline ride:", data.message);
+          // If ride is already cancelled, close the modal
+          if (data.message?.includes("CANCELLED")) {
+            setShowAcceptModal(false);
+            setPendingRide(null);
+          }
           alert(data.message || "Failed to decline ride");
         }
       } else {
@@ -675,56 +741,9 @@ export default function DriverLiveMap({
     }
   };
 
-  const [rideStatus, setRideStatus] = useState<"MATCHED" | "IN_PROGRESS" | "COMPLETED">("MATCHED");
-
-  const handleStartRideClick = () => {
-    setShowOtpModal(true);
-    setOtpInput("");
-  };
-
-  const handleSubmitOtp = async () => {
-    if (!assignedRide || !otpInput || otpInput.length !== 4) {
-      alert("Please enter a valid 4-digit OTP");
-      return;
-    }
-
-    if (!backendUrl) {
-      alert("System Error: Backend URL configuration missing");
-      return;
-    }
-
-    setSubmittingOtp(true);
-    try {
-      const token = await auth.currentUser?.getIdToken();
-      const res = await fetch(`${backendUrl}/ride/start`, {
-        body: JSON.stringify({ otp: otpInput, rideId: assignedRide.rideId }),
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        method: "POST",
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success) {
-          setRideStatus("IN_PROGRESS");
-          setShowOtpModal(false);
-        } else {
-          console.error("Failed to start ride:", data.message);
-          alert(data.message || "Failed to start ride. Check OTP.");
-        }
-      } else {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.message || `Server returned ${res.status}`);
-      }
-    } catch (err: unknown) {
-      console.error("Error starting ride:", err);
-      alert(getErrorMessage(err, "Network error: Could not start ride. Please try again."));
-    } finally {
-      setSubmittingOtp(false);
-    }
-  };
+  const [rideStatus, setRideStatus] = useState<"MATCHED" | "IN_PROGRESS" | "COMPLETED" | "ARRIVED">(
+    "MATCHED",
+  );
 
   const handleCompleteRide = async () => {
     if (!assignedRide) return;
@@ -749,6 +768,8 @@ export default function DriverLiveMap({
         setFinishedRideId(assignedRide.rideId); // Track for payment
         setRideStatus("COMPLETED");
         setWaitingForPayment(true);
+        setStatus("BUSY");
+        setManualLocationMode(false);
         setAssignedRide(null);
         setDirectionsToPickup(null);
         setDirectionsToDestination(null);
@@ -822,7 +843,7 @@ export default function DriverLiveMap({
     );
   }, [isLoaded, assignedRide, position]);
 
-  // Track distance to pickup and auto-show OTP when driver arrives
+  // Track distance to pickup and auto-show OTP modal when <100m
   useEffect(() => {
     if (!assignedRide || !position || rideStatus !== "MATCHED") return;
 
@@ -834,12 +855,41 @@ export default function DriverLiveMap({
     );
     setDistanceToPickup(Math.round(dist));
 
-    // Auto-show OTP modal when within 100m of pickup
-    if (dist <= 100 && !showOtpModal) {
+    // Auto-show OTP modal when driver is nearby (within 50m)
+    if (dist <= 50 && !showOtpModal && !isArrived) {
+      console.log("Driver within 50m of pickup - Auto-showing OTP modal...");
+      setIsArrived(true);
       setShowOtpModal(true);
-      setOtpInput("");
     }
-  }, [position, assignedRide, rideStatus, showOtpModal]);
+  }, [position, assignedRide, rideStatus, showOtpModal, isArrived]);
+
+  // Handle waiting timer countdown based on server timestamp to avoid drift
+  useEffect(() => {
+    if (rideStatus !== "ARRIVED" || !assignedRide?.arrivedAt) {
+      setWaitingTimer(null);
+      return;
+    }
+
+    const calculateRemaining = () => {
+      const elapsedMs = Date.now() - assignedRide.arrivedAt!;
+      const remainingSec = Math.max(0, 300 - Math.floor(elapsedMs / 1000));
+      setWaitingTimer(remainingSec);
+    };
+
+    calculateRemaining();
+    const interval = setInterval(calculateRemaining, 1000);
+
+    return () => clearInterval(interval);
+  }, [rideStatus, assignedRide?.arrivedAt]);
+
+  // Sync isArrived state with rideStatus
+  useEffect(() => {
+    if (rideStatus === "ARRIVED") {
+      setIsArrived(true);
+    } else {
+      setIsArrived(false);
+    }
+  }, [rideStatus]);
 
   // Track distance to destination during trip and auto-complete at 100m
   // biome-ignore lint/correctness/useExhaustiveDependencies: handleCompleteRide is guarded by autoCompleteTriggeredRef
@@ -860,8 +910,8 @@ export default function DriverLiveMap({
     );
     setDistanceToDestination(Math.round(dist));
 
-    if (dist <= 100) {
-      console.log("Driver within 100m of destination - Auto-completing trip...");
+    if (dist <= 50) {
+      console.log("Driver within 50m of destination - Auto-completing trip...");
       autoCompleteTriggeredRef.current = true;
       handleCompleteRide();
     }
@@ -940,7 +990,7 @@ export default function DriverLiveMap({
 
   const writeLocationToFirebase = useCallback(
     async (pos: Position) => {
-      if (!rtdb || !userId) return;
+      if (!rtdb || !userId || waitingForPayment) return;
       const driverRef = ref(rtdb, `drivers-online/${userId}`);
       // Calculate geohash for efficient geo-queries
       const hash = geofire.geohashForLocation([pos.lat, pos.lng]);
@@ -959,7 +1009,7 @@ export default function DriverLiveMap({
         console.error("Failed to write location:", err);
       }
     },
-    [userId, status],
+    [userId, status, waitingForPayment],
   );
 
   // Handler: Use GPS location
@@ -979,7 +1029,9 @@ export default function DriverLiveMap({
         console.log("GPS Location:", latitude, longitude, "Accuracy:", accuracy);
 
         // Update local state
-        setPosition({ heading: heading ?? 0, lat: latitude, lng: longitude });
+        const newPos = { heading: heading ?? 0, lat: latitude, lng: longitude };
+        setPosition(newPos);
+        setSelectedStartLocation(newPos);
         setLocationMode("ready");
 
         // Write to Firebase
@@ -1096,7 +1148,7 @@ export default function DriverLiveMap({
       },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 },
     );
-  }, [authReady, userId]);
+  }, [userId, authReady]);
 
   // Handler: Pick location on map
   const handlePickOnMap = useCallback(() => {
@@ -1135,7 +1187,7 @@ export default function DriverLiveMap({
 
     setIsOnline(true);
     setError(null);
-  }, [selectedStartLocation, userId, writeLocationToFirebase]);
+  }, [writeLocationToFirebase, userId, selectedStartLocation]);
 
   // Handler: Reset location selection
   const handleResetLocation = useCallback(() => {
@@ -1183,16 +1235,89 @@ export default function DriverLiveMap({
       // NO center or zoom here - let onLoad handle initial state
       // This prevents the map from re-centering on every render
     }),
-    [locationMode, manualLocationMode],
+    [manualLocationMode, locationMode],
   );
 
-  // Stable onLoad - only runs once when map mounts
+  //  when map mounts
   const onLoad = useCallback((map: google.maps.Map) => {
     mapRef.current = map;
     // Set initial center to Tamil Nadu - user will pan/select location
     map.setCenter(TAMIL_NADU_CENTER);
     map.setZoom(10);
   }, []);
+
+  // Handle marking arrival at pickup
+  const handleArriveAtPickup = async () => {
+    if (!assignedRide) return;
+
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch(`${backendUrl}/ride/arrive`, {
+        body: JSON.stringify({ rideId: assignedRide.rideId }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || "Failed to mark arrival");
+      }
+
+      // Status and timer will sync via RTDB listener
+    } catch (error) {
+      console.error("Error marking arrival:", error);
+      alert(error instanceof Error ? error.message : "Error marking arrival");
+    }
+  };
+
+  // Verify OTP and start ride
+  const handleSubmitOtp = async () => {
+    if (!assignedRide || !otpInput || otpInput.length !== 4) {
+      alert("Please enter a valid 4-digit OTP");
+      return;
+    }
+
+    if (!backendUrl) {
+      alert("System Error: Backend URL configuration missing");
+      return;
+    }
+
+    setSubmittingOtp(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch(`${backendUrl}/ride/start`, {
+        body: JSON.stringify({ otp: otpInput, rideId: assignedRide.rideId }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setRideStatus("IN_PROGRESS");
+          setShowOtpModal(false);
+          setOtpInput("");
+        } else {
+          console.error("Failed to start ride:", data.message);
+          alert(data.message || "Failed to start ride. Check OTP.");
+        }
+      } else {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.message || `Server returned ${res.status}`);
+      }
+    } catch (err: unknown) {
+      console.error("Error starting ride:", err);
+      alert(getErrorMessage(err, "Network error: Could not start ride. Please try again."));
+    } finally {
+      setSubmittingOtp(false);
+    }
+  };
 
   const onUnmount = useCallback(() => {
     mapRef.current = null;
@@ -1201,6 +1326,7 @@ export default function DriverLiveMap({
   // Handle map click to set location manually
   const onMapClick = useCallback(
     async (e: google.maps.MapMouseEvent) => {
+      if (waitingForPayment) return;
       if (!e.latLng) return;
 
       const lat = e.latLng.lat();
@@ -1228,7 +1354,14 @@ export default function DriverLiveMap({
         setManualLocationMode(false);
       }
     },
-    [manualLocationMode, isOnline, position, writeLocationToFirebase, locationMode],
+    [
+      writeLocationToFirebase,
+      position?.heading,
+      isOnline,
+      manualLocationMode,
+      locationMode,
+      waitingForPayment,
+    ],
   );
 
   if (!isLoaded) {
@@ -1686,53 +1819,107 @@ export default function DriverLiveMap({
                   </div>
                 </div>
 
-                {rideStatus === "MATCHED" ? (
-                  distanceToPickup != null && distanceToPickup <= 100 ? (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                {/* Rider Information Section */}
+                {(assignedRide?.riderName || assignedRide?.riderPhone) && (
+                  <div
+                    style={{
+                      background: "rgba(30, 41, 59, 0.5)",
+                      borderRadius: "16px",
+                      marginBottom: "20px",
+                      padding: "16px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        alignItems: "center",
+                        display: "flex",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <div>
+                        <p
+                          style={{
+                            color: "#94a3b8",
+                            fontSize: "11px",
+                            margin: "0 0 4px",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          Rider
+                        </p>
+                        <p style={{ color: "white", fontSize: "15px", fontWeight: 600, margin: 0 }}>
+                          {assignedRide?.riderName || "Unknown Rider"}
+                        </p>
+                      </div>
+                      {assignedRide?.riderPhone && (
+                        <div style={{ textAlign: "right" }}>
+                          <p
+                            style={{
+                              color: "#94a3b8",
+                              fontSize: "11px",
+                              margin: "0 0 4px",
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            Mobile
+                          </p>
+                          <p
+                            style={{
+                              color: "#3b82f6",
+                              fontSize: "15px",
+                              fontWeight: 600,
+                              margin: 0,
+                            }}
+                          >
+                            {assignedRide?.riderPhone}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {rideStatus === "MATCHED" || rideStatus === "ARRIVED" ? (
+                  isArrived ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                       <div
                         style={{
                           alignItems: "center",
-                          animation: "pulse 2s infinite",
-                          background: "rgba(34, 197, 94, 0.15)",
-                          border: "1px solid rgba(34, 197, 94, 0.4)",
+                          background: "rgba(34, 197, 94, 0.1)",
+                          border: "1px solid rgba(34, 197, 94, 0.3)",
                           borderRadius: "12px",
                           display: "flex",
+                          flexDirection: "column",
                           gap: "8px",
                           justifyContent: "center",
-                          marginBottom: "4px",
-                          padding: "10px",
+                          padding: "16px",
                         }}
                       >
-                        <FaCheckCircle style={{ color: "#4ade80" }} />
-                        <span style={{ color: "#4ade80", fontSize: "14px", fontWeight: 600 }}>
-                          You have arrived at pickup!
-                        </span>
+                        <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                          <FaCheckCircle style={{ color: "#4ade80" }} />
+                          <span style={{ color: "#4ade80", fontSize: "14px", fontWeight: 600 }}>
+                            You have arrived!
+                          </span>
+                        </div>
+                        {waitingTimer !== null && (
+                          <div
+                            style={{
+                              alignItems: "center",
+                              color: waitingTimer < 60 ? "#f87171" : "#94a3b8",
+                              display: "flex",
+                              fontSize: "13px",
+                              gap: "6px",
+                            }}
+                          >
+                            <FaClock />
+                            Waiting for rider: {Math.floor(waitingTimer / 60)}:
+                            {(waitingTimer % 60).toString().padStart(2, "0")}
+                          </div>
+                        )}
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleStartRideClick();
-                        }}
-                        style={{
-                          background: "linear-gradient(90deg, #3b82f6, #2563eb)",
-                          border: "none",
-                          borderRadius: "12px",
-                          color: "white",
-                          cursor: "pointer",
-                          display: "flex",
-                          fontSize: "16px",
-                          fontWeight: 600,
-                          gap: "8px",
-                          justifyContent: "center",
-                          padding: "12px",
-                          width: "100%",
-                        }}
-                      >
-                        <FaPlay /> Enter OTP to Start Trip
-                      </button>
                     </div>
                   ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                       <div
                         style={{
                           alignItems: "center",
@@ -1747,22 +1934,22 @@ export default function DriverLiveMap({
                       >
                         <FaCar style={{ color: "#60a5fa" }} />
                         <span style={{ color: "#60a5fa", fontSize: "14px", fontWeight: 600 }}>
-                          Navigating to Pickup...
+                          {distanceToPickup != null && distanceToPickup > 1000
+                            ? `Navigating to Pickup (${(distanceToPickup / 1000).toFixed(1)}km)`
+                            : `Navigating to Pickup (${distanceToPickup}m)`}
                         </span>
                       </div>
                       <button
                         type="button"
-                        onClick={() => {
-                          handleStartRideClick();
-                        }}
+                        onClick={handleArriveAtPickup}
                         style={{
-                          background: "rgba(71, 85, 105, 0.5)",
+                          background: "linear-gradient(90deg, #10b981, #059669)",
                           border: "none",
                           borderRadius: "12px",
-                          color: "#94a3b8",
+                          color: "white",
                           cursor: "pointer",
                           display: "flex",
-                          fontSize: "14px",
+                          fontSize: "16px",
                           fontWeight: 600,
                           gap: "8px",
                           justifyContent: "center",
@@ -1770,7 +1957,7 @@ export default function DriverLiveMap({
                           width: "100%",
                         }}
                       >
-                        <FaPlay /> Enter OTP (at pickup)
+                        <FaCheckCircle /> Reached Rider Location
                       </button>
                     </div>
                   )
@@ -2083,15 +2270,29 @@ export default function DriverLiveMap({
                   <div style={{ display: "grid", gap: "12px", gridTemplateColumns: "1fr 1fr" }}>
                     <button
                       type="button"
-                      onClick={() => setStatus("AVAILABLE")}
-                      style={styles.statusBtn(status === "AVAILABLE", "available")}
+                      onClick={() => {
+                        if (!waitingForPayment) setStatus("AVAILABLE");
+                      }}
+                      disabled={waitingForPayment}
+                      style={{
+                        ...styles.statusBtn(status === "AVAILABLE", "available"),
+                        cursor: waitingForPayment ? "not-allowed" : "pointer",
+                        opacity: waitingForPayment ? 0.6 : 1,
+                      }}
                     >
                       Available
                     </button>
                     <button
                       type="button"
-                      onClick={() => setStatus("BUSY")}
-                      style={styles.statusBtn(status === "BUSY", "busy")}
+                      onClick={() => {
+                        if (!waitingForPayment) setStatus("BUSY");
+                      }}
+                      disabled={waitingForPayment}
+                      style={{
+                        ...styles.statusBtn(status === "BUSY", "busy"),
+                        cursor: waitingForPayment ? "not-allowed" : "pointer",
+                        opacity: waitingForPayment ? 0.6 : 1,
+                      }}
                     >
                       Busy
                     </button>
@@ -2104,7 +2305,10 @@ export default function DriverLiveMap({
                 <div style={{ marginBottom: "24px" }}>
                   <button
                     type="button"
-                    onClick={() => setManualLocationMode(!manualLocationMode)}
+                    onClick={() => {
+                      if (!waitingForPayment) setManualLocationMode(!manualLocationMode);
+                    }}
+                    disabled={waitingForPayment}
                     style={{
                       alignItems: "center",
                       background: manualLocationMode
@@ -2113,12 +2317,13 @@ export default function DriverLiveMap({
                       border: manualLocationMode ? "none" : "2px solid rgba(71, 85, 105, 0.5)",
                       borderRadius: "12px",
                       color: manualLocationMode ? "white" : "#94a3b8",
-                      cursor: "pointer",
+                      cursor: waitingForPayment ? "not-allowed" : "pointer",
                       display: "flex",
                       fontSize: "14px",
                       fontWeight: 600,
                       gap: "10px",
                       justifyContent: "center",
+                      opacity: waitingForPayment ? 0.6 : 1,
                       padding: "14px 20px",
                       transition: "all 0.3s ease",
                       width: "100%",
@@ -2142,21 +2347,33 @@ export default function DriverLiveMap({
 
               {/* Go Online/Offline Button */}
               {isOnline ? (
-                <button type="button" onClick={goOffline} style={styles.buttonOffline}>
+                <button
+                  type="button"
+                  onClick={goOffline}
+                  disabled={waitingForPayment}
+                  style={{
+                    ...styles.buttonOffline,
+                    cursor: waitingForPayment ? "not-allowed" : "pointer",
+                    opacity: waitingForPayment ? 0.6 : 1,
+                  }}
+                >
                   <FaPowerOff /> Go Offline
                 </button>
               ) : (
                 <button
                   type="button"
                   onClick={handleConfirmAndGoOnline}
-                  disabled={!selectedStartLocation || locationMode !== "ready"}
+                  disabled={waitingForPayment || !selectedStartLocation || locationMode !== "ready"}
                   style={{
                     ...styles.buttonOnline,
                     cursor:
-                      !selectedStartLocation || locationMode !== "ready"
+                      waitingForPayment || !selectedStartLocation || locationMode !== "ready"
                         ? "not-allowed"
                         : "pointer",
-                    opacity: !selectedStartLocation || locationMode !== "ready" ? 0.5 : 1,
+                    opacity:
+                      waitingForPayment || !selectedStartLocation || locationMode !== "ready"
+                        ? 0.5
+                        : 1,
                   }}
                 >
                   <FaCar /> {selectedStartLocation ? "Go Online" : "Select Location First"}
@@ -2290,7 +2507,7 @@ export default function DriverLiveMap({
                 </div>
                 <p style={{ color: "#e2e8f0", fontSize: "15px", margin: 0, paddingLeft: "22px" }}>
                   {pickupLocationName ||
-                    `${pendingRide.pickup.lat.toFixed(4)}, ${pendingRide.pickup.lng.toFixed(4)}`}
+                    `${pendingRide?.pickup?.lat?.toFixed(4)}, ${pendingRide?.pickup?.lng?.toFixed(4)}`}
                 </p>
               </div>
 
@@ -2317,7 +2534,7 @@ export default function DriverLiveMap({
                 </div>
                 <p style={{ color: "#e2e8f0", fontSize: "15px", margin: 0, paddingLeft: "22px" }}>
                   {dropLocationName ||
-                    `${pendingRide.drop.lat.toFixed(4)}, ${pendingRide.drop.lng.toFixed(4)}`}
+                    `${pendingRide?.drop?.lat?.toFixed(4)}, ${pendingRide?.drop?.lng?.toFixed(4)}`}
                 </p>
               </div>
 

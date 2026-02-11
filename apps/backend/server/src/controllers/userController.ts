@@ -122,6 +122,8 @@ export const CreateUserController: RequestHandler<object, object, CreateUserBody
         kyc_url: kyc_url || null,
         kyc_verified: false,
         license_url: license_url || null,
+        rating: 0,
+        rating_count: 0,
         wallet_balance: 0.0,
       });
 
