@@ -76,6 +76,7 @@ export default function ProfilePage() {
   } | null>(null);
   const [walletBalance, setWalletBalance] = useState<number>(0);
   const [allTimeEarnings, setAllTimeEarnings] = useState<number>(0);
+  const [realRating, setRealRating] = useState<number>(0);
 
   // Form State
   const [displayName, setDisplayName] = useState("");
@@ -185,6 +186,20 @@ export default function ProfilePage() {
                     0,
                   );
                   if (isMounted) setAllTimeEarnings(total);
+
+                  // Calculate real average rating from ratings collection
+                  const ratingsQuery = query(
+                    collection(db, "ratings"),
+                    where("driverId", "==", currentUser.uid),
+                  );
+                  const ratingsSnapshot = await getDocs(ratingsQuery);
+                  if (isMounted && !ratingsSnapshot.empty) {
+                    const ratings = ratingsSnapshot.docs.map(
+                      (doc) => Number(doc.data().rating) || 0,
+                    );
+                    const avg = ratings.reduce((a, b) => a + b, 0) / ratings.length;
+                    setRealRating(avg);
+                  }
                 }
 
                 // Ride history (for both roles)
@@ -244,11 +259,11 @@ export default function ProfilePage() {
   }, [allTimeEarnings, walletBalance, userRole, pastRides]);
 
   const displayTrustScore = useMemo(() => {
-    // Ensure trust score is shown as a float with 1 decimal place, e.g., 4.5
-    // Default to a realistic starting rating if it's 0 (optional, but makes it look better)
-    if (trustScore === 0) return "0.0";
-    return trustScore.toFixed(1);
-  }, [trustScore]);
+    // Priority: Real Rating from reviews > User trust_score > 0.0
+    const ratingToDisplay = realRating > 0 ? realRating : trustScore;
+    if (ratingToDisplay === 0) return "0.0";
+    return ratingToDisplay.toFixed(1);
+  }, [trustScore, realRating]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -970,7 +985,7 @@ export default function ProfilePage() {
                     >
                       {displayTrustScore}
                     </p>
-                    <p style={{ color: "#94a3b8", fontSize: "12px" }}>Driver Trust Score</p>
+                    <p style={{ color: "#94a3b8", fontSize: "12px" }}>Average Rating</p>
                   </div>
 
                   {/* Earnings Card */}
