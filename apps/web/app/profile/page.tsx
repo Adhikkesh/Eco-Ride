@@ -1274,20 +1274,23 @@ export default function ProfilePage() {
                         </span>
                       </div>
                       <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                        <div style={{ alignItems: "flex-start", display: "flex", gap: "12px" }}>
+                        <div style={{ alignItems: "stretch", display: "flex", gap: "12px" }}>
+                          {/* Timeline/Icons Column */}
                           <div
                             style={{
                               alignItems: "center",
                               display: "flex",
                               flexDirection: "column",
-                              gap: "4px",
-                              marginTop: "4px",
+                              paddingBottom: "6px",
+                              paddingTop: "6px",
+                              width: "12px",
                             }}
                           >
                             <div
                               style={{
                                 background: "#22c55e",
                                 borderRadius: "50%",
+                                flexShrink: 0,
                                 height: "8px",
                                 width: "8px",
                               }}
@@ -1295,28 +1298,35 @@ export default function ProfilePage() {
                             <div
                               style={{
                                 background: darkMode ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.1)",
-                                height: "20px",
+                                flex: 1,
+                                margin: "4px 0",
                                 width: "1px",
                               }}
                             />
-                            <FaMapMarkerAlt color="#ef4444" size={10} />
+                            <FaMapMarkerAlt color="#ef4444" size={10} style={{ flexShrink: 0 }} />
                           </div>
+
+                          {/* Text Column */}
                           <div style={{ flex: 1 }}>
                             <p
                               style={{
                                 color: darkMode ? "white" : "#1e293b",
                                 fontSize: "14px",
                                 fontWeight: "500",
-                                marginBottom: "8px",
+                                lineHeight: "20px",
+                                margin: 0,
                               }}
                             >
                               {ride.pickupName || "Previous Trip"}
                             </p>
+                            <div style={{ height: "16px" }} />
                             <p
                               style={{
                                 color: darkMode ? "white" : "#1e293b",
                                 fontSize: "14px",
                                 fontWeight: "500",
+                                lineHeight: "20px",
+                                margin: 0,
                               }}
                             >
                               {ride.dropName || "View Trip Details"}
