@@ -49,6 +49,53 @@
 
 Eco-Ride allows users to book eco-friendly rides, drivers to manage their trips, and admins to oversee the platform operations via a modern web interface and mobile application.
 
+<table>
+  <tr>
+    <td align="center" width="25%">
+      <h3>🗺️</h3>
+      <b>Real-time GPS</b><br/>
+      <sub>Live tracking with smooth map animations powered by Google Maps</sub>
+    </td>
+    <td align="center" width="25%">
+      <h3>💳</h3>
+      <b>Stripe + Cash</b><br/>
+      <sub>Flexible payment options — card via Stripe or cash on delivery</sub>
+    </td>
+    <td align="center" width="25%">
+      <h3>👥</h3>
+      <b>3 User Roles</b><br/>
+      <sub>Dedicated dashboards for Riders, Drivers, and Admins</sub>
+    </td>
+    <td align="center" width="25%">
+      <h3>📱</h3>
+      <b>Cross-Platform</b><br/>
+      <sub>Web (Next.js) + Mobile (React Native / Expo)</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="25%">
+      <h3>🔑</h3>
+      <b>OTP Verification</b><br/>
+      <sub>Secure 4-digit OTP at pickup — revealed only within 100m</sub>
+    </td>
+    <td align="center" width="25%">
+      <h3>🔍</h3>
+      <b>Smart Matching</b><br/>
+      <sub>Expanding radius algorithm finds nearest driver up to 100km</sub>
+    </td>
+    <td align="center" width="25%">
+      <h3>🛡️</h3>
+      <b>KYC & Verification</b><br/>
+      <sub>Driver license & document verification via Admin portal</sub>
+    </td>
+    <td align="center" width="25%">
+      <h3>⚡</h3>
+      <b>CI/CD Pipeline</b><br/>
+      <sub>GitHub Actions with type-check, test, and build stages</sub>
+    </td>
+  </tr>
+</table>
+
 ## About
 
 Eco-Ride is designed to provide a seamless transportation experience while promoting sustainability. Key features include:
