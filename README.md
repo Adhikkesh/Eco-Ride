@@ -1,16 +1,46 @@
-# Eco-Ride
+<p align="center">
+  <img src="./assets/EcoRide-Architecture.png" alt="Eco-Ride Banner" width="600" />
+</p>
 
-Eco-Ride is a comprehensive ride-sharing platform focused on eco-friendly transportation, built with modern web technologies.
+<h1 align="center">🌿 Eco-Ride</h1>
+
+<p align="center">
+  <strong>A comprehensive ride-sharing platform focused on eco-friendly transportation, built with modern web technologies.</strong>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Node.js-%3E%3D18-brightgreen?logo=node.js&logoColor=white" alt="Node.js" />
+  <img src="https://img.shields.io/badge/pnpm-9.0-F69220?logo=pnpm&logoColor=white" alt="pnpm" />
+  <img src="https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/Next.js-15-000000?logo=next.js&logoColor=white" alt="Next.js" />
+  <img src="https://img.shields.io/badge/React_Native-Expo-4630EB?logo=expo&logoColor=white" alt="Expo" />
+  <img src="https://img.shields.io/badge/Firebase-Firestore-FFCA28?logo=firebase&logoColor=black" alt="Firebase" />
+  <img src="https://img.shields.io/badge/Stripe-Payments-635BFF?logo=stripe&logoColor=white" alt="Stripe" />
+  <img src="https://img.shields.io/badge/Turborepo-Monorepo-EF4444?logo=turborepo&logoColor=white" alt="Turborepo" />
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/License-Proprietary-red" alt="License" />
+  <img src="https://img.shields.io/badge/PRs-Welcome-brightgreen.svg" alt="PRs Welcome" />
+</p>
+
+---
 
 ## Table of Contents
 
 - [Intro](#intro)
 - [About](#about)
+- [Features](#features)
+- [Monorepo Structure](#monorepo-structure)
 - [Installing and Updating](#installing-and-updating)
 - [Usage](#usage)
 - [Running Tests](#running-tests)
+- [CI/CD Pipeline](#cicd-pipeline)
 - [Environment Variables](#environment-variables)
+- [API Documentation](#api-documentation)
 - [System Architecture](#system-architecture)
+- [Security](#security)
+- [Scripts Reference](#scripts-reference)
 - [Maintainers](#maintainers)
 - [License](#license)
 
@@ -29,6 +59,53 @@ Eco-Ride is designed to provide a seamless transportation experience while promo
 - **Cross-Platform**: Accessible via a responsive Web App (Next.js) and Mobile App (React Native).
 
 The platform leverages a monorepo structure managed by **Turborepo**, ensuring efficient development, shared configurations, and optimized build processes.
+
+## Features
+
+### 🚗 For Riders
+- Book rides with real-time ETA and fare estimation
+- Live GPS tracking with smooth car movement animation on map
+- Multiple payment options — **Stripe** (card) and **Cash**
+- Save favorite locations (Home, Work, etc.)
+- OTP-based ride verification for safety
+- Ride history and receipts
+
+### 🛞 For Drivers
+- Accept/reject ride requests in real-time
+- Turn-by-turn navigation with live map
+- Earnings dashboard and trip history
+- KYC & license verification during onboarding
+- Vehicle management and registration
+
+### 🔧 For Admins
+- Driver document verification portal
+- User and ride management dashboard
+- Platform analytics and oversight
+- Role and access management
+
+## Monorepo Structure
+
+This project uses a **Turborepo**-powered monorepo with the following layout:
+
+```
+Eco-Ride/
+├── apps/
+│   ├── web/              # Next.js 15 web application (Rider, Driver & Admin UI)
+│   ├── mobile/           # React Native + Expo mobile app
+│   ├── backend/
+│   │   ├── server/       # Express.js REST API server
+│   │   └── simulator/    # Ride simulation service for testing
+│   └── server/           # Serverless / edge functions
+├── packages/
+│   ├── shared/           # Shared utilities, types, and constants
+│   └── typescript-config/ # Shared TypeScript configurations
+├── assets/               # Architecture & UML diagrams
+├── docs/                 # Auto-generated TypeDoc API documentation
+├── .github/workflows/    # CI/CD pipeline configuration
+├── turbo.json            # Turborepo pipeline configuration
+├── biome.json            # Biome linter & formatter configuration
+└── package.json          # Root workspace configuration
+```
 
 ## Installing and Updating
 
@@ -119,28 +196,66 @@ To run tests with coverage reporting:
 pnpm test:coverage
 ```
 
+## CI/CD Pipeline
+
+Eco-Ride uses **GitHub Actions** for continuous integration. The pipeline is triggered on every push and pull request to `main`/`master` branches.
+
+The CI workflow runs the following jobs in sequence:
+
+| Job | Description | Command |
+|-----|-------------|---------|
+| **Type Check** | Validates TypeScript types across the monorepo | `pnpm run check-types` |
+| **Test** | Runs the full Vitest test suite | `pnpm run test` |
+| **Build** | Builds all apps for production (runs after Type Check & Test pass) | `pnpm run build` |
+
+> The pipeline uses **pnpm v9**, **Node.js 20**, and `--frozen-lockfile` to ensure reproducible installs.
+
 ## Environment Variables
 
 Eco-Ride exposes the following environment variables. Ensure these are configured in your `.env` files:
 
-- `DATABASE_URL`: Connection string for the database (if applicable).
-- `FIREBASE_API_KEY`: API Key for Firebase services.
-- `FIREBASE_AUTH_DOMAIN`: Firebase Auth Domain.
-- `FIREBASE_PROJECT_ID`: Firebase Project ID.
-- `GOOGLE_MAPS_API_KEY`: API Key for Google Maps integration.
-- `STRIPE_SECRET_KEY`: Secret Key for server-side Stripe operations.
-- `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`: Public Key for client-side Stripe operations.
-- `PORT`: Port number for the backend server (default: 3001).
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | Connection string for the database (if applicable) |
+| `FIREBASE_API_KEY` | API Key for Firebase services |
+| `FIREBASE_AUTH_DOMAIN` | Firebase Auth Domain |
+| `FIREBASE_PROJECT_ID` | Firebase Project ID |
+| `GOOGLE_MAPS_API_KEY` | API Key for Google Maps integration |
+| `STRIPE_SECRET_KEY` | Secret Key for server-side Stripe operations |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Public Key for client-side Stripe operations |
+| `PORT` | Port number for the backend server (default: `3001`) |
+
+## API Documentation
+
+This project uses **TypeDoc** for auto-generated API documentation from TypeScript source code. To generate the docs:
+
+```bash
+pnpm docs
+```
+
+The generated documentation is output to the `docs/` directory and includes:
+- Module and function references
+- Interface and type definitions
+- Class hierarchies
 
 ## System Architecture
 
 ### Tech Stack
 
-- **Frontend (Web)**: [Next.js 15](https://nextjs.org/), TypeScript, [Tailwind CSS 4](https://tailwindcss.com/)
-- **Mobile**: [React Native](https://reactnative.dev/), [Expo](https://expo.dev/)
-- **Backend**: [Node.js](https://nodejs.org/), [Express](https://expressjs.com/), [Firebase Admin SDK](https://firebase.google.com/)
-- **Database**: Firestore (NoSQL)
-- **Tools**: [Turborepo](https://turbo.build/), [Biome](https://biomejs.dev/) (Linting/Formatting)
+| Layer | Technology |
+|-------|-----------|
+| **Frontend (Web)** | [Next.js 15](https://nextjs.org/), TypeScript, [Tailwind CSS 4](https://tailwindcss.com/) |
+| **Mobile** | [React Native](https://reactnative.dev/), [Expo](https://expo.dev/) |
+| **Backend** | [Node.js](https://nodejs.org/), [Express](https://expressjs.com/), [Firebase Admin SDK](https://firebase.google.com/) |
+| **Database** | Firestore (NoSQL) |
+| **Payments** | [Stripe](https://stripe.com/) |
+| **Maps** | [Google Maps Platform](https://developers.google.com/maps) |
+| **Monorepo** | [Turborepo](https://turbo.build/) |
+| **Linting/Formatting** | [Biome](https://biomejs.dev/) |
+| **Git Hooks** | [Husky](https://typicode.github.io/husky/) |
+| **Testing** | [Vitest](https://vitest.dev/) |
+| **CI/CD** | [GitHub Actions](https://github.com/features/actions) |
+| **Docs** | [TypeDoc](https://typedoc.org/) |
 
 ### Architecture Diagram
 High-level overview of the Eco-Ride system architecture, illustrating the interaction between Frontend, Backend, Database, and External Services.
@@ -168,6 +283,34 @@ Illustrates the interactions between the primary actors (Rider, Driver, Admin) a
 Depicts the chronological sequence of interactions during a typical ride booking and execution flow.
 
 ![Sequence Diagram](./assets/diagrams/sequence_diagram.png)
+
+## Security
+
+Eco-Ride implements security best practices at multiple layers:
+
+- **Authentication**: Firebase Authentication with role-based access control (Rider, Driver, Admin)
+- **Firestore Security Rules**: Granular document-level access control ensuring users can only read/write their own data and ride participants can only access rides they are involved in
+- **Payment Security**: Stripe handles all sensitive payment data — no card details are stored on the server
+- **OTP Verification**: One-Time Password verification for ride pickup to prevent fraud
+- **Environment Isolation**: Sensitive keys and credentials are stored as environment variables, never committed to the repository
+
+## Scripts Reference
+
+All scripts are available from the root `package.json` and are orchestrated via Turborepo:
+
+| Script | Description |
+|--------|-------------|
+| `pnpm dev` | Start all apps in development mode concurrently |
+| `pnpm build` | Build all apps for production |
+| `pnpm test` | Run the Vitest test suite across packages |
+| `pnpm check-types` | Run TypeScript type checking across the monorepo |
+| `pnpm docs` | Generate TypeDoc API documentation |
+| `pnpm lint:biome` | Lint all files using Biome |
+| `pnpm lint:fix:biome` | Lint and auto-fix issues using Biome |
+| `pnpm format:biome` | Format all files using Biome |
+| `pnpm format:check:biome` | Check formatting without writing |
+| `pnpm check:biome` | Run all Biome checks (lint + format) |
+| `pnpm check:fix:biome` | Run all Biome checks with auto-fix |
 
 ## Maintainers
 
