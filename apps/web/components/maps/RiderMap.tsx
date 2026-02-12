@@ -975,6 +975,7 @@ export default function RiderMap({
       if (data.status === "MATCHED" && rideStatus === "pending_acceptance") {
         console.log("Driver accepted the ride!");
         setRideStatus("matched");
+        setDecodedPolyline([]); // Clear estimate polyline when ride is matched
         if (data.driverName) setAssignedDriverName(data.driverName);
         if (data.driverPhone) setAssignedDriverPhone(data.driverPhone);
       } else if (
@@ -3215,7 +3216,7 @@ export default function RiderMap({
                   )}
 
                   {/* Route Directions - Pickup to Destination (GREEN) */}
-                  {directionsToDestination && !decodedPolyline.length && (
+                  {directionsToDestination && (
                     <DirectionsRenderer
                       directions={directionsToDestination}
                       options={{
@@ -3229,8 +3230,8 @@ export default function RiderMap({
                     />
                   )}
 
-                  {/* Estimated Route Polyline (Green) */}
-                  {decodedPolyline.length > 0 && (
+                  {/* Estimated Route Polyline (Green) - Only show when no active ride */}
+                  {decodedPolyline.length > 0 && !directionsToDestination && (
                     <Polyline
                       path={decodedPolyline}
                       options={{
