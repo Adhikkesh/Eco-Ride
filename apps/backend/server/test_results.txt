@@ -1,0 +1,74 @@
+FILE: admin.integration.test.ts
+  PASS: GET /api/v1/admin/drivers/unverified > should return 403 for non-admin user
+  PASS: GET /api/v1/admin/drivers/unverified > should return 401 when user is not authenticated
+  PASS: GET /api/v1/admin/drivers/unverified > should return unverified drivers for admin user
+  PASS: GET /api/v1/admin/drivers/unverified > should return empty array when no unverified drivers
+  PASS: POST /api/v1/admin/drivers/verify > should return 403 for non-admin user
+  PASS: POST /api/v1/admin/drivers/verify > should return 400 when driver_uid is missing
+  PASS: POST /api/v1/admin/drivers/verify > should return 404 when driver profile does not exist
+  PASS: POST /api/v1/admin/drivers/verify > should verify driver successfully
+  PASS: POST /api/v1/admin/drivers/verify > should decline driver verification
+FILE: auth.integration.test.ts
+  PASS: GET /api/v1/auth/verify > should return 200 with valid token and user info
+  PASS: GET /api/v1/auth/verify > should return 401 when no user is attached (token missing)
+  PASS: GET /api/v1/auth/verify > should handle partial user object gracefully
+FILE: fare.integration.test.ts
+  PASS: POST /api/v1/ride/estimate > should return 400 when coordinates are missing
+  PASS: POST /api/v1/ride/estimate > should return 500 when GOOGLE_API_KEY is missing
+  PASS: POST /api/v1/ride/estimate > should return fare estimate on success
+  PASS: POST /api/v1/ride/estimate > should apply pool discount for pooled rides
+  PASS: POST /api/v1/ride/estimate > should return 404 when no route is found
+FILE: health.integration.test.ts
+  PASS: GET /api/v1/health > should return 200 with health check message
+  PASS: GET /api/v1/health > should respond with JSON content type
+  PASS: GET /api/v1/getme > should return 200 with user data when authenticated
+  PASS: GET /api/v1/getme > should return null data when user is not set
+FILE: payment.integration.test.ts
+  PASS: POST /api/v1/payment/create-intent > should return 400 when rideId is missing
+  PASS: POST /api/v1/payment/create-intent > should return 404 when ride does not exist
+  PASS: POST /api/v1/payment/create-intent > should create payment intent for valid ride
+  PASS: POST /api/v1/ride/confirm-payment > should return 400 when rideId is missing
+  PASS: POST /api/v1/ride/confirm-payment > should confirm payment successfully
+FILE: ride.integration.test.ts
+  PASS: POST /api/v1/ride/request > should return 400 when riderId is missing
+  PASS: POST /api/v1/ride/request > should return 400 for invalid coordinates
+  PASS: POST /api/v1/ride/request > should return 404 when no drivers are online
+  PASS: POST /api/v1/ride/request > should successfully request a ride when drivers are available
+  PASS: POST /api/v1/ride/cancel > should return 400 when rideId is missing
+  PASS: POST /api/v1/ride/cancel > should return 404 when ride does not exist
+  PASS: POST /api/v1/ride/cancel > should cancel ride successfully
+  PASS: POST /api/v1/ride/start > should return 400 when rideId is missing
+  PASS: POST /api/v1/ride/start > should return 400 when OTP is missing
+  PASS: POST /api/v1/ride/start > should return 400 for invalid OTP
+  PASS: POST /api/v1/ride/start > should start ride with correct OTP
+  PASS: POST /api/v1/ride/complete > should return 400 when rideId is missing
+  PASS: POST /api/v1/ride/complete > should complete ride successfully
+  PASS: GET /api/v1/ride/active > should return 404 when no active ride exists
+  PASS: GET /api/v1/ride/active > should return 401 when user is not authenticated
+  PASS: POST /api/v1/ride/accept > should return 400 when rideId is missing
+  PASS: POST /api/v1/ride/accept > should return 403 when driver is not assigned to this ride
+  PASS: POST /api/v1/ride/accept > should accept ride successfully when driver matches
+  PASS: POST /api/v1/ride/decline > should return 400 when rideId is missing
+  PASS: POST /api/v1/ride/decline > should return 403 when driver is not assigned to this ride
+FILE: savedLocations.integration.test.ts
+  PASS: GET /api/v1/user/saved-locations > should return saved locations for authenticated user
+  PASS: GET /api/v1/user/saved-locations > should return default empty locations when none saved
+  PASS: GET /api/v1/user/saved-locations > should return 404 when user does not exist
+  PASS: GET /api/v1/user/saved-locations > should return 401 when user is not authenticated
+  PASS: PUT /api/v1/user/saved-locations > should update home location successfully
+  PASS: PUT /api/v1/user/saved-locations > should return 400 for invalid location type
+  PASS: PUT /api/v1/user/saved-locations > should return 400 for invalid location format
+  PASS: PUT /api/v1/user/saved-locations > should allow deleting a saved location by passing null
+  PASS: PUT /api/v1/user/saved-locations > should return 401 when user is not authenticated
+FILE: user.integration.test.ts
+  PASS: POST /api/v1/user > should create a rider successfully (201)
+  PASS: POST /api/v1/user > should create a driver with all required fields (201)
+  PASS: POST /api/v1/user > should reject request with missing name (400)
+  PASS: POST /api/v1/user > should reject request with missing role (400)
+  PASS: POST /api/v1/user > should reject driver with missing license_url (400)
+  PASS: POST /api/v1/user > should return 401 when user is not authenticated
+  PASS: GET /api/v1/user/driver-status > should return kyc_verified status for existing driver
+  PASS: GET /api/v1/user/driver-status > should return kyc_verified: false for non-existent driver profile
+  PASS: GET /api/v1/user/driver-status > should return 401 when user is not authenticated
+
+SUMMARY: 64 passed, 0 failed, 64 total
