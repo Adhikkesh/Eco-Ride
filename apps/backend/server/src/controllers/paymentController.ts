@@ -1,9 +1,31 @@
+/**
+ * @fileoverview Payment Controller
+ * @description Handles payment processing for the Eco-Ride platform via Stripe.
+ *              Provides endpoints for creating payment intents and confirming payments.
+ *              Uses lazy initialization for the Stripe client to defer secret key access.
+ * @module controllers/paymentController
+ */
+
 import type { Request, Response } from "express";
+import { FieldValue } from "firebase-admin/firestore";
 import Stripe from "stripe";
 import { db, rtdb } from "../config/firebase.js";
 
+/**
+ * Lazily-initialized Stripe SDK instance.
+ * Created on first use rather than at module load time.
+ */
 let stripeInstance: Stripe | null = null;
 
+/**
+ * Returns the Stripe SDK instance, creating it on first call.
+ *
+ * Initialization is deferred so the `STRIPE_SECRET_KEY` environment variable
+ * doesn't need to be present at module load time. Subsequent calls return
+ * the cached instance.
+ *
+ * @returns The initialised Stripe client, or `null` if the secret key is missing.
+ */
 const getStripe = () => {
   if (!stripeInstance) {
     const key = process.env.STRIPE_SECRET_KEY;
@@ -19,6 +41,19 @@ const getStripe = () => {
   return stripeInstance;
 };
 
+/**
+ * Creates a Stripe PaymentIntent for an existing ride.
+ *
+ * Looks up the ride document in Firestore to determine the fare, enforces the
+ * Stripe minimum of ₹50, and returns the `clientSecret` the frontend needs to
+ * complete the payment flow.
+ *
+ * @param req - Express request containing `rideId` in the body.
+ * @param res - Express response.
+ * @returns JSON with `clientSecret`, `amount`, and `success` flag.
+ * @throws Returns 400 if `rideId` is missing, 404 if the ride doesn't exist,
+ *         or 503 if Stripe is not configured.
+ */
 export const createPaymentIntent = async (req: Request, res: Response) => {
   try {
     const { rideId } = req.body;
@@ -92,6 +127,18 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * Confirms a completed payment and updates ride/driver state.
+ *
+ * Sets `paymentStatus` to `"PAID"` in both Firestore and RTDB, marks the
+ * ride as `"PAYMENT_CONFIRMED"`, and releases the driver back to
+ * `"AVAILABLE"` status so they can accept new rides.
+ *
+ * @param req - Express request containing `rideId` and `amount` in the body.
+ * @param res - Express response.
+ * @returns JSON with success message or an error.
+ * @throws Returns 400 if `rideId` is missing.
+ */
 export const confirmPayment = async (req: Request, res: Response) => {
   try {
     const { rideId, amount } = req.body;
@@ -123,6 +170,35 @@ export const confirmPayment = async (req: Request, res: Response) => {
     if (driverId) {
       await rtdb.ref(`drivers-online/${driverId}`).update({ status: "AVAILABLE" });
       console.log(`Driver ${driverId} is now AVAILABLE after payment confirmation`);
+
+      // Update Driver's Wallet Balance
+      try {
+        const fareAmount = Number(amount) || 0;
+        await db
+          .collection("driver_profile")
+          .doc(driverId)
+          .update({
+            wallet_balance: FieldValue.increment(fareAmount),
+          });
+        console.log(`Incremented wallet balance for driver ${driverId} by ${fareAmount}`);
+      } catch (err) {
+        console.error("Error updating driver wallet balance:", err);
+      }
+
+      // Update Driver's Trust Score (Rating)
+      try {
+        // Increment trust score by 0.1 for each successful ride, capped later in fetching or logic if needed
+        // For now, simple increment
+        await db
+          .collection("users")
+          .doc(driverId)
+          .update({
+            trust_score: FieldValue.increment(0.1),
+          });
+        console.log(`Incremented trust score for driver ${driverId}`);
+      } catch (err) {
+        console.error("Error updating driver trust score:", err);
+      }
     }
 
     return res.status(200).json({

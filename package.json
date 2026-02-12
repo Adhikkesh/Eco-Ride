@@ -8,6 +8,7 @@
     "husky": "^9.1.7",
     "lint-staged": "^16.2.7",
     "turbo": "^2.7.3",
+    "typedoc": "^0.28.16",
     "typescript": "5.9.2"
   },
   "engines": {
@@ -17,15 +18,16 @@
   "packageManager": "pnpm@9.0.0",
   "private": true,
   "scripts": {
-    "build": "biome check . && turbo run build",
-    "check": "biome check .",
+    "build": "turbo run build",
     "check-types": "turbo run check-types",
-    "check:fix": "biome check --write .",
+    "check:biome": "biome check .",
+    "check:fix:biome": "biome check --write .",
     "dev": "turbo run dev",
-    "format": "biome format --write .",
-    "format:check": "biome format .",
-    "lint": "biome lint .",
-    "lint:fix": "biome lint --write .",
+    "docs": "typedoc",
+    "format:biome": "biome format --write .",
+    "format:check:biome": "biome format .",
+    "lint:biome": "biome lint .",
+    "lint:fix:biome": "biome lint --write .",
     "prepare": "husky",
     "test": "turbo run test"
   }

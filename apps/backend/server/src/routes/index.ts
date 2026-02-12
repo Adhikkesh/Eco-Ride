@@ -15,8 +15,10 @@ import { VerifyTokenController } from "../controllers/authController.js";
 import { calculateFare } from "../controllers/fareController.js";
 import { GetMeController, HealthCheckController } from "../controllers/index.js";
 import { confirmPayment, createPaymentIntent } from "../controllers/paymentController.js";
+import { SubmitRatingController } from "../controllers/ratingController.js";
 import {
   acceptRide,
+  arriveAtPickup,
   cancelRide,
   completeRide,
   declineRide,
@@ -24,6 +26,7 @@ import {
   getOtp,
   requestRide,
   startRide,
+  verifyOtp,
 } from "../controllers/rideController.js";
 import { getSavedLocations, updateSavedLocation } from "../controllers/savedLocationsController.js";
 import { CreateUserController, GetDriverStatusController } from "../controllers/userController.js";
@@ -84,6 +87,9 @@ router.post("/ride/decline", verifyToken, declineRide);
 /** Get OTP for ride (only available when driver is within 100m of pickup) */
 router.get("/ride/otp/:rideId", verifyToken, getOtp);
 
+/** Verify OTP for ride */
+router.post("/ride/verify-otp/:rideId", verifyToken, verifyOtp);
+
 /** Cancel an active ride request */
 router.post("/ride/cancel", verifyToken, cancelRide);
 
@@ -93,8 +99,14 @@ router.post("/ride/start", verifyToken, startRide);
 /** Complete a ride at destination */
 router.post("/ride/complete", verifyToken, completeRide);
 
+/** Mark arrival at pickup location */
+router.post("/ride/arrive", verifyToken, arriveAtPickup);
+
 /** Calculate fare estimate for a route */
 router.post("/ride/estimate", verifyToken, calculateFare);
+
+/** Submit driver rating and feedback */
+router.post("/ride/rate", verifyToken, SubmitRatingController);
 
 // ============================================================================
 // Payment Routes

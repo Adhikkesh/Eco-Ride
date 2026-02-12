@@ -1,17 +1,43 @@
+/**
+ * @fileoverview Legacy Traffic Simulator
+ * @description A simple traffic simulation that places a fixed number of
+ *              drivers on the map and moves them toward random waypoints at
+ *              regular intervals. Drivers redirect to assigned pickup locations
+ *              when a ride is dispatched via RTDB.
+ *
+ *              This module predates the {@link SimulationEngine} /
+ *              {@link DriverAgent} architecture and is retained as a
+ *              lightweight alternative for scenarios that don't require
+ *              full state-machine behavior.
+ * @module simulator/services/traffic
+ */
+
 import * as turf from "@turf/turf";
 import { rtdb } from "../config/firebase.js";
 
+/** Number of simulated drivers managed by this module. */
 const DRIVER_COUNT = 20;
-const UPDATE_INTERVAL_MS = 3000;
-const MOVE_DISTANCE_KM = 0.1; // ~100 meters
 
-// Coimbatore city center
+/** Interval between position updates in milliseconds. */
+const UPDATE_INTERVAL_MS = 3000;
+
+/** Distance each driver moves per tick, in kilometres (~100 m). */
+const MOVE_DISTANCE_KM = 0.1;
+
+/** Geographic center point used to constrain driver positions (Coimbatore). */
 const CITY_CENTER = {
   lat: 11.0168,
   lng: 76.9558,
 };
+
+/** Maximum roaming radius from the city center, in kilometres. */
 const MAX_RADIUS_KM = 5;
 
+/**
+ * Internal state for a single simulated driver.
+ *
+ * @interface DriverState
+ */
 interface DriverState {
   id: string;
   lat: number;
@@ -22,15 +48,29 @@ interface DriverState {
   assignedPickup: { lat: number; lng: number } | null;
 }
 
+/** In-memory store of all simulated driver states, keyed by driver ID. */
 const drivers: Map<string, DriverState> = new Map();
 
+/**
+ * Formats a numeric index into a zero-padded driver ID string.
+ *
+ * @param num - 1-based driver number.
+ * @returns An ID like `driver_001`.
+ */
 function padDriverId(num: number): string {
   return `driver_${String(num).padStart(3, "0")}`;
 }
 
 /**
- * Generate a random point within the specified radius of the city center.
- * This prevents "drifting" by always picking targets relative to the city center.
+ * Generates a random geographic point within a given radius of a center.
+ *
+ * Uses Turf.js `destination()` with a random bearing and distance to ensure
+ * points remain within the specified radius without drift.
+ *
+ * @param centerLat - Latitude of the center point.
+ * @param centerLng - Longitude of the center point.
+ * @param radiusKm - Maximum distance from center in kilometres.
+ * @returns A coordinate pair `{ lat, lng }`.
  */
 function randomPointInRadius(
   centerLat: number,
@@ -48,7 +88,11 @@ function randomPointInRadius(
 }
 
 /**
- * Initialize all 20 drivers with random positions within 5km of city center
+ * Initialises all simulated drivers in RTDB with random positions.
+ *
+ * Each driver is placed within {@link MAX_RADIUS_KM} of the city center and
+ * given a random waypoint target. Corresponding entries are created under
+ * `drivers-online/` in the Realtime Database.
  */
 export async function initializeDriversOnRTDB(): Promise<void> {
   console.log("🚗 Initializing drivers on RTDB...");
@@ -88,7 +132,13 @@ export async function initializeDriversOnRTDB(): Promise<void> {
 }
 
 /**
- * Move a driver towards their target by ~100m
+ * Advances a driver toward their current target by approximately 100 m.
+ *
+ * If the driver is within 50 m of their target and has no ride assignment,
+ * a new random target is selected. If the driver has an assigned pickup and
+ * reaches it, they stop moving.
+ *
+ * @param driver - Mutable driver state object to update in place.
  */
 function moveDriver(driver: DriverState): void {
   const destination = driver.assignedPickup || driver.target;
@@ -125,7 +175,10 @@ function moveDriver(driver: DriverState): void {
 }
 
 /**
- * Start the traffic simulation loop - updates every 3 seconds
+ * Starts the traffic simulation loop.
+ *
+ * Moves every driver toward their target and batch-updates all positions in
+ * RTDB every {@link UPDATE_INTERVAL_MS} milliseconds.
  */
 export function startTrafficLoop(): void {
   console.log("🔄 Starting traffic simulation loop...");
@@ -152,7 +205,12 @@ export function startTrafficLoop(): void {
 }
 
 /**
- * Listen for ride assignments and reroute drivers to pickup locations
+ * Starts RTDB listeners that redirect drivers to assigned pickups.
+ *
+ * For each driver, subscribes to `rides-assigned/{driverId}`. When an
+ * assignment appears the driver is marked `BUSY` and their target is set to
+ * the pickup location. When the assignment is cleared the driver returns to
+ * `AVAILABLE` status and resumes random movement.
  */
 export function listenForAssignments(): void {
   console.log("👂 Listening for ride assignments...");

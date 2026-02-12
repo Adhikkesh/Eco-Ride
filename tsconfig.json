@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "allowJs": true,
+    "baseUrl": ".",
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "paths": {
+      "@/*": ["apps/web/*"]
+    },
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ESNext"
+  },
+  "exclude": [
+    "node_modules",
+    "**/node_modules",
+    "**/dist",
+    "**/.next",
+    "**/*.test.ts",
+    "**/*.spec.ts"
+  ],
+  "include": [
+    "apps/backend/server/src/**/*.ts",
+    "apps/backend/simulator/src/**/*.ts",
+    "apps/web/**/*.ts",
+    "apps/web/**/*.tsx",
+    "packages/shared/src/**/*.ts"
+  ]
+}

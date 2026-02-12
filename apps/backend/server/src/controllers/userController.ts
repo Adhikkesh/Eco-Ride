@@ -92,19 +92,24 @@ export const CreateUserController: RequestHandler<object, object, CreateUserBody
 
     // 1. Create USERS document (includes auth info directly)
     const userRef = db.collection("users").doc(uid);
-    batch.set(userRef, {
-      created_at: now,
-      email: firebaseUser.email || null,
-      fcm_token: null,
-      green_points: 0,
-      last_login: now,
-      name,
-      phone_number,
-      role,
-      saved_locations: null,
-      trust_score: 0.0,
-      uid,
-    });
+    batch.set(
+      userRef,
+      {
+        created_at: now,
+        email: firebaseUser.email || null,
+        fcm_token: null,
+        green_points: 0,
+        is_onboarded: true, // Mark as onboarded on backend creation
+        last_login: now,
+        name,
+        phone_number,
+        role,
+        saved_locations: null,
+        trust_score: 0.0,
+        uid,
+      },
+      { merge: true },
+    ); // Use merge to preserve other fields
 
     // 2. If driver, create DRIVER_PROFILE and VEHICLE documents
     if (role === "driver") {
@@ -117,6 +122,8 @@ export const CreateUserController: RequestHandler<object, object, CreateUserBody
         kyc_url: kyc_url || null,
         kyc_verified: false,
         license_url: license_url || null,
+        rating: 0,
+        rating_count: 0,
         wallet_balance: 0.0,
       });
 
