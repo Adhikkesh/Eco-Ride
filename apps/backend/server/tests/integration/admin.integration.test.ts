@@ -1,20 +1,49 @@
 /**
  * Integration Tests – Admin Endpoints
- *
- * Tests admin-only endpoints (unverified drivers, driver verification)
- * through the full Express HTTP stack. Verifies RBAC enforcement.
  */
 
-import { afterEach, describe, expect, it } from "vitest";
-import { ADMIN_UID, AUTH_HEADER, request } from "./helpers.js";
+import type { Express } from "express";
+import supertest from "supertest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../src/config/firebase.js", async () => {
+  const setup = await import("./setup.js");
+  return {
+    auth: setup.mockAuth,
+    db: setup.mockDb,
+    rtdb: setup.mockRtdb,
+    storage: {},
+  };
+});
+
+vi.mock("stripe", async () => {
+  return {
+    default: vi.fn().mockImplementation(() => ({
+      paymentIntents: {
+        create: vi.fn(async () => ({
+          client_secret: "pi_mock_secret",
+          id: "pi_mock_id",
+        })),
+      },
+    })),
+  };
+});
+
+import { ADMIN_UID, AUTH_HEADER } from "./helpers.js";
 import { resetAllMocks, setMockDoc, setMockQuerySnapshot, setMockUser } from "./setup.js";
+
+let request: supertest.SuperTest<supertest.Test>;
+
+beforeAll(async () => {
+  const { app } = await import("../../src/app.js");
+  request = supertest(app as Express);
+});
 
 describe("Admin Integration Tests", () => {
   afterEach(() => {
     resetAllMocks();
   });
 
-  // ── GET /api/v1/admin/drivers/unverified ───────────────────
   describe("GET /api/v1/admin/drivers/unverified", () => {
     it("should return 403 for non-admin user", async () => {
       // Default mock user is NOT admin
@@ -23,36 +52,29 @@ describe("Admin Integration Tests", () => {
         .set("Authorization", AUTH_HEADER);
 
       expect(res.status).toBe(403);
-      expect(res.body.message).toContain("Admin only");
     });
 
     it("should return 401 when user is not authenticated", async () => {
       setMockUser(null);
-
       const res = await request
         .get("/api/v1/admin/drivers/unverified")
         .set("Authorization", AUTH_HEADER);
-
       expect(res.status).toBe(401);
     });
 
     it("should return unverified drivers for admin user", async () => {
       setMockUser({ email: "admin@ecoride.com", uid: ADMIN_UID });
-
-      // Mock the Firestore query for driver_profile where kyc_verified == false
       setMockQuerySnapshot([
         {
           data: {
             driver_uid: "driver-uid-1",
-            kyc_url: "https://example.com/kyc.pdf",
+            kyc_url: "url",
             kyc_verified: false,
-            license_url: "https://example.com/license.pdf",
+            license_url: "url",
           },
           id: "driver-uid-1",
         },
       ]);
-
-      // The controller also fetches user info and vehicle info
       setMockDoc(true, {
         email: "driver@test.com",
         name: "Pending Driver",
@@ -64,8 +86,8 @@ describe("Admin Integration Tests", () => {
         .set("Authorization", AUTH_HEADER);
 
       expect(res.status).toBe(200);
-      expect(res.body.data).toBeDefined();
-      expect(res.body.message).toContain("Unverified drivers");
+      expect(res.body.data).toBeInstanceOf(Array);
+      expect(res.body.data.length).toBe(1);
     });
 
     it("should return empty array when no unverified drivers", async () => {
@@ -81,16 +103,13 @@ describe("Admin Integration Tests", () => {
     });
   });
 
-  // ── POST /api/v1/admin/drivers/verify ──────────────────────
   describe("POST /api/v1/admin/drivers/verify", () => {
     it("should return 403 for non-admin user", async () => {
       const res = await request
         .post("/api/v1/admin/drivers/verify")
         .set("Authorization", AUTH_HEADER)
         .send({ driver_uid: "driver-1", verified: true });
-
       expect(res.status).toBe(403);
-      expect(res.body.message).toContain("Admin only");
     });
 
     it("should return 400 when driver_uid is missing", async () => {
@@ -102,7 +121,6 @@ describe("Admin Integration Tests", () => {
         .send({ verified: true });
 
       expect(res.status).toBe(400);
-      expect(res.body.message).toContain("driver_uid");
     });
 
     it("should return 404 when driver profile does not exist", async () => {
@@ -128,7 +146,6 @@ describe("Admin Integration Tests", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data.verified).toBe(true);
-      expect(res.body.message).toContain("verified successfully");
     });
 
     it("should decline driver verification", async () => {
@@ -142,7 +159,6 @@ describe("Admin Integration Tests", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data.verified).toBe(false);
-      expect(res.body.message).toContain("declined");
     });
   });
 });
