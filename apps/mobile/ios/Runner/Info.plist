@@ -49,5 +49,11 @@
 	<string>Eco-Ride needs your location to show available rides and help drivers find you.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>Eco-Ride needs your location to show available rides and help drivers find you.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Eco-Ride needs to access your local network to communicate with the debug tools.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_dartobservatory._tcp</string>
+	</array>
 </dict>
 </plist>
