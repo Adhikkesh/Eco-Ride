@@ -185,7 +185,7 @@ describe("Ride Integration Tests", () => {
     });
 
     it("should start ride with correct OTP", async () => {
-      setMockDoc(true, { driverId: "driver-1", otp: "5678" });
+      setMockDoc(true, { driverId: "driver-1", otp: "5678", status: "MATCHED" });
       const res = await request
         .post("/api/v1/ride/start")
         .set("Authorization", AUTH_HEADER)
