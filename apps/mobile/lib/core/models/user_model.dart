@@ -64,8 +64,11 @@ class UserModel {
       greenPoints: (data['green_points'] as num?)?.toInt() ?? 0,
       trustScore: (data['trust_score'] as num?)?.toDouble() ?? 0.0,
       fcmToken: data['fcm_token'] as String?,
-      savedLocations: (data['saved_locations'] as List<dynamic>?)
-          ?.cast<Map<String, dynamic>>(),
+      savedLocations: (data['saved_locations'] is List)
+          ? (data['saved_locations'] as List<dynamic>)
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList()
+          : null,
       createdAt: (data['created_at'] as Timestamp?)?.toDate(),
       lastLogin: (data['last_login'] as Timestamp?)?.toDate(),
       isOnboarded: data['is_onboarded'] as bool? ?? false,
