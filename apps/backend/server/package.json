@@ -36,6 +36,7 @@
     "test:admin": "vitest run --reporter=verbose tests/controllers/adminController.test.ts tests/controllers/savedLocationsController.test.ts",
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui",
+    "test:rating": "vitest run tests/controllers/ratingController.test.ts",
     "test:watch": "vitest"
   },
   "type": "module",
