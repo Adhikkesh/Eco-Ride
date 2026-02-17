@@ -6,6 +6,7 @@ Unit Testing:
 	pnpm test:fare
 	pnpm test:admin
 	pnpm test:user
+	pnpm test:rating
 
 
 
