@@ -29,6 +29,11 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "test": "vitest run",
+    "test:auth": "vitest run --reporter=verbose tests/controllers/authController.test.ts",
+    "test:user": "vitest run --reporter=verbose tests/controllers/userController.test.ts",
+    "test:ride": "vitest run --reporter=verbose tests/controllers/rideController.test.ts",
+    "test:fare": "vitest run --reporter=verbose tests/controllers/fareController.test.ts tests/controllers/paymentController.test.ts",
+    "test:admin": "vitest run --reporter=verbose tests/controllers/adminController.test.ts tests/controllers/savedLocationsController.test.ts",
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui",
     "test:watch": "vitest"
