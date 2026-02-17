@@ -1,0 +1,14 @@
+Unit Testing:	
+    
+    
+    pnpm test:auth
+	pnpm test:ride
+	pnpm test:fare
+	pnpm test:admin
+	pnpm test:user
+
+
+
+Integration Testing:
+
+    npx vitest run tests/integration --reporter=verbose
