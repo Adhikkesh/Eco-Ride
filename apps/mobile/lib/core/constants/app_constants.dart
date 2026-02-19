@@ -111,14 +111,23 @@ class AppStrings {
 class ApiConfig {
   ApiConfig._();
 
-  // Backend URL - Update this for production
-  static const String baseUrl = 'http://localhost:3001';
+  // Backend URL - Use your machine's LAN IP for physical device testing
+  // Change to 'http://localhost:3001' for simulator, or your deployed URL for production
+  static const String baseUrl = 'http://10.12.76.206:3001';
 
   // Endpoints
   static const String verifyToken = '/api/auth/verify';
   static const String createUser = '/api/v1/user';
   static const String estimateRide = '/api/v1/ride/estimate';
   static const String requestRide = '/api/v1/ride/request';
+  static const String acceptRide = '/api/v1/ride/accept';
+  static const String declineRide = '/api/v1/ride/decline';
+  static const String arriveAtPickup = '/api/v1/ride/arrive';
+  static const String startRide = '/api/v1/ride/start';
+  static const String completeRide = '/api/v1/ride/complete';
+  static const String cancelRide = '/api/v1/ride/cancel';
+  static const String activeRide = '/api/v1/ride/active';
+  static const String getOtp = '/api/v1/ride/otp';
   
   // Google Maps API
   static const String googleMapsApiKey = 'AIzaSyD5ucfXDiTYX9T7Nirz_de1vz2qgwbNJXo';

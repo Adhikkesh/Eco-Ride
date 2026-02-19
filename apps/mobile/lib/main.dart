@@ -298,21 +298,10 @@ class _AuthGateState extends State<AuthGate> {
   void initState() {
     super.initState();
     _lastUser = FirebaseAuth.instance.currentUser;
-    // Proactive polling for web/mobile to catch auth state changes if stream hangs
-    _pollingTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
-      final currentUser = FirebaseAuth.instance.currentUser;
-      if (mounted && currentUser?.uid != _lastUser?.uid) {
-        debugPrint('AuthGate: Poller detected change (${_lastUser?.uid} -> ${currentUser?.uid})');
-        setState(() {
-          _lastUser = currentUser;
-        });
-      }
-    });
   }
 
   @override
   void dispose() {
-    _pollingTimer?.cancel();
     super.dispose();
   }
 
