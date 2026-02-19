@@ -52,6 +52,22 @@ class UserModel {
     this.passengerCapacity,
   });
 
+  /// Safely parse saved_locations which may be a List or a Map in Firestore
+  static List<Map<String, dynamic>>? _parseSavedLocations(dynamic data) {
+    if (data == null) return null;
+    if (data is List) {
+      return data.cast<Map<String, dynamic>>();
+    }
+    if (data is Map) {
+      // If stored as a Map, convert values to a list
+      return (data as Map<String, dynamic>)
+          .values
+          .whereType<Map<String, dynamic>>()
+          .toList();
+    }
+    return null;
+  }
+
   /// Create UserModel from Firestore document
   factory UserModel.fromFirestore(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>? ?? {};
@@ -64,11 +80,7 @@ class UserModel {
       greenPoints: (data['green_points'] as num?)?.toInt() ?? 0,
       trustScore: (data['trust_score'] as num?)?.toDouble() ?? 0.0,
       fcmToken: data['fcm_token'] as String?,
-      savedLocations: (data['saved_locations'] is List)
-          ? (data['saved_locations'] as List<dynamic>)
-              .map((e) => Map<String, dynamic>.from(e as Map))
-              .toList()
-          : null,
+      savedLocations: _parseSavedLocations(data['saved_locations']),
       createdAt: (data['created_at'] as Timestamp?)?.toDate(),
       lastLogin: (data['last_login'] as Timestamp?)?.toDate(),
       isOnboarded: data['is_onboarded'] as bool? ?? false,
