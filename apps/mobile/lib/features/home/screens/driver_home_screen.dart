@@ -33,12 +33,23 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   LatLng? _currentPosition;
   double _currentHeading = 0.0;
   StreamSubscription<LocationData>? _locationSubscription;
-  StreamSubscription<DatabaseEvent>? _rideSubscription; // ADDED THIS LINE
-  Map<dynamic, dynamic>? _currentRide; // Data for incoming/active ride
+  StreamSubscription<DatabaseEvent>? _rideSubscription;
+  StreamSubscription<DatabaseEvent>? _pendingRideSubscription;
+  Map<dynamic, dynamic>? _currentRide;
+  Map<dynamic, dynamic>? _pendingRide;
   bool _isNavigating = false;
   Set<Marker> _markers = {};
   Set<Polyline> _polylines = {};
   
+  // Ride lifecycle state
+  String _rideStatus = 'idle'; // idle, pending, matched, arrived, in_progress, completed
+  String? _rideId;
+  String? _riderName;
+  String? _riderPhone;
+  bool _isAccepting = false;
+  bool _isDeclining = false;
+  final TextEditingController _otpController = TextEditingController();
+
   String? _userName;
   String? _userPhoto;
 
@@ -52,6 +63,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   @override
   void dispose() {
     _locationSubscription?.cancel();
+    _pendingRideSubscription?.cancel();
+    _rideSubscription?.cancel();
+    _otpTimer?.cancel();
+    _otpController.dispose();
     if (_isOnline) {
       _goOffline();
     }
@@ -145,28 +160,61 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         _updateCamera(newPos);
       });
 
-      // Listen for ride assignments
+      // Listen for PENDING ride requests (driver must accept/decline)
       final userId = _auth.currentUser?.uid;
       if (userId != null) {
-        debugPrint('DriverHome: Listening for rides at rides-assigned/$userId');
+        // Clear any stale pending ride data from a previous session
+        debugPrint('DriverHome: Clearing stale pending ride data...');
+        await _rtdb.ref('rides-pending/$userId').remove();
+
+        debugPrint('DriverHome: Listening for pending rides at rides-pending/$userId');
+        _pendingRideSubscription = _rtdb.ref('rides-pending/$userId').onValue.listen((event) {
+          final data = event.snapshot.value as Map<dynamic, dynamic>?;
+          if (data != null && data['status'] == 'PENDING_ACCEPTANCE') {
+            debugPrint('DriverHome: PENDING RIDE RECEIVED! $data');
+            if (mounted) {
+              setState(() {
+                _pendingRide = data;
+                _rideId = data['rideId'] as String?;
+                _rideStatus = 'pending';
+                _riderName = data['riderName'] as String? ?? 'Rider';
+                _riderPhone = data['riderPhone'] as String? ?? '';
+              });
+            }
+          } else {
+            if (_pendingRide != null && mounted) {
+              setState(() {
+                _pendingRide = null;
+                if (_rideStatus == 'pending') _rideStatus = 'idle';
+              });
+            }
+          }
+        });
+
+        // Listen for ride assignments (after accept)
+        debugPrint('DriverHome: Listening for assigned rides at rides-assigned/$userId');
         _rideSubscription = _rtdb.ref('rides-assigned/$userId').onValue.listen((event) {
           final data = event.snapshot.value as Map<dynamic, dynamic>?;
           if (data != null) {
-             debugPrint('DriverHome: NEW RIDE RECEIVED! $data');
-             setState(() {
-               _currentRide = data;
-             });
-             // TODO: Trigger notification sound/vibration
+            debugPrint('DriverHome: RIDE ASSIGNED! $data');
+            if (mounted) {
+              setState(() {
+                _currentRide = data;
+                _rideId = data['rideId'] as String? ?? _rideId;
+                _rideStatus = (data['status'] as String? ?? 'MATCHED').toLowerCase();
+                _riderName = data['riderName'] as String? ?? _riderName ?? 'Rider';
+                _riderPhone = data['riderPhone'] as String? ?? _riderPhone ?? '';
+              });
+              // Auto-navigate to pickup on first assignment
+              if (!_isNavigating) {
+                _navigateToRide();
+              }
+            }
           } else {
-             // Ride removed/cancelled
-            if (_currentRide != null) {
-               debugPrint('DriverHome: Ride assignment removed.');
-               setState(() {
-                 _currentRide = null; 
-                 _isNavigating = false;
-                 _polylines.clear();
-                 _markers.clear();
-               });
+            // Ride removed/cancelled
+            if (_currentRide != null && mounted) {
+              debugPrint('DriverHome: Ride assignment removed.');
+              _resetRideState();
             }
           }
         });
@@ -182,82 +230,385 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     }
   }
 
+  Timer? _otpTimer;
+  int _otpTimeRemaining = 300; // 5 minutes in seconds
+
+  // ... (keep existing methods)
+
+  // ... (keep existing methods)
+
+  /// Accept a pending ride via backend API, then navigate
   Future<void> _acceptRide() async {
-    if (_currentRide == null || _currentPosition == null) return;
-
-    final rideData = _currentRide!;
-    final pickupData = rideData['pickup'];
-    final dropData = rideData['drop'];
-
-    final LatLng pickup = LatLng(
-      (pickupData['lat'] as num).toDouble(),
-      (pickupData['lng'] as num).toDouble(),
-    );
-    final LatLng drop = LatLng(
-      (dropData['lat'] as num).toDouble(),
-      (dropData['lng'] as num).toDouble(),
-    );
-
-    setState(() => _isLoading = true);
+    if (_rideId == null) {
+      debugPrint('DriverHome: Cannot accept ride - Ride ID is null');
+      return;
+    }
+    setState(() => _isAccepting = true);
 
     try {
-      // 1. Leg 1: Driver to Pickup (BLUE)
-      final directionsToPickup = await MapService.getDirections(_currentPosition!, pickup);
+      debugPrint('DriverHome: Accepting ride $_rideId...');
+      final result = await MapService.acceptRide(_rideId!);
       
-      // 2. Leg 2: Pickup to Drop (GREEN)
-      final directionsToDrop = await MapService.getDirections(pickup, drop);
-
-      if (mounted) {
-        setState(() {
-          _isNavigating = true;
-          _isLoading = false;
-          
-          _markers.clear();
-          _markers.add(Marker(
-            markerId: const MarkerId('pickup'),
-            position: pickup,
-            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-            infoWindow: const InfoWindow(title: 'Pickup Location'),
-          ));
-          _markers.add(Marker(
-            markerId: const MarkerId('dropoff'),
-            position: drop,
-            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-            infoWindow: const InfoWindow(title: 'Destination'),
-          ));
-
-          _polylines.clear();
-          if (directionsToPickup != null) {
-            _polylines.add(Polyline(
-              polylineId: const PolylineId('to_pickup'),
-              points: directionsToPickup['points'],
-              color: Colors.blue,
-              width: 5,
-            ));
-          }
-          if (directionsToDrop != null) {
-            _polylines.add(Polyline(
-              polylineId: const PolylineId('to_dropoff'),
-              points: directionsToDrop['points'],
-              color: Colors.green,
-              width: 5,
-            ));
-          }
-        });
-
-        // Zoom to fit both legs
-        final controller = await _controller.future;
-        final bounds = _getBounds([_currentPosition!, pickup, drop]);
-        controller.animateCamera(CameraUpdate.newLatLngBounds(bounds, 100));
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Navigation started!')),
-        );
+      if (result != null && result['success'] == true) {
+        debugPrint('DriverHome: Ride accepted successfully!');
+        if (mounted) {
+          setState(() {
+            _pendingRide = null;
+            _rideStatus = 'matched';
+            _isAccepting = false;
+          });
+          // rides-assigned listener will pick up the ride and trigger navigation
+        }
+      } else {
+        final message = result?['message'] ?? 'Ride is no longer available';
+        debugPrint('DriverHome: Accept failed: $message');
+        // Ride no longer valid (cancelled, expired, etc.) — clear stale data
+        if (mounted) {
+          _clearPendingRide();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(message),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
       }
     } catch (e) {
       debugPrint('DriverHome: Error accepting ride: $e');
+      if (mounted) {
+        _clearPendingRide();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Connection error. Ride cleared.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isAccepting = false);
+    }
+  }
+
+  /// Decline a pending ride
+  Future<void> _declineRide() async {
+    if (_rideId == null) return;
+    setState(() => _isDeclining = true);
+
+    try {
+      final result = await MapService.declineRide(_rideId!);
+      if (mounted) {
+        if (result != null && result['success'] == true) {
+          // Successfully declined
+          _clearPendingRide();
+        } else {
+          // Backend failed (ride already cancelled/not found) — clear stale data anyway
+          debugPrint('DriverHome: Decline failed, clearing stale pending data');
+          _clearPendingRide();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Ride was already cancelled. Cleared.')),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('DriverHome: Error declining ride: $e — clearing stale data');
+      // Network error — still clear the stale RTDB data so it doesn't keep showing
+      if (mounted) _clearPendingRide();
+    } finally {
+      if (mounted) setState(() => _isDeclining = false);
+    }
+  }
+
+  /// Clear pending ride from both local state and Firebase RTDB
+  void _clearPendingRide() {
+    final userId = _auth.currentUser?.uid;
+    if (userId != null) {
+      _rtdb.ref('rides-pending/$userId').remove();
+    }
+    setState(() {
+      _pendingRide = null;
+      _rideStatus = 'idle';
+      _rideId = null;
+    });
+  }
+
+  /// Navigation logic — draws blue route (driver→pickup) and green route (pickup→destination)
+  Future<void> _navigateToRide() async {
+    if (_currentPosition == null || _currentRide == null) return;
+    
+    setState(() => _isNavigating = true);
+
+    final pickup = _currentRide!['pickup'];
+    final drop = _currentRide!['drop'];
+    if (pickup == null || drop == null) return;
+
+    final pickupLatLng = LatLng(
+      (pickup['lat'] as num).toDouble(),
+      (pickup['lng'] as num).toDouble(),
+    );
+    final dropLatLng = LatLng(
+      (drop['lat'] as num).toDouble(),
+      (drop['lng'] as num).toDouble(),
+    );
+
+    try {
+      // Fetch both routes in parallel
+      final results = await Future.wait([
+        MapService.getDirections(_currentPosition!, pickupLatLng),
+        MapService.getDirections(pickupLatLng, dropLatLng),
+      ]);
+
+      final toPickup = results[0];
+      final toDrop = results[1];
+
+      if (!mounted) return;
+
+      final newPolylines = <Polyline>{};
+      final newMarkers = <Marker>{};
+      List<LatLng> allPoints = [];
+
+      // Blue polyline: Driver → Pickup
+      if (toPickup != null) {
+        final points = toPickup['points'] as List<LatLng>;
+        newPolylines.add(Polyline(
+          polylineId: const PolylineId('to_pickup'),
+          points: points,
+          color: Colors.blue,
+          width: 5,
+        ));
+        allPoints.addAll(points);
+      }
+
+      // Green polyline: Pickup → Destination
+      if (toDrop != null) {
+        final points = toDrop['points'] as List<LatLng>;
+        newPolylines.add(Polyline(
+          polylineId: const PolylineId('to_destination'),
+          points: points,
+          color: Colors.green,
+          width: 5,
+        ));
+        allPoints.addAll(points);
+      }
+
+      // Add markers for pickup and destination
+      newMarkers.add(Marker(
+        markerId: const MarkerId('pickup'),
+        position: pickupLatLng,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+        infoWindow: InfoWindow(
+          title: 'Pickup',
+          snippet: _currentRide!['pickupName'] as String? ?? 'Pickup Location',
+        ),
+      ));
+      newMarkers.add(Marker(
+        markerId: const MarkerId('destination'),
+        position: dropLatLng,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+        infoWindow: InfoWindow(
+          title: 'Destination',
+          snippet: _currentRide!['dropName'] as String? ?? 'Drop Location',
+        ),
+      ));
+
+      setState(() {
+        _polylines = newPolylines;
+        _markers = newMarkers;
+      });
+
+      // Fit camera to show all points
+      if (allPoints.isNotEmpty) {
+        Future.delayed(const Duration(milliseconds: 500), () async {
+          final controller = await _controller.future;
+          controller.animateCamera(
+            CameraUpdate.newLatLngBounds(_getBounds(allPoints), 60),
+          );
+        });
+      }
+    } catch (e) {
+      debugPrint('DriverHome: Error navigating: $e');
+    }
+  }
+
+  // ... (keep existing methods)
+
+  /// Cancel the ride via backend API (e.g. timeout or driver cancelled)
+  Future<void> _cancelRide() async {
+    if (_rideId == null) return;
+    setState(() => _isLoading = true);
+
+    try {
+      final result = await MapService.cancelRide(_rideId!);
+      
+      if (mounted) {
+        if (result != null && result['success'] == true) {
+             ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Ride cancelled successfully.')),
+            );
+            _resetRideState();
+        } else {
+             ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(result?['message'] ?? 'Failed to cancel ride')),
+            );
+        }
+      }
+    } catch (e) {
+      debugPrint('DriverHome: Error cancelling ride: $e');
+    } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  /// Mark arrival at pickup via backend
+  Future<void> _handleArriveAtPickup() async {
+    if (_rideId == null) return;
+    
+    final result = await MapService.arriveAtPickup(_rideId!);
+    if (result != null && mounted) {
+      setState(() => _rideStatus = 'arrived');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Arrived! Waiting for rider (5 min timer started)')),
+      );
+      _startOtpTimer();
+    }
+  }
+
+  void _startOtpTimer() {
+    _otpTimer?.cancel();
+    _otpTimeRemaining = 300; // 5 minutes
+    _otpTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        if (_otpTimeRemaining > 0) {
+          _otpTimeRemaining--;
+        } else {
+          timer.cancel();
+          _handleOtpTimeout();
+        }
+      });
+    });
+  }
+
+  Future<void> _handleOtpTimeout() async {
+    debugPrint('DriverHome: OTP Timer expired. Cancelling ride...');
+    ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Rider did not show up in 5 mins. Ride cancelled.')),
+    );
+    // Call cancel ride
+    await _cancelRide(); // Reuse existing cancel method
+  }
+
+  /// Show OTP dialog and start ride
+  void _showOtpDialog() {
+    _otpController.clear();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Text('Enter OTP', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Ask the rider for their 4-digit OTP', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[600])),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _otpController,
+              keyboardType: TextInputType.number,
+              maxLength: 4,
+              textAlign: TextAlign.center,
+              style: GoogleFonts.poppins(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 8),
+              decoration: InputDecoration(
+                hintText: '0000',
+                counterText: '',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Colors.green, width: 2),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel', style: GoogleFonts.poppins(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final otp = _otpController.text.trim();
+              if (otp.length != 4) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please enter a valid 4-digit OTP')),
+                );
+                return;
+              }
+              Navigator.pop(context);
+              await _handleStartRide(otp);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            child: Text('Start Ride', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Start ride after OTP verification
+  Future<void> _handleStartRide(String otp) async {
+    if (_rideId == null) return;
+
+    final result = await MapService.startRide(_rideId!, otp);
+    if (result != null && result['success'] == true && mounted) {
+      setState(() => _rideStatus = 'in_progress');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Trip started! 🚗'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } else {
+      final message = result?['message'] ?? 'Failed to start ride. Check OTP.';
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      }
+    }
+  }
+
+  /// Complete the ride via backend
+  Future<void> _handleCompleteRide() async {
+    if (_rideId == null) return;
+
+    final result = await MapService.completeRide(_rideId!);
+    if (result != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Trip completed! 🎉'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      _resetRideState();
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Error completing ride')),
+      );
+    }
+  }
+
+  /// Reset all ride state
+  void _resetRideState() {
+    setState(() {
+      _currentRide = null;
+      _pendingRide = null;
+      _isNavigating = false;
+      _rideStatus = 'idle';
+      _rideId = null;
+      _riderName = null;
+      _riderPhone = null;
+      _polylines.clear();
+      _markers.clear();
+    });
   }
 
   LatLngBounds _getBounds(List<LatLng> points) {
@@ -284,6 +635,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     _locationSubscription = null;
     await _rideSubscription?.cancel();
     _rideSubscription = null;
+    await _pendingRideSubscription?.cancel();
+    _pendingRideSubscription = null;
 
     final userId = _auth.currentUser?.uid;
     if (userId != null) {
@@ -366,8 +719,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             ),
           ),
           
-          // 3. Incoming Ride Sheet
-          if (_currentRide != null) 
+          // 3. Incoming/Active Ride Sheet
+          if (_pendingRide != null || _currentRide != null) 
              Align(alignment: Alignment.bottomCenter, child: _buildIncomingRideSheet()),
         ],
       ),
@@ -537,7 +890,27 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   Widget _buildIncomingRideSheet() {
-    if (_currentRide == null) return const SizedBox.shrink();
+    final ride = _currentRide ?? _pendingRide;
+    if (ride == null) return const SizedBox.shrink();
+
+    // Determine sheet title and action based on ride status
+    String title;
+    switch (_rideStatus) {
+      case 'pending':
+        title = 'New Ride Request!';
+        break;
+      case 'matched':
+        title = 'Navigating to Pickup';
+        break;
+      case 'arrived':
+        title = 'Waiting for Rider';
+        break;
+      case 'in_progress':
+        title = 'Trip In Progress';
+        break;
+      default:
+        title = 'Ride Info';
+    }
     
     return Container(
       width: double.infinity,
@@ -553,21 +926,58 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Title Row
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                _isNavigating ? 'Active Trip' : 'New Ride Request!', 
-                style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black)
-              ),
-              if (!_isNavigating)
+              Text(title, style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black)),
+              if (_rideStatus == 'pending')
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(20)),
-                  child: Text('2 min away', style: GoogleFonts.poppins(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                  decoration: BoxDecoration(color: Colors.orange, borderRadius: BorderRadius.circular(20)),
+                  child: Text('Pending', style: GoogleFonts.poppins(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                )
+              else if (_rideStatus == 'in_progress')
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(color: Colors.blue, borderRadius: BorderRadius.circular(20)),
+                  child: Text('Active', style: GoogleFonts.poppins(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
                 ),
             ],
           ),
+
+          // Rider Info Card
+          if (_riderName != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  const CircleAvatar(
+                    backgroundColor: Colors.blue,
+                    radius: 18,
+                    child: Icon(Icons.person, color: Colors.white, size: 20),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(_riderName ?? 'Rider', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14)),
+                        if (_riderPhone != null && _riderPhone!.isNotEmpty)
+                          Text(_riderPhone!, style: GoogleFonts.poppins(color: Colors.grey[600], fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
           const SizedBox(height: 16),
           // Route Details
           Row(children: [
@@ -587,52 +997,106 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           
           const SizedBox(height: 24),
           
-          if (!_isNavigating)
+          // Action Buttons based on ride status
+          if (_rideStatus == 'pending')
+            // Accept / Decline buttons
             Row(
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () {
-                       // Reject logic
-                       setState(() => _currentRide = null); 
-                    },
+                    onPressed: _isDeclining ? null : _declineRide,
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       side: BorderSide(color: Colors.red.withOpacity(0.5)),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
-                    child: Text('Decline', style: GoogleFonts.poppins(color: Colors.red)),
+                    child: _isDeclining
+                        ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                        : Text('Decline', style: GoogleFonts.poppins(color: Colors.red)),
                   ),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: _acceptRide,
+                    onPressed: _isAccepting ? null : _acceptRide,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.green,
-                       padding: const EdgeInsets.symmetric(vertical: 16),
-                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
-                    child: Text('Accept Ride', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+                    child: _isAccepting
+                        ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                        : Text('Accept Ride', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
                   ),
                 ),
               ],
             )
-          else
+          else if (_rideStatus == 'matched')
+            // Arrived at Pickup button
             ElevatedButton(
-              onPressed: () {
-                // Next step: Start Ride
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Arrived at Pickup!')));
-              },
+              onPressed: _handleArriveAtPickup,
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 minimumSize: const Size(double.infinity, 54),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               child: Text('Arrived at Pickup', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+            )
+          else if (_rideStatus == 'arrived')
+            Column(
+              children: [
+                if (_otpTimer != null && _otpTimer!.isActive)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.red.withOpacity(0.3)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.timer, color: Colors.red, size: 16),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Auto-cancel in: ${_formatTime(_otpTimeRemaining)}',
+                          style: GoogleFonts.poppins(color: Colors.red, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  ),
+                // Enter OTP / Start Ride button
+                ElevatedButton(
+                  onPressed: _showOtpDialog,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
+                    minimumSize: const Size(double.infinity, 54),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: Text('Enter OTP & Start Ride', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            )
+          else if (_rideStatus == 'in_progress')
+            // Complete Ride button
+            ElevatedButton(
+              onPressed: _handleCompleteRide,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                minimumSize: const Size(double.infinity, 54),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: Text('Complete Ride', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
             ),
         ],
       ),
     );
+  }
+
+  String _formatTime(int seconds) {
+    final int min = seconds ~/ 60;
+    final int sec = seconds % 60;
+    return '$min:${sec.toString().padLeft(2, '0')}';
   }
 }

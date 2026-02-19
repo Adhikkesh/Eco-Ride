@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../../core/services/auth_service.dart';
 import '../constants/app_constants.dart';
 
@@ -106,7 +107,7 @@ class MapService {
     } else {
       // On Mobile, just call directly
       try {
-        final response = await http.get(Uri.parse(apiUri)).timeout(const Duration(seconds: 5));
+        final response = await http.get(Uri.parse(apiUri)).timeout(const Duration(seconds: 3));
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
           if (data['status'] == 'OK') {
@@ -316,9 +317,17 @@ class MapService {
         return null; // Force auth check
       }
 
+      // Get rider UID — backend requires riderId in request body
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) {
+        debugPrint('MapService: No current user UID');
+        return null;
+      }
+
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.requestRide}');
       debugPrint('MapService: Requesting ride at $url');
 
+      // Match backend expected fields exactly (same as web app RiderMap.tsx)
       final response = await http.post(
         url,
         headers: {
@@ -326,26 +335,263 @@ class MapService {
           'Authorization': 'Bearer $token',
         },
         body: json.encode({
-          'pickup': {'lat': pickup.latitude, 'lng': pickup.longitude},
-          'drop': {'lat': drop.latitude, 'lng': drop.longitude},
+          'riderId': uid,
+          'pickupLat': pickup.latitude,
+          'pickupLng': pickup.longitude,
+          'dropLat': drop.latitude,
+          'dropLng': drop.longitude,
+          'pickupName': 'Pickup Location',
+          'dropName': 'Destination',
           'fare': fare,
           'distance': distance,
           'duration': duration,
-          'polyline': polyline,
-          'vehicleType': 'auto', // Default for now
+          'co2Saved': 0,
         }),
       );
 
       debugPrint('MapService: Request ride status: ${response.statusCode}');
+      debugPrint('MapService: Request ride body: ${response.body}');
       if (response.statusCode == 201 || response.statusCode == 200) {
         final data = json.decode(response.body);
         return data;
       } else {
-        debugPrint('MapService: Request ride failed: ${response.body}');
+        debugPrint('MapService: Request ride FAILED: ${response.body}');
         return null;
       }
     } catch (e) {
       debugPrint('MapService: Error requesting ride: $e');
+      return null;
+    }
+  }
+
+
+  // =========================================================================
+  // Ride Lifecycle API Methods
+  // =========================================================================
+
+  /// Accept a pending ride (driver side)
+  static Future<Map<String, dynamic>?> acceptRide(String rideId) async {
+    try {
+      final token = await AuthService.instance.getIdToken();
+      if (token == null) return null;
+
+      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.acceptRide}');
+      debugPrint('MapService: Accepting ride $rideId at $url');
+
+      final response = await http.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: json.encode({'rideId': rideId}),
+      );
+
+      debugPrint('MapService: Accept ride status: ${response.statusCode}');
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      } else {
+        debugPrint('MapService: Accept ride failed: ${response.body}');
+        return json.decode(response.body);
+      }
+    } catch (e) {
+      debugPrint('MapService: Error accepting ride: $e');
+      return null;
+    }
+  }
+
+  /// Decline a pending ride (driver side)
+  static Future<Map<String, dynamic>?> declineRide(String rideId) async {
+    try {
+      final token = await AuthService.instance.getIdToken();
+      if (token == null) return null;
+
+      final userId = FirebaseAuth.instance.currentUser?.uid;
+      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.declineRide}');
+      debugPrint('MapService: Declining ride $rideId');
+
+      final response = await http.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: json.encode({'rideId': rideId, 'driverId': userId}),
+      );
+
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('MapService: Error declining ride: $e');
+      return null;
+    }
+  }
+
+  /// Mark arrival at pickup (driver side)
+  static Future<Map<String, dynamic>?> arriveAtPickup(String rideId) async {
+    try {
+      final token = await AuthService.instance.getIdToken();
+      if (token == null) return null;
+
+      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.arriveAtPickup}');
+      debugPrint('MapService: Marking arrival for ride $rideId');
+
+      final response = await http.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: json.encode({'rideId': rideId}),
+      );
+
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      } else {
+        debugPrint('MapService: Arrive at pickup failed: ${response.body}');
+        return null;
+      }
+    } catch (e) {
+      debugPrint('MapService: Error marking arrival: $e');
+      return null;
+    }
+  }
+
+  /// Start ride after OTP verification (driver side)
+  static Future<Map<String, dynamic>?> startRide(String rideId, String otp) async {
+    try {
+      final token = await AuthService.instance.getIdToken();
+      if (token == null) return null;
+
+      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.startRide}');
+      debugPrint('MapService: Starting ride $rideId with OTP');
+
+      final response = await http.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: json.encode({'rideId': rideId, 'otp': otp}),
+      );
+
+      debugPrint('MapService: Start ride status: ${response.statusCode}');
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      } else {
+        debugPrint('MapService: Start ride failed: ${response.body}');
+        return json.decode(response.body);
+      }
+    } catch (e) {
+      debugPrint('MapService: Error starting ride: $e');
+      return null;
+    }
+  }
+
+  /// Complete a ride (driver side)
+  static Future<Map<String, dynamic>?> completeRide(String rideId) async {
+    try {
+      final token = await AuthService.instance.getIdToken();
+      if (token == null) return null;
+
+      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.completeRide}');
+      debugPrint('MapService: Completing ride $rideId');
+
+      final response = await http.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: json.encode({'rideId': rideId}),
+      );
+
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      } else {
+        debugPrint('MapService: Complete ride failed: ${response.body}');
+        return null;
+      }
+    } catch (e) {
+      debugPrint('MapService: Error completing ride: $e');
+      return null;
+    }
+  }
+
+  /// Cancel a ride (rider side)
+  static Future<Map<String, dynamic>?> cancelRide(String rideId) async {
+    try {
+      final token = await AuthService.instance.getIdToken();
+      if (token == null) return null;
+
+      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.cancelRide}');
+      debugPrint('MapService: Cancelling ride $rideId');
+
+      final response = await http.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: json.encode({'rideId': rideId}),
+      );
+
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('MapService: Error cancelling ride: $e');
+      return null;
+    }
+  }
+
+  /// Get active ride for current rider
+  static Future<Map<String, dynamic>?> getActiveRide() async {
+    try {
+      final token = await AuthService.instance.getIdToken();
+      if (token == null) return null;
+
+      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.activeRide}');
+      debugPrint('MapService: Checking active ride');
+
+      final response = await http.get(
+        url,
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('MapService: Error checking active ride: $e');
+      return null;
+    }
+  }
+
+  /// Get OTP for a ride (rider polls this; available when driver is within 100m)
+  static Future<Map<String, dynamic>?> getOtp(String rideId) async {
+    try {
+      final token = await AuthService.instance.getIdToken();
+      if (token == null) return null;
+
+      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.getOtp}/$rideId');
+      debugPrint('MapService: Checking OTP for ride $rideId');
+
+      final response = await http.get(
+        url,
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('MapService: Error getting OTP: $e');
       return null;
     }
   }
