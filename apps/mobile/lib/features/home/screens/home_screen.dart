@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:location/location.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/services/map_service.dart';
@@ -47,21 +49,73 @@ class _HomeScreenState extends State<HomeScreen> {
     bool _ignoreSearchChange = false;
     // State for estimates
     Map<String, dynamic>? _estimateData;
-  bool _isSearchingForDriver = false; // NEW state for ride request
+  bool _isSearchingForDriver = false;
+
+  // Ride lifecycle state
+  String? _rideId;
+  String _rideStatus = 'idle'; // idle, searching, matched, arrived, on_trip, completed, error
+  String? _driverName;
+  String? _driverPhone;
+  String? _otp;
+  bool _showOtp = false;
+  StreamSubscription<DatabaseEvent>? _rideStatusSubscription;
+  Timer? _otpPollTimer;
+  final FirebaseDatabase _rtdb = FirebaseDatabase.instance;
 
     @override
   void initState() {
     super.initState();
     _loadUserData();
     _getCurrentLocation();
+    _checkActiveRide();
     _pickupController.addListener(() => _onSearchChanged(isPickup: true));
     _searchController.addListener(() => _onSearchChanged(isPickup: false));
   }
 
+  @override
+  void dispose() {
+    _rideStatusSubscription?.cancel();
+    _otpPollTimer?.cancel();
+    _debounce?.cancel();
+    _pickupController.dispose();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  /// Check for existing active ride on app launch
+  Future<void> _checkActiveRide() async {
+    try {
+      final result = await MapService.getActiveRide();
+      if (result != null && result['success'] == true && result['rideId'] != null) {
+        debugPrint('HomeScreen: Restoring active ride: ${result['rideId']}');
+        if (mounted) {
+          setState(() {
+            _rideId = result['rideId'];
+            _rideStatus = 'matched';
+            _isSearchingForDriver = true;
+            _driverName = result['driverName'] ?? 'Driver';
+            _driverPhone = result['driverPhone'] ?? '';
+          });
+          _startRideStatusListener(_rideId!);
+          _startOtpPolling();
+        }
+      }
+    } catch (e) {
+      debugPrint('HomeScreen: Error checking active ride: $e');
+    }
+  }
+
   Future<void> _useCurrentLocationForPickup() async {
-    // 1. Check Permissions & Get Location if needed
-    if (_currentPosition == null) {
-      await _getCurrentLocation(); 
+    setState(() {
+      _pickupController.text = "Getting location...";
+      _ignoreSearchChange = true;
+    });
+
+    try {
+      // Race explicitly against a timeout to ensure UI doesn't freeze
+      await _getCurrentLocation().timeout(const Duration(seconds: 5));
+    } catch (e) {
+      debugPrint('HomeScreen: Location fetch timed out or failed: $e');
     }
     
     if (_currentPosition != null && mounted) {
@@ -88,90 +142,347 @@ class _HomeScreenState extends State<HomeScreen> {
 
       _updateCamera();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to fetch current location.')),
-      );
+      if (mounted) {
+         setState(() {
+           _pickupController.text = ""; // Clear "Getting location..."
+           _ignoreSearchChange = false;
+         });
+         ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Unable to fetch current location quickly. Please try again or search manually.')),
+        );
+      }
     }
   }
 
   Future<void> _handleRequestRide() async {
     if (_estimateData == null || _pickupPosition == null || _destinationPosition == null) return;
 
-    setState(() => _isSearchingForDriver = true);
+    setState(() {
+      _isSearchingForDriver = true;
+      _rideStatus = 'searching';
+    });
+
+    // Extract distance/duration from backend estimate fields
+    // Backend returns: distance_km (string like "26.7"), details.duration_s (int), eta_min (int)
+    double distanceKm = 0.0;
+    if (_estimateData!['distance_km'] != null) {
+      distanceKm = double.tryParse(_estimateData!['distance_km'].toString()) ?? 0.0;
+    }
+    double durationMin = 0.0;
+    if (_estimateData!['eta_min'] != null) {
+      durationMin = (_estimateData!['eta_min'] as num).toDouble();
+    }
 
     final result = await MapService.requestRide(
       pickup: _pickupPosition!,
       drop: _destinationPosition!,
       fare: (_estimateData!['fare'] as num).toDouble(),
-      distance: _estimateData!['distance_value'] is int ? (_estimateData!['distance_value'] as int) / 1000 : 0.0, // approx
-      duration: _estimateData!['duration_value'] is int ? (_estimateData!['duration_value'] as int) / 60 : 0.0, // approx
+      distance: distanceKm,
+      duration: durationMin,
       polyline: _estimateData!['polyline'] ?? '',
     );
 
     if (mounted) {
-      if (result != null) {
-        // In a real app, we'd now listen to Firestore for driver acceptance.
-        // For this demo/MVP, we'll simulate a "Driver Found" after a delay or just keep showing searching.
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Ride Requested! Waiting for drivers...')),
-        );
+      if (result != null && result['rideId'] != null) {
+        final rideId = result['rideId'] as String;
+        debugPrint('HomeScreen: Ride requested! ID: $rideId');
+        setState(() {
+          _rideId = rideId;
+          _rideStatus = 'searching';
+          if (result['driverName'] != null) _driverName = result['driverName'];
+          if (result['driverPhone'] != null) _driverPhone = result['driverPhone'];
+        });
+        _startRideStatusListener(rideId);
       } else {
-        setState(() => _isSearchingForDriver = false);
+        setState(() {
+          _isSearchingForDriver = false;
+          _rideStatus = 'idle';
+        });
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to request ride. Please try again.')),
+          const SnackBar(
+            content: Text('No drivers available right now. Please try again in a moment.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 4),
+          ),
         );
       }
     }
   }
 
+  /// Start listening to ride status changes via RTDB
+  void _startRideStatusListener(String rideId) {
+    _rideStatusSubscription?.cancel();
+    final rideRef = _rtdb.ref('rides/$rideId');
+    debugPrint('HomeScreen: Listening to rides/$rideId for status changes');
+
+    _rideStatusSubscription = rideRef.onValue.listen((event) {
+      final data = event.snapshot.value as Map<dynamic, dynamic>?;
+      if (data == null) return;
+
+      final status = data['status'] as String?;
+      debugPrint('HomeScreen: RTDB ride status update: $status');
+
+      if (!mounted) return;
+
+      setState(() {
+        if (status == 'MATCHED' || status == 'PENDING_ACCEPTANCE') {
+          if (_rideStatus == 'searching' || _rideStatus == 'idle') {
+            _rideStatus = status == 'MATCHED' ? 'matched' : 'searching';
+          }
+          if (status == 'MATCHED') {
+            _driverName = data['driverName'] as String? ?? _driverName ?? 'Driver';
+            _driverPhone = data['driverPhone'] as String? ?? _driverPhone ?? '';
+            _startOtpPolling();
+          }
+        } else if (status == 'ARRIVED') {
+          _rideStatus = 'arrived';
+          _driverName = data['driverName'] as String? ?? _driverName;
+        } else if (status == 'IN_PROGRESS') {
+          _rideStatus = 'on_trip';
+          _otpPollTimer?.cancel();
+          _showOtp = false;
+        } else if (status == 'COMPLETED') {
+          _rideStatus = 'completed';
+          _resetRideState();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Trip completed! 🎉'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else if (status == 'CANCELLED') {
+          final reason = data['cancelReason'] as String?;
+          _resetRideState();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(reason == 'TIMEOUT' ? 'Ride cancelled (no response)' : 'Ride was cancelled'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        } else if (status == 'NO_DRIVERS') {
+          _rideStatus = 'error';
+          _resetRideState();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No drivers available. Please try again.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        } else if (status == 'SEARCHING') {
+          // Driver declined, system re-matching
+          _rideStatus = 'searching';
+        }
+      });
+    });
+  }
+
+  /// Start polling for OTP availability
+  void _startOtpPolling() {
+    _otpPollTimer?.cancel();
+    if (_rideId == null) return;
+    debugPrint('HomeScreen: Starting OTP polling for ride $_rideId');
+
+    // Poll every 10 seconds
+    _otpPollTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
+      if (_rideId == null || (_rideStatus != 'matched' && _rideStatus != 'arrived')) {
+        timer.cancel();
+        return;
+      }
+      final result = await MapService.getOtp(_rideId!);
+      if (result != null && result['success'] == true && mounted) {
+        if (result['otpAvailable'] == true && result['otp'] != null) {
+          setState(() {
+            _otp = result['otp'].toString();
+            _showOtp = true;
+          });
+          timer.cancel(); // Stop polling once OTP is available
+          debugPrint('HomeScreen: OTP received: $_otp');
+        }
+      }
+    });
+  }
+
+  /// Cancel the current ride
+  Future<void> _cancelCurrentRide() async {
+    if (_rideId == null) {
+      setState(() {
+        _isSearchingForDriver = false;
+        _rideStatus = 'idle';
+      });
+      return;
+    }
+
+    final result = await MapService.cancelRide(_rideId!);
+    if (mounted) {
+      _resetRideState();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result != null ? 'Ride cancelled' : 'Error cancelling ride'),
+        ),
+      );
+    }
+  }
+
+  /// Reset all ride-related state
+  void _resetRideState() {
+    _rideStatusSubscription?.cancel();
+    _rideStatusSubscription = null;
+    _otpPollTimer?.cancel();
+    setState(() {
+      _rideId = null;
+      _rideStatus = 'idle';
+      _isSearchingForDriver = false;
+      _driverName = null;
+      _driverPhone = null;
+      _otp = null;
+      _showOtp = false;
+      _estimateData = null;
+    });
+  }
+
   Widget _buildSearchingSheet() {
     return Align(
-        alignment: Alignment.bottomCenter,
-        child: Container(
-          width: double.infinity,
-          margin: const EdgeInsets.all(16),
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.2),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        width: double.infinity,
+        margin: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 20,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            // Status icon
+            if (_rideStatus == 'searching')
+              const CircularProgressIndicator(color: Colors.green)
+            else if (_rideStatus == 'matched' || _rideStatus == 'arrived')
+              const Icon(Icons.check_circle, color: Colors.green, size: 48)
+            else if (_rideStatus == 'on_trip')
+              const Icon(Icons.directions_car, color: Colors.blue, size: 48),
+            const SizedBox(height: 16),
+            // Title
+            Text(
+              _rideStatus == 'searching'
+                  ? 'Contacting nearby drivers...'
+                  : _rideStatus == 'matched'
+                      ? 'Driver Found! 🎉'
+                      : _rideStatus == 'arrived'
+                          ? 'Driver Arrived! 📍'
+                          : _rideStatus == 'on_trip'
+                              ? 'Trip In Progress 🚗'
+                              : 'Finding driver...',
+              style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            // Subtitle
+            Text(
+              _rideStatus == 'searching'
+                  ? 'Please wait while we find you a ride.'
+                  : _rideStatus == 'matched'
+                      ? '${_driverName ?? "Driver"} is on the way'
+                      : _rideStatus == 'arrived'
+                          ? '${_driverName ?? "Driver"} is waiting at pickup'
+                          : _rideStatus == 'on_trip'
+                              ? 'Enjoy your ride with ${_driverName ?? "Driver"}'
+                              : '',
+              style: GoogleFonts.poppins(color: Colors.grey[600], fontSize: 14),
+              textAlign: TextAlign.center,
+            ),
+
+            // Driver Info Card
+            if ((_rideStatus == 'matched' || _rideStatus == 'arrived' || _rideStatus == 'on_trip') && _driverName != null) ...[
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    const CircleAvatar(
+                      backgroundColor: Colors.green,
+                      child: Icon(Icons.person, color: Colors.white),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _driverName ?? 'Driver',
+                            style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 15),
+                          ),
+                          if (_driverPhone != null && _driverPhone!.isNotEmpty)
+                            Text(
+                              _driverPhone!,
+                              style: GoogleFonts.poppins(color: Colors.grey[600], fontSize: 13),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 8),
-              const CircularProgressIndicator(),
-              const SizedBox(height: 24),
-              Text(
-                'Contacting nearby drivers...',
-                style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600),
+
+            // OTP Display
+            if (_showOtp && _otp != null && (_rideStatus == 'matched' || _rideStatus == 'arrived')) ...[
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
+                decoration: BoxDecoration(
+                  color: Colors.green.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.green.withOpacity(0.3)),
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      'Share this OTP with your driver',
+                      style: GoogleFonts.poppins(color: Colors.green[700], fontSize: 12),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _otp!,
+                      style: GoogleFonts.poppins(
+                        fontSize: 32,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green[800],
+                        letterSpacing: 8,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 8),
-              Text(
-                'Please wait while we find you a ride.',
-                style: GoogleFonts.poppins(color: Colors.grey),
-              ),
-              const SizedBox(height: 24),
+            ],
+
+            const SizedBox(height: 20),
+            // Cancel button (only when searching or matched)
+            if (_rideStatus == 'searching' || _rideStatus == 'matched')
               OutlinedButton(
-                onPressed: () {
-                   // Cancel request logic would go here
-                   setState(() => _isSearchingForDriver = false);
-                },
+                onPressed: _cancelCurrentRide,
                 style: OutlinedButton.styleFrom(
                   minimumSize: const Size(double.infinity, 50),
+                  side: const BorderSide(color: Colors.red),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
-                child: const Text('Cancel Request'),
+                child: Text('Cancel Ride', style: GoogleFonts.poppins(color: Colors.red)),
               ),
-            ],
-          ),
+          ],
         ),
+      ),
     );
   }
 
@@ -180,7 +491,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final controller = isPickup ? _pickupController : _searchController;
     
     if (_debounce?.isActive ?? false) _debounce!.cancel();
-    _debounce = Timer(const Duration(milliseconds: 500), () {
+    _debounce = Timer(const Duration(milliseconds: 300), () {
       if (controller.text.isNotEmpty) {
         _fetchSuggestions(controller.text, isPickup: isPickup);
       } else {
@@ -353,6 +664,8 @@ class _HomeScreenState extends State<HomeScreen> {
         });
 
         _updateCamera();
+        // Auto-request ride after getting estimate
+        await _handleRequestRide();
         return;
       }
       
@@ -386,18 +699,30 @@ class _HomeScreenState extends State<HomeScreen> {
         });
 
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(points.length < 5 
-              ? 'Warning: Route data incomplete. Showing partial path.' 
-              : 'Route found: ${result['distance']} (${result['duration']})'),
-            backgroundColor: points.length < 5 ? Colors.orange : const Color(0xFF007AFF),
-            duration: const Duration(seconds: 5),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+
+        // Parse distance/duration from Google Directions text (e.g., "26.7 km", "58 mins")
+        final distanceText = result['distance'] as String? ?? '0 km';
+        final durationText = result['duration'] as String? ?? '0 mins';
+        final distanceKm = double.tryParse(distanceText.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 5.0;
+        final durationMin = double.tryParse(durationText.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 10.0;
+
+        // Calculate fare same as backend: BASE_FARE(40) + PER_KM(12) + PER_MIN(1.5)
+        final fare = (40 + distanceKm * 12 + durationMin * 1.5).round();
+        final co2Saved = (distanceKm * 192).round(); // 192g/km petrol savings with EV
+
+        setState(() {
+          _estimateData = {
+            'fare': fare,
+            'distance_km': distanceKm.toStringAsFixed(1),
+            'eta_min': durationMin.round(),
+            'co2_saved_g': co2Saved,
+            'polyline': '',
+          };
+        });
 
         _updateCamera();
+        // Auto-request ride
+        await _handleRequestRide();
       } else if (mounted) {
         setState(() {
           _isLoading = false;
@@ -422,13 +747,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  @override
-  void dispose() {
-    _debounce?.cancel();
-    _pickupController.dispose();
-    _searchController.dispose();
-    super.dispose();
-  }
+
 
   Future<void> _loadUserData() async {
     try {
@@ -552,15 +871,23 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
 
           // 2. Overlay Content (Header + Search)
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-              child: Column(
-                children: [
-                   _buildTopBar(),
-                   const SizedBox(height: 12),
-                   _buildRouteCard(),
-                ],
+          // Only the actual widgets capture touches; empty space passes through to the map
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                     _buildTopBar(),
+                     const SizedBox(height: 12),
+                     _buildRouteCard(),
+                  ],
+                ),
               ),
             ),
           ),
@@ -574,8 +901,8 @@ class _HomeScreenState extends State<HomeScreen> {
           
           if (!_isSearchingForDriver && _estimateData == null)
             DraggableScrollableSheet(
-            initialChildSize: 0.4,
-            minChildSize: 0.35,
+            initialChildSize: 0.25,
+            minChildSize: 0.12,
             maxChildSize: 0.85,
             builder: (context, scrollController) {
               return Listener(
