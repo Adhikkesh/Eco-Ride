@@ -163,10 +163,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       // Listen for PENDING ride requests (driver must accept/decline)
       final userId = _auth.currentUser?.uid;
       if (userId != null) {
-        // Clear any stale pending ride data from a previous session
-        debugPrint('DriverHome: Clearing stale pending ride data...');
-        await _rtdb.ref('rides-pending/$userId').remove();
-
         debugPrint('DriverHome: Listening for pending rides at rides-pending/$userId');
         _pendingRideSubscription = _rtdb.ref('rides-pending/$userId').onValue.listen((event) {
           final data = event.snapshot.value as Map<dynamic, dynamic>?;
@@ -248,6 +244,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     try {
       debugPrint('DriverHome: Accepting ride $_rideId...');
       final result = await MapService.acceptRide(_rideId!);
+      debugPrint('DriverHome: Accept result: $result');
+      debugPrint('DriverHome: result is null? ${result == null}');
+      if (result != null) {
+        debugPrint('DriverHome: success=${result['success']}, message=${result['message']}');
+      }
       
       if (result != null && result['success'] == true) {
         debugPrint('DriverHome: Ride accepted successfully!');
@@ -459,11 +460,31 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   Future<void> _handleArriveAtPickup() async {
     if (_rideId == null) return;
     
-    final result = await MapService.arriveAtPickup(_rideId!);
-    if (result != null && mounted) {
-      setState(() => _rideStatus = 'arrived');
+    setState(() => _isLoading = true);
+
+    try {
+      // Notify backend (best-effort — timer starts regardless)
+      final result = await MapService.arriveAtPickup(_rideId!);
+      if (result != null && result['success'] == true) {
+        debugPrint('DriverHome: Backend notified of arrival');
+      } else {
+        debugPrint('DriverHome: Backend arrive call failed: ${result?['message']}');
+      }
+    } catch (e) {
+      debugPrint('DriverHome: Error notifying arrival: $e');
+    }
+
+    // Always transition to arrived state and start timer
+    if (mounted) {
+      setState(() {
+        _rideStatus = 'arrived';
+        _isLoading = false;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Arrived! Waiting for rider (5 min timer started)')),
+        const SnackBar(
+          content: Text('Arrived! Waiting for rider (5 min timer started)'),
+          backgroundColor: Colors.green,
+        ),
       );
       _startOtpTimer();
     }
@@ -497,61 +518,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     await _cancelRide(); // Reuse existing cancel method
   }
 
-  /// Show OTP dialog and start ride
-  void _showOtpDialog() {
-    _otpController.clear();
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: Text('Enter OTP', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Ask the rider for their 4-digit OTP', style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[600])),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _otpController,
-              keyboardType: TextInputType.number,
-              maxLength: 4,
-              textAlign: TextAlign.center,
-              style: GoogleFonts.poppins(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 8),
-              decoration: InputDecoration(
-                hintText: '0000',
-                counterText: '',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: Colors.green, width: 2),
-                ),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel', style: GoogleFonts.poppins(color: Colors.grey)),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final otp = _otpController.text.trim();
-              if (otp.length != 4) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Please enter a valid 4-digit OTP')),
-                );
-                return;
-              }
-              Navigator.pop(context);
-              await _handleStartRide(otp);
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-            child: Text('Start Ride', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
-  }
+
 
   /// Start ride after OTP verification
   Future<void> _handleStartRide(String otp) async {
@@ -893,203 +860,521 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final ride = _currentRide ?? _pendingRide;
     if (ride == null) return const SizedBox.shrink();
 
-    // Determine sheet title and action based on ride status
-    String title;
-    switch (_rideStatus) {
-      case 'pending':
-        title = 'New Ride Request!';
-        break;
-      case 'matched':
-        title = 'Navigating to Pickup';
-        break;
-      case 'arrived':
-        title = 'Waiting for Rider';
-        break;
-      case 'in_progress':
-        title = 'Trip In Progress';
-        break;
-      default:
-        title = 'Ride Info';
-    }
-    
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
         boxShadow: [
-           BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 20, offset: const Offset(0, -5)),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 30, offset: const Offset(0, -8)),
         ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Title Row
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          // Drag handle
+          Container(
+            margin: const EdgeInsets.only(top: 12),
+            width: 40, height: 4,
+            decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+          ),
+          // Status header
+          _buildStatusHeader(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (_riderName != null) _buildRiderCard(),
+                const SizedBox(height: 16),
+                _buildRouteDetails(ride),
+                if (ride['fare'] != null) ...[
+                  const SizedBox(height: 16),
+                  _buildFareCard(ride),
+                ],
+                const SizedBox(height: 20),
+                if (_rideStatus == 'arrived') _buildTimerSection(),
+                _buildActionButtons(),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusHeader() {
+    IconData icon;
+    String title;
+    String subtitle;
+    List<Color> gradientColors;
+
+    switch (_rideStatus) {
+      case 'pending':
+        icon = Icons.notifications_active_rounded;
+        title = 'New Ride Request!';
+        subtitle = 'A rider is waiting for you';
+        gradientColors = [const Color(0xFFFF9800), const Color(0xFFF57C00)];
+        break;
+      case 'matched':
+        icon = Icons.navigation_rounded;
+        title = 'Navigating to Pickup';
+        subtitle = 'Head to the pickup location';
+        gradientColors = [const Color(0xFF2E7D32), const Color(0xFF4CAF50)];
+        break;
+      case 'arrived':
+        icon = Icons.location_on_rounded;
+        title = 'Waiting for Rider';
+        subtitle = 'Enter OTP to start the trip';
+        gradientColors = [const Color(0xFF1565C0), const Color(0xFF42A5F5)];
+        break;
+      case 'in_progress':
+        icon = Icons.directions_car_rounded;
+        title = 'Trip In Progress';
+        subtitle = 'Drive safely to the destination';
+        gradientColors = [const Color(0xFF6A1B9A), const Color(0xFFAB47BC)];
+        break;
+      default:
+        icon = Icons.info_outline;
+        title = 'Ride Info';
+        subtitle = '';
+        gradientColors = [Colors.grey[700]!, Colors.grey[500]!];
+    }
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: gradientColors, begin: Alignment.topLeft, end: Alignment.bottomRight),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(color: gradientColors[0].withValues(alpha: 0.3), blurRadius: 12, offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: Colors.white, size: 24),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: GoogleFonts.poppins(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                if (subtitle.isNotEmpty)
+                  Text(subtitle, style: GoogleFonts.poppins(color: Colors.white.withValues(alpha: 0.85), fontSize: 12)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRiderCard() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.grey[200]!),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(2),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)]),
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: const CircleAvatar(
+              backgroundColor: Colors.white,
+              radius: 20,
+              child: Icon(Icons.person_rounded, color: Color(0xFF2E7D32), size: 22),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_riderName ?? 'Rider', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 15)),
+                if (_riderPhone != null && _riderPhone!.isNotEmpty)
+                  Row(
+                    children: [
+                      Icon(Icons.phone_rounded, color: Colors.grey[500], size: 14),
+                      const SizedBox(width: 4),
+                      Text(_riderPhone!, style: GoogleFonts.poppins(color: Colors.grey[600], fontSize: 12)),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRouteDetails(Map<dynamic, dynamic> ride) {
+    final pickupName = ride['pickupName'] as String? ?? 'Pickup Location';
+    final dropName = ride['dropName'] as String? ?? 'Drop Location';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.grey[200]!),
+      ),
+      child: Row(
+        children: [
+          Column(
             children: [
-              Text(title, style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black)),
-              if (_rideStatus == 'pending')
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(color: Colors.orange, borderRadius: BorderRadius.circular(20)),
-                  child: Text('Pending', style: GoogleFonts.poppins(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
-                )
-              else if (_rideStatus == 'in_progress')
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(color: Colors.blue, borderRadius: BorderRadius.circular(20)),
-                  child: Text('Active', style: GoogleFonts.poppins(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+              Container(
+                width: 12, height: 12,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4CAF50),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 2),
+                  boxShadow: [BoxShadow(color: const Color(0xFF4CAF50).withValues(alpha: 0.3), blurRadius: 4)],
                 ),
+              ),
+              Container(width: 2, height: 30, color: Colors.grey[300]),
+              Container(
+                width: 12, height: 12,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE53935),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 2),
+                  boxShadow: [BoxShadow(color: const Color(0xFFE53935).withValues(alpha: 0.3), blurRadius: 4)],
+                ),
+              ),
             ],
           ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(pickupName, style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
+                Container(margin: const EdgeInsets.symmetric(vertical: 8), height: 1, color: Colors.grey[200]),
+                Text(dropName, style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
-          // Rider Info Card
-          if (_riderName != null) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  const CircleAvatar(
-                    backgroundColor: Colors.blue,
-                    radius: 18,
-                    child: Icon(Icons.person, color: Colors.white, size: 20),
+  Widget _buildFareCard(Map<dynamic, dynamic> ride) {
+    final fare = ride['fare'];
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(colors: [Color(0xFFFFF8E1), Color(0xFFFFF3E0)]),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFFFE082)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.currency_rupee_rounded, color: Color(0xFFF57C00), size: 20),
+              const SizedBox(width: 6),
+              Text('Estimated Fare', style: GoogleFonts.poppins(fontSize: 13, color: const Color(0xFFF57C00), fontWeight: FontWeight.w500)),
+            ],
+          ),
+          Text('\u20B9$fare', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.bold, color: const Color(0xFFE65100))),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTimerSection() {
+    if (_otpTimer == null || !_otpTimer!.isActive) return const SizedBox.shrink();
+    final progress = _otpTimeRemaining / 300.0;
+    final isUrgent = _otpTimeRemaining < 60;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: isUrgent
+              ? [const Color(0xFFFDE0DC), const Color(0xFFFCE4EC)]
+              : [const Color(0xFFE3F2FD), const Color(0xFFE8EAF6)],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: isUrgent ? const Color(0xFFEF9A9A) : const Color(0xFF90CAF9)),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 56, height: 56,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                SizedBox(
+                  width: 56, height: 56,
+                  child: CircularProgressIndicator(
+                    value: progress,
+                    strokeWidth: 5,
+                    backgroundColor: Colors.grey[300],
+                    valueColor: AlwaysStoppedAnimation(isUrgent ? Colors.red : const Color(0xFF1565C0)),
                   ),
-                  const SizedBox(width: 10),
+                ),
+                Text(
+                  _formatTime(_otpTimeRemaining),
+                  style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.bold, color: isUrgent ? Colors.red : const Color(0xFF1565C0)),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isUrgent ? 'Hurry! Time running out' : 'Waiting for rider',
+                  style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14, color: isUrgent ? Colors.red[700] : const Color(0xFF1565C0)),
+                ),
+                const SizedBox(height: 2),
+                Text('Ride auto-cancels when timer expires', style: GoogleFonts.poppins(fontSize: 11, color: Colors.grey[600])),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionButtons() {
+    if (_rideStatus == 'pending') {
+      return Row(
+        children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: _isDeclining ? null : _declineRide,
+              icon: _isDeclining
+                  ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.close_rounded, size: 18),
+              label: Text('Decline', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.red,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                side: const BorderSide(color: Colors.red, width: 1.5),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            flex: 2,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                gradient: const LinearGradient(colors: [Color(0xFF2E7D32), Color(0xFF43A047)]),
+                boxShadow: [BoxShadow(color: const Color(0xFF2E7D32).withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 4))],
+              ),
+              child: ElevatedButton.icon(
+                onPressed: _isAccepting ? null : _acceptRide,
+                icon: _isAccepting
+                    ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                label: Text('Accept Ride', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.transparent,
+                  shadowColor: Colors.transparent,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+    if (_rideStatus == 'matched') {
+      return Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          gradient: const LinearGradient(colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)]),
+          boxShadow: [BoxShadow(color: const Color(0xFF2E7D32).withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 4))],
+        ),
+        child: ElevatedButton.icon(
+          onPressed: _isLoading ? null : _handleArriveAtPickup,
+          icon: _isLoading
+              ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+              : const Icon(Icons.flag_rounded, color: Colors.white, size: 22),
+          label: Text('Arrived at Pickup', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.transparent,
+            shadowColor: Colors.transparent,
+            minimumSize: const Size(double.infinity, 56),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+      );
+    }
+    if (_rideStatus == 'arrived') {
+      return Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          gradient: const LinearGradient(colors: [Color(0xFF1565C0), Color(0xFF42A5F5)]),
+          boxShadow: [BoxShadow(color: const Color(0xFF1565C0).withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 4))],
+        ),
+        child: ElevatedButton.icon(
+          onPressed: _showOtpDialog,
+          icon: const Icon(Icons.pin_rounded, color: Colors.white, size: 22),
+          label: Text('Enter OTP & Start Ride', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.transparent,
+            shadowColor: Colors.transparent,
+            minimumSize: const Size(double.infinity, 56),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+      );
+    }
+    if (_rideStatus == 'in_progress') {
+      return Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          gradient: const LinearGradient(colors: [Color(0xFF6A1B9A), Color(0xFFAB47BC)]),
+          boxShadow: [BoxShadow(color: const Color(0xFF6A1B9A).withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 4))],
+        ),
+        child: ElevatedButton.icon(
+          onPressed: _handleCompleteRide,
+          icon: const Icon(Icons.check_circle_outline_rounded, color: Colors.white, size: 22),
+          label: Text('Complete Ride', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.transparent,
+            shadowColor: Colors.transparent,
+            minimumSize: const Size(double.infinity, 56),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
+  /// Show OTP dialog with premium bottom sheet styling
+  void _showOtpDialog() {
+    _otpController.clear();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          ),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+              const SizedBox(height: 20),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [Color(0xFF1565C0), Color(0xFF42A5F5)]),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [BoxShadow(color: const Color(0xFF1565C0).withValues(alpha: 0.3), blurRadius: 12, offset: const Offset(0, 4))],
+                ),
+                child: const Icon(Icons.pin_rounded, color: Colors.white, size: 32),
+              ),
+              const SizedBox(height: 16),
+              Text('Enter Ride OTP', style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Text('Ask the rider for their 4-digit verification code', style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey[600]), textAlign: TextAlign.center),
+              const SizedBox(height: 24),
+              TextField(
+                controller: _otpController,
+                keyboardType: TextInputType.number,
+                maxLength: 4,
+                textAlign: TextAlign.center,
+                autofocus: true,
+                style: GoogleFonts.poppins(fontSize: 36, fontWeight: FontWeight.bold, letterSpacing: 16, color: const Color(0xFF1565C0)),
+                decoration: InputDecoration(
+                  hintText: '• • • •',
+                  hintStyle: GoogleFonts.poppins(fontSize: 36, color: Colors.grey[300], letterSpacing: 16),
+                  counterText: '',
+                  filled: true,
+                  fillColor: Colors.grey[50],
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: Colors.grey[300]!)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: Colors.grey[300]!)),
+                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: Color(0xFF1565C0), width: 2)),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 20),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(_riderName ?? 'Rider', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14)),
-                        if (_riderPhone != null && _riderPhone!.isNotEmpty)
-                          Text(_riderPhone!, style: GoogleFonts.poppins(color: Colors.grey[600], fontSize: 12)),
-                      ],
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        side: BorderSide(color: Colors.grey[400]!),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      ),
+                      child: Text('Cancel', style: GoogleFonts.poppins(color: Colors.grey[600], fontWeight: FontWeight.w500)),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 2,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(14),
+                        gradient: const LinearGradient(colors: [Color(0xFF2E7D32), Color(0xFF43A047)]),
+                        boxShadow: [BoxShadow(color: const Color(0xFF2E7D32).withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 4))],
+                      ),
+                      child: ElevatedButton.icon(
+                        onPressed: () async {
+                          final otp = _otpController.text.trim();
+                          if (otp.length != 4) {
+                            ScaffoldMessenger.of(ctx).showSnackBar(
+                              const SnackBar(content: Text('Please enter a valid 4-digit OTP'), backgroundColor: Colors.red),
+                            );
+                            return;
+                          }
+                          Navigator.pop(ctx);
+                          await _handleStartRide(otp);
+                        },
+                        icon: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 22),
+                        label: Text('Start Trip', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.transparent,
+                          shadowColor: Colors.transparent,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        ),
+                      ),
                     ),
                   ),
                 ],
               ),
-            ),
-          ],
-
-          const SizedBox(height: 16),
-          // Route Details
-          Row(children: [
-             const Icon(Icons.my_location, color: Colors.green),
-             const SizedBox(width: 12),
-             Expanded(child: Text('Pickup Location', style: GoogleFonts.poppins(fontSize: 14))),
-          ]),
-          Padding(
-            padding: const EdgeInsets.only(left: 11, top: 4, bottom: 4),
-            child: Container(height: 20, width: 2, color: Colors.grey.withOpacity(0.3)),
+              const SizedBox(height: 8),
+            ],
           ),
-          Row(children: [
-             const Icon(Icons.location_on, color: Colors.red),
-             const SizedBox(width: 12),
-             Expanded(child: Text('Drop Location', style: GoogleFonts.poppins(fontSize: 14))),
-          ]),
-          
-          const SizedBox(height: 24),
-          
-          // Action Buttons based on ride status
-          if (_rideStatus == 'pending')
-            // Accept / Decline buttons
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: _isDeclining ? null : _declineRide,
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      side: BorderSide(color: Colors.red.withOpacity(0.5)),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                    child: _isDeclining
-                        ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                        : Text('Decline', style: GoogleFonts.poppins(color: Colors.red)),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: _isAccepting ? null : _acceptRide,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                    child: _isAccepting
-                        ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                        : Text('Accept Ride', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
-                  ),
-                ),
-              ],
-            )
-          else if (_rideStatus == 'matched')
-            // Arrived at Pickup button
-            ElevatedButton(
-              onPressed: _handleArriveAtPickup,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                minimumSize: const Size(double.infinity, 54),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              child: Text('Arrived at Pickup', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
-            )
-          else if (_rideStatus == 'arrived')
-            Column(
-              children: [
-                if (_otpTimer != null && _otpTimer!.isActive)
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-                    decoration: BoxDecoration(
-                      color: Colors.red.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.red.withOpacity(0.3)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.timer, color: Colors.red, size: 16),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Auto-cancel in: ${_formatTime(_otpTimeRemaining)}',
-                          style: GoogleFonts.poppins(color: Colors.red, fontWeight: FontWeight.bold),
-                        ),
-                      ],
-                    ),
-                  ),
-                // Enter OTP / Start Ride button
-                ElevatedButton(
-                  onPressed: _showOtpDialog,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange,
-                    minimumSize: const Size(double.infinity, 54),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                  child: Text('Enter OTP & Start Ride', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
-                ),
-              ],
-            )
-          else if (_rideStatus == 'in_progress')
-            // Complete Ride button
-            ElevatedButton(
-              onPressed: _handleCompleteRide,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue,
-                minimumSize: const Size(double.infinity, 54),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              child: Text('Complete Ride', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
-        ],
+        ),
       ),
     );
   }
@@ -1100,3 +1385,4 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     return '$min:${sec.toString().padLeft(2, '0')}';
   }
 }
+

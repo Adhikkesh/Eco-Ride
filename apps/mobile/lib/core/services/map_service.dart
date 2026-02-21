@@ -7,6 +7,8 @@ import '../../../core/services/auth_service.dart';
 import '../constants/app_constants.dart';
 
 class MapService {
+  // Persistent HTTP client to avoid iOS socket exhaustion (errno 48)
+  static final http.Client _client = http.Client();
   static const String _autocompleteUrl = 'https://maps.googleapis.com/maps/api/place/autocomplete/json';
   static const String _detailsUrl = 'https://maps.googleapis.com/maps/api/place/details/json';
   static const String _directionsUrl = 'https://maps.googleapis.com/maps/api/directions/json';
@@ -93,7 +95,7 @@ class MapService {
       for (var proxyUrl in proxies) {
         try {
           debugPrint('MapService: Trying proxy: $proxyUrl');
-          final response = await http.get(Uri.parse(proxyUrl)).timeout(const Duration(seconds: 4));
+          final response = await _client.get(Uri.parse(proxyUrl)).timeout(const Duration(seconds: 4));
           if (response.statusCode == 200) {
             final data = json.decode(response.body);
             if (data['status'] == 'OK') {
@@ -107,7 +109,7 @@ class MapService {
     } else {
       // On Mobile, just call directly
       try {
-        final response = await http.get(Uri.parse(apiUri)).timeout(const Duration(seconds: 3));
+        final response = await _client.get(Uri.parse(apiUri)).timeout(const Duration(seconds: 3));
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
           if (data['status'] == 'OK') {
@@ -156,7 +158,7 @@ class MapService {
       for (var proxyUrl in proxies) {
         try {
           debugPrint('MapService: Details Proxy: $proxyUrl');
-          final response = await http.get(Uri.parse(proxyUrl)).timeout(const Duration(seconds: 4));
+          final response = await _client.get(Uri.parse(proxyUrl)).timeout(const Duration(seconds: 4));
           if (response.statusCode == 200) {
             final data = json.decode(response.body);
             if (data['status'] == 'OK') {
@@ -174,7 +176,7 @@ class MapService {
       }
     } else {
       try {
-        final response = await http.get(Uri.parse(apiUri)).timeout(const Duration(seconds: 5));
+        final response = await _client.get(Uri.parse(apiUri)).timeout(const Duration(seconds: 5));
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
           if (data['status'] == 'OK') {
@@ -208,7 +210,7 @@ class MapService {
       for (var url in proxies) {
         try {
           debugPrint('MapService: Fetching directions via $url');
-          final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 5));
+          final response = await _client.get(Uri.parse(url)).timeout(const Duration(seconds: 5));
           if (response.statusCode == 200) {
             final data = json.decode(response.body);
             if (data['status'] == 'OK') {
@@ -239,7 +241,7 @@ class MapService {
       }
     } else {
       try {
-        final response = await http.get(Uri.parse(apiUri)).timeout(const Duration(seconds: 5));
+        final response = await _client.get(Uri.parse(apiUri)).timeout(const Duration(seconds: 5));
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
           if (data['status'] == 'OK') {
@@ -272,7 +274,7 @@ class MapService {
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.estimateRide}');
       debugPrint('MapService: Requesting estimate from $url');
 
-      final response = await http.post(
+      final response = await _client.post(
         url,
         headers: {
           'Content-Type': 'application/json',
@@ -328,7 +330,7 @@ class MapService {
       debugPrint('MapService: Requesting ride at $url');
 
       // Match backend expected fields exactly (same as web app RiderMap.tsx)
-      final response = await http.post(
+      final response = await _client.post(
         url,
         headers: {
           'Content-Type': 'application/json',
@@ -378,7 +380,7 @@ class MapService {
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.acceptRide}');
       debugPrint('MapService: Accepting ride $rideId at $url');
 
-      final response = await http.post(
+      final response = await _client.post(
         url,
         headers: {
           'Content-Type': 'application/json',
@@ -410,7 +412,7 @@ class MapService {
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.declineRide}');
       debugPrint('MapService: Declining ride $rideId');
 
-      final response = await http.post(
+      final response = await _client.post(
         url,
         headers: {
           'Content-Type': 'application/json',
@@ -438,7 +440,7 @@ class MapService {
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.arriveAtPickup}');
       debugPrint('MapService: Marking arrival for ride $rideId');
 
-      final response = await http.post(
+      final response = await _client.post(
         url,
         headers: {
           'Content-Type': 'application/json',
@@ -468,7 +470,7 @@ class MapService {
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.startRide}');
       debugPrint('MapService: Starting ride $rideId with OTP');
 
-      final response = await http.post(
+      final response = await _client.post(
         url,
         headers: {
           'Content-Type': 'application/json',
@@ -499,7 +501,7 @@ class MapService {
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.completeRide}');
       debugPrint('MapService: Completing ride $rideId');
 
-      final response = await http.post(
+      final response = await _client.post(
         url,
         headers: {
           'Content-Type': 'application/json',
@@ -529,7 +531,7 @@ class MapService {
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.cancelRide}');
       debugPrint('MapService: Cancelling ride $rideId');
 
-      final response = await http.post(
+      final response = await _client.post(
         url,
         headers: {
           'Content-Type': 'application/json',
@@ -557,7 +559,7 @@ class MapService {
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.activeRide}');
       debugPrint('MapService: Checking active ride');
 
-      final response = await http.get(
+      final response = await _client.get(
         url,
         headers: {'Authorization': 'Bearer $token'},
       );
@@ -581,7 +583,7 @@ class MapService {
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.getOtp}/$rideId');
       debugPrint('MapService: Checking OTP for ride $rideId');
 
-      final response = await http.get(
+      final response = await _client.get(
         url,
         headers: {'Authorization': 'Bearer $token'},
       );
