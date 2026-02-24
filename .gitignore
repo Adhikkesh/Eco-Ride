@@ -50,3 +50,4 @@ check_head.txt
 
 
 
+apps/backend/server/*.log
