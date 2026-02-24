@@ -529,22 +529,25 @@ export const getActiveRide = async (req: Request, res: Response) => {
 
     const rideData = rideDoc.data();
 
-    // If driverName is missing in Firestore, we can fetch it here safely (Admin SDK)
+    // If driverName or driverPhone is missing in Firestore, we can fetch it here safely (Admin SDK)
     let driverName = rideData.driverName;
-    if (!driverName && rideData.driverId) {
+    let driverPhone = rideData.driverPhone;
+    if ((!driverName || !driverPhone) && rideData.driverId) {
       try {
         const userDoc = await db.collection("users").doc(rideData.driverId).get();
         if (userDoc.exists) {
-          driverName = userDoc.data()?.name || "Unknown Driver";
+          driverName = driverName || userDoc.data()?.name || "Unknown Driver";
+          driverPhone = driverPhone || userDoc.data()?.phone_number || "";
         }
       } catch (err) {
-        console.error("Error fetching driver name in active ride check:", err);
+        console.error("Error fetching driver details in active ride check:", err);
       }
     }
 
     return res.status(200).json({
       driverId: rideData.driverId,
       driverName: driverName || "Unknown Driver",
+      driverPhone: driverPhone || "",
       drop: rideData.drop,
       otp: rideData.otp, // Include OTP for active rides
       pickup: rideData.pickup,
@@ -609,8 +612,24 @@ export const acceptRide = async (req: Request, res: Response) => {
       });
     }
 
+    // Fetch driver details to provide phone number to rider
+    let driverName = "Unknown Driver";
+    let driverPhone = "";
+    try {
+      const driverDoc = await db.collection("users").doc(driverId).get();
+      if (driverDoc.exists) {
+        const driverData = driverDoc.data();
+        driverName = driverData?.name || "Unknown Driver";
+        driverPhone = driverData?.phone_number || "";
+      }
+    } catch (err) {
+      console.error("Error fetching driver details:", err);
+    }
+
     // 1. Update Firestore ride status to MATCHED
     await rideRef.update({
+      driverName,
+      driverPhone,
       matchedAt: FieldValue.serverTimestamp(),
       status: "MATCHED",
     });
@@ -633,6 +652,8 @@ export const acceptRide = async (req: Request, res: Response) => {
 
     // 4. Update rides node for rider tracking
     await rtdb.ref(`rides/${rideId}`).update({
+      driverName,
+      driverPhone,
       status: "MATCHED",
     });
 
@@ -891,37 +912,26 @@ export const getOtp = async (req: Request, res: Response) => {
     const driverSnapshot = await rtdb.ref(`drivers-online/${rideData.driverId}`).once("value");
     const driverData = driverSnapshot.val() as DriverLocation | null;
 
-    if (!driverData) {
-      return res.status(404).json({ message: "Driver location not found", success: false });
+    let distanceInMeters = 0;
+    if (driverData) {
+      // Calculate distance between driver and pickup
+      const pickup = rideData.pickup;
+      const driverPos: [number, number] = [driverData.lat, driverData.lng];
+      const pickupPos: [number, number] = [pickup.lat, pickup.lng];
+      const distanceInKm = geofire.distanceBetween(driverPos, pickupPos);
+      distanceInMeters = Math.round(distanceInKm * 1000);
+      console.log(`Driver distance to pickup: ${distanceInMeters}m`);
     }
 
-    // Calculate distance between driver and pickup
-    const pickup = rideData.pickup;
-    const driverPos: [number, number] = [driverData.lat, driverData.lng];
-    const pickupPos: [number, number] = [pickup.lat, pickup.lng];
-    const distanceInKm = geofire.distanceBetween(driverPos, pickupPos);
-    const distanceInMeters = Math.round(distanceInKm * 1000);
-
-    console.log(`Driver distance to pickup: ${distanceInMeters}m`);
-
-    // Only reveal OTP if driver is within 100 meters
-    if (distanceInMeters > 100) {
-      return res.status(200).json({
-        distanceToPickup: distanceInMeters,
-        message: `Driver is ${distanceInMeters}m away. OTP will be shown when driver is within 100m.`,
-        otpAvailable: false,
-        success: true,
-      });
-    }
-
-    // Mark OTP as revealed in Firestore
+    // Always reveal OTP immediately on match (user request)
+    // Mark OTP as revealed in Firestore if not already
     if (!rideData.otpRevealed) {
       await rideRef.update({ otpRevealed: true });
     }
 
     return res.status(200).json({
       distanceToPickup: distanceInMeters,
-      message: "Driver is nearby. Share this OTP with the driver.",
+      message: "Driver is matched. Share this OTP with the driver.",
       otp: rideData.otp,
       otpAvailable: true,
       success: true,

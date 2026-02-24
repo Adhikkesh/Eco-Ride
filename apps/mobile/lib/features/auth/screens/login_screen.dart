@@ -1,7 +1,8 @@
 /// Login Screen
-/// Beautiful Sign In UI with Eco-Ride branding.
+/// Premium Sign In UI with Eco-Ride branding, glassmorphism, and gradient accents.
 library;
 
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/constants/app_constants.dart';
@@ -33,13 +34,13 @@ class _LoginScreenState extends State<LoginScreen>
     super.initState();
     _animationController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 800),
+      duration: const Duration(milliseconds: 1000),
     );
     _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
     );
     _slideAnimation = Tween<Offset>(
-      begin: const Offset(0, 0.3),
+      begin: const Offset(0, 0.2),
       end: Offset.zero,
     ).animate(
       CurvedAnimation(parent: _animationController, curve: Curves.easeOutCubic),
@@ -59,99 +60,58 @@ class _LoginScreenState extends State<LoginScreen>
     if (!_formKey.currentState!.validate()) return;
 
     if (!isFirebaseInitialized) {
-      _showInfoSnackbar('Demo Mode: Firebase not configured.');
+      _showSnackbar('Demo Mode: Firebase not configured.', isError: false);
       return;
     }
 
-    debugPrint('LOGIN_DEBUG: [1] _handleLogin starting...');
     setState(() => _isLoading = true);
-    final startTime = DateTime.now();
 
     try {
-      debugPrint('LOGIN_DEBUG: [2] Calling AuthService.signIn for ${_emailController.text}');
-      
       await AuthService.instance.signIn(
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
-      
-      debugPrint('LOGIN_DEBUG: [3] AuthService.signIn returned successfully.');
 
-      // Wait a moment for Firebase state to propagate
       await Future.delayed(const Duration(milliseconds: 500));
-      
+
       if (mounted) {
         final user = AuthService.instance.currentUser;
-        debugPrint('LOGIN_DEBUG: [4] Post-sign-in check. User: ${user?.uid}');
-        
         if (user != null) {
-          debugPrint('LOGIN_DEBUG: [5] Forcing App Rebuild via AuthGate ping...');
-          // We can't easily ping AuthGate from here without a global key,
-          // but our polling AuthGate in main.dart should catch this.
-          // To be extra sure, we navigate to ourselves which triggers a build.
           setState(() => _isLoading = false);
         }
       }
     } on AuthException catch (e) {
-      debugPrint('LOGIN_DEBUG: [!] AuthException: ${e.message}');
-      if (mounted) _showErrorSnackbar(e.message);
+      if (mounted) _showSnackbar(e.message, isError: true);
     } catch (e) {
-      debugPrint('LOGIN_DEBUG: [!] Unexpected error: $e');
-      if (mounted) _showErrorSnackbar('An unexpected error occurred.');
+      if (mounted) _showSnackbar('An unexpected error occurred.', isError: true);
     } finally {
-      debugPrint('LOGIN_DEBUG: [6] _handleLogin finally block.');
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  void _showInfoSnackbar(String message) {
+  void _showSnackbar(String message, {required bool isError}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
           children: [
-            const Icon(Icons.info_outline, color: Colors.white),
+            Icon(
+              isError ? Icons.error_outline : Icons.info_outline,
+              color: Colors.white,
+              size: 20,
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
                 message,
-                style: const TextStyle(fontWeight: FontWeight.w500),
+                style: GoogleFonts.inter(fontWeight: FontWeight.w500),
               ),
             ),
           ],
         ),
-        backgroundColor: AppColors.primary,
+        backgroundColor: isError ? AppColors.error : AppColors.primary,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppDimens.radiusMD),
-        ),
-        margin: const EdgeInsets.all(AppDimens.paddingMD),
-      ),
-    );
-  }
-
-  void _showErrorSnackbar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.error_outline, color: Colors.white),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                message,
-                style: const TextStyle(fontWeight: FontWeight.w500),
-              ),
-            ),
-          ],
-        ),
-        backgroundColor: AppColors.error,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppDimens.radiusMD),
-        ),
-        margin: const EdgeInsets.all(AppDimens.paddingMD),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        margin: const EdgeInsets.all(16),
       ),
     );
   }
@@ -170,95 +130,132 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   String? _validateEmail(String? value) {
-    if (value == null || value.isEmpty) {
-      return AppStrings.emailRequired;
-    }
+    if (value == null || value.isEmpty) return AppStrings.emailRequired;
     final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
-    if (!emailRegex.hasMatch(value)) {
-      return AppStrings.invalidEmail;
-    }
+    if (!emailRegex.hasMatch(value)) return AppStrings.invalidEmail;
     return null;
   }
 
   String? _validatePassword(String? value) {
-    if (value == null || value.isEmpty) {
-      return AppStrings.passwordRequired;
-    }
-    if (value.length < 6) {
-      return AppStrings.passwordTooShort;
-    }
+    if (value == null || value.isEmpty) return AppStrings.passwordRequired;
+    if (value.length < 6) return AppStrings.passwordTooShort;
     return null;
+  }
+
+  Future<void> _handleGoogleSignIn() async {
+    if (!isFirebaseInitialized) {
+      _showSnackbar('Demo Mode: Google Sign-In requires Firebase.', isError: false);
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      final user = await AuthService.instance.signInWithGoogle();
+      if (user == null && mounted) {
+        setState(() => _isLoading = false);
+        return;
+      }
+    } on AuthException catch (e) {
+      if (mounted) _showSnackbar(e.message, isError: true);
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
-
     return Scaffold(
-      backgroundColor: AppColors.background,
-      body: SafeArea(
-        child: CustomScrollView(
-          slivers: [
-            SliverFillRemaining(
-              hasScrollBody: false,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppDimens.paddingLG,
+      body: Stack(
+        children: [
+          // Gradient background
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0xFFECFDF5), // emerald-50
+                  Color(0xFFF0FDF4), // green-50
+                  AppColors.background,
+                ],
+              ),
+            ),
+          ),
+
+          // Decorative circles
+          Positioned(
+            top: -80,
+            right: -60,
+            child: Container(
+              width: 200,
+              height: 200,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  colors: [
+                    AppColors.primaryLight.withValues(alpha: 0.15),
+                    AppColors.secondary.withValues(alpha: 0.08),
+                  ],
                 ),
-                child: FadeTransition(
-                  opacity: _fadeAnimation,
-                  child: SlideTransition(
-                    position: _slideAnimation,
-                    child: Form(
-                      key: _formKey,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          const Spacer(flex: 2),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: -100,
+            left: -80,
+            child: Container(
+              width: 250,
+              height: 250,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  colors: [
+                    AppColors.teal.withValues(alpha: 0.1),
+                    AppColors.mint.withValues(alpha: 0.05),
+                  ],
+                ),
+              ),
+            ),
+          ),
 
-                          // Logo & Branding
-                          _buildHeader(),
-
-                          const SizedBox(height: 48),
-
-                          // Form Fields
-                          _buildForm(),
-
-                          const SizedBox(height: 16),
-
-                          // Forgot Password
-                          _buildForgotPassword(),
-
-                          const SizedBox(height: 32),
-
-                          // Login Button
-                          _buildLoginButton(),
-
-                          const SizedBox(height: 24),
-
-                          // OR Divider
-                          _buildOrDivider(),
-
-                          const SizedBox(height: 24),
-
-                          // Google Sign-In Button
-                          _buildGoogleSignInButton(),
-
-                          const Spacer(flex: 2),
-
-                          // Sign Up Link
-                          _buildSignUpLink(),
-
-                          const SizedBox(height: AppDimens.paddingLG),
-                        ],
+          // Main content
+          SafeArea(
+            child: CustomScrollView(
+              slivers: [
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: FadeTransition(
+                      opacity: _fadeAnimation,
+                      child: SlideTransition(
+                        position: _slideAnimation,
+                        child: Form(
+                          key: _formKey,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              const Spacer(flex: 2),
+                              _buildHeader(),
+                              const SizedBox(height: 40),
+                              _buildGlassCard(),
+                              const SizedBox(height: 24),
+                              _buildGoogleSignInButton(),
+                              const Spacer(flex: 2),
+                              _buildSignUpLink(),
+                              const SizedBox(height: 24),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -266,115 +263,148 @@ class _LoginScreenState extends State<LoginScreen>
   Widget _buildHeader() {
     return Column(
       children: [
-        // App Icon
+        // App Icon with gradient glow
         Container(
-          width: 100,
-          height: 100,
+          width: 88,
+          height: 88,
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [AppColors.primary, AppColors.primaryDark],
-            ),
-            borderRadius: BorderRadius.circular(AppDimens.radiusXL),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.primary.withValues(alpha: 0.3),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              ),
-            ],
+            gradient: AppGradients.primaryButton,
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: AppShadows.glow,
           ),
-          child: const Icon(
-            Icons.eco,
-            size: 56,
-            color: AppColors.white,
-          ),
+          child: const Icon(Icons.eco, size: 48, color: AppColors.white),
         ),
 
-        const SizedBox(height: 24),
+        const SizedBox(height: 20),
 
-        // App Name
         Text(
           AppStrings.appName,
-          style: GoogleFonts.poppins(
+          style: GoogleFonts.inter(
             fontSize: 32,
-            fontWeight: FontWeight.bold,
+            fontWeight: FontWeight.w800,
             color: AppColors.primary,
-            letterSpacing: -0.5,
+            letterSpacing: -0.8,
           ),
         ),
 
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
 
-        // Tagline
         Text(
           AppStrings.tagline,
-          style: GoogleFonts.poppins(
-            fontSize: 16,
+          style: GoogleFonts.inter(
+            fontSize: 15,
             color: AppColors.textSecondary,
             fontWeight: FontWeight.w400,
           ),
         ),
+      ],
+    );
+  }
 
-        const SizedBox(height: 32),
-
-        // Welcome Text
-        Text(
-          AppStrings.welcomeBack,
-          style: GoogleFonts.poppins(
-            fontSize: 24,
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
+  Widget _buildGlassCard() {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: AppColors.white.withValues(alpha: 0.85),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: AppColors.lightGrey.withValues(alpha: 0.4),
+            ),
+            boxShadow: AppShadows.card,
           ),
-        ),
-      ],
-    );
-  }
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                AppStrings.welcomeBack,
+                style: GoogleFonts.inter(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Sign in to continue your ride',
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 24),
 
-  Widget _buildForm() {
-    return Column(
-      children: [
-        AuthTextField(
-          controller: _emailController,
-          label: AppStrings.email,
-          prefixIcon: Icons.email_outlined,
-          isEmail: true,
-          validator: _validateEmail,
-          textInputAction: TextInputAction.next,
-          enabled: !_isLoading,
-        ),
-        const SizedBox(height: 16),
-        AuthTextField(
-          controller: _passwordController,
-          label: AppStrings.password,
-          prefixIcon: Icons.lock_outlined,
-          isPassword: true,
-          validator: _validatePassword,
-          textInputAction: TextInputAction.done,
-          onFieldSubmitted: (_) => _handleLogin(),
-          enabled: !_isLoading,
-        ),
-      ],
-    );
-  }
+              // Email
+              AuthTextField(
+                controller: _emailController,
+                label: AppStrings.email,
+                prefixIcon: Icons.email_outlined,
+                isEmail: true,
+                validator: _validateEmail,
+                textInputAction: TextInputAction.next,
+                enabled: !_isLoading,
+              ),
+              const SizedBox(height: 16),
 
-  Widget _buildForgotPassword() {
-    return Align(
-      alignment: Alignment.centerRight,
-      child: TextButton(
-        onPressed: _isLoading ? null : () {
-          // TODO: Navigate to forgot password screen
-        },
-        style: TextButton.styleFrom(
-          foregroundColor: AppColors.primary,
-          padding: EdgeInsets.zero,
-        ),
-        child: Text(
-          AppStrings.forgotPassword,
-          style: GoogleFonts.poppins(
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
+              // Password
+              AuthTextField(
+                controller: _passwordController,
+                label: AppStrings.password,
+                prefixIcon: Icons.lock_outlined,
+                isPassword: true,
+                validator: _validatePassword,
+                textInputAction: TextInputAction.done,
+                onFieldSubmitted: (_) => _handleLogin(),
+                enabled: !_isLoading,
+              ),
+              const SizedBox(height: 8),
+
+              // Forgot Password
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: _isLoading ? null : () {},
+                  style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                  child: Text(
+                    AppStrings.forgotPassword,
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Gradient Login Button
+              _buildLoginButton(),
+
+              const SizedBox(height: 20),
+
+              // OR Divider
+              Row(
+                children: [
+                  Expanded(child: Container(height: 1, color: AppColors.lightGrey)),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      'OR',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.grey,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                  ),
+                  Expanded(child: Container(height: 1, color: AppColors.lightGrey)),
+                ],
+              ),
+            ],
           ),
         ),
       ),
@@ -382,35 +412,92 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Widget _buildLoginButton() {
-    return ElevatedButton(
-      onPressed: _isLoading ? null : _handleLogin,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: AppColors.primary,
-        foregroundColor: AppColors.white,
-        disabledBackgroundColor: AppColors.primary.withValues(alpha: 0.6),
-        minimumSize: const Size.fromHeight(AppDimens.buttonHeight),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppDimens.radiusMD),
-        ),
-        elevation: 2,
-        shadowColor: AppColors.primary.withValues(alpha: 0.3),
+    return Container(
+      height: 56,
+      decoration: BoxDecoration(
+        gradient: _isLoading ? null : AppGradients.primaryButton,
+        color: _isLoading ? AppColors.grey : null,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: _isLoading ? [] : AppShadows.glow,
       ),
-      child: _isLoading
-          ? const SizedBox(
-              height: 24,
-              width: 24,
-              child: CircularProgressIndicator(
-                strokeWidth: 2.5,
-                valueColor: AlwaysStoppedAnimation<Color>(AppColors.white),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _isLoading ? null : _handleLogin,
+          borderRadius: BorderRadius.circular(16),
+          child: Center(
+            child: _isLoading
+                ? const SizedBox(
+                    height: 24,
+                    width: 24,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      valueColor: AlwaysStoppedAnimation<Color>(AppColors.white),
+                    ),
+                  )
+                : Text(
+                    AppStrings.signIn,
+                    style: GoogleFonts.inter(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.white,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGoogleSignInButton() {
+    return Container(
+      height: 56,
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.lightGrey),
+        boxShadow: AppShadows.soft,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _isLoading ? null : _handleGoogleSignIn,
+          borderRadius: BorderRadius.circular(16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: AppColors.white,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Center(
+                  child: Text(
+                    'G',
+                    style: GoogleFonts.inter(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: const Color(0xFF4285F4),
+                    ),
+                  ),
+                ),
               ),
-            )
-          : Text(
-              AppStrings.signIn,
-              style: GoogleFonts.poppins(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
+              const SizedBox(width: 12),
+              Text(
+                'Continue with Google',
+                style: GoogleFonts.inter(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
               ),
-            ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -420,7 +507,7 @@ class _LoginScreenState extends State<LoginScreen>
       children: [
         Text(
           AppStrings.noAccount,
-          style: GoogleFonts.poppins(
+          style: GoogleFonts.inter(
             fontSize: 14,
             color: AppColors.textSecondary,
           ),
@@ -433,120 +520,14 @@ class _LoginScreenState extends State<LoginScreen>
           ),
           child: Text(
             AppStrings.signUp,
-            style: GoogleFonts.poppins(
+            style: GoogleFonts.inter(
               fontSize: 14,
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w700,
+              color: AppColors.primary,
             ),
           ),
         ),
       ],
     );
-  }
-
-  Widget _buildOrDivider() {
-    return Row(
-      children: [
-        Expanded(
-          child: Container(
-            height: 1,
-            color: AppColors.lightGrey,
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Text(
-            'OR',
-            style: GoogleFonts.poppins(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: AppColors.textSecondary,
-            ),
-          ),
-        ),
-        Expanded(
-          child: Container(
-            height: 1,
-            color: AppColors.lightGrey,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildGoogleSignInButton() {
-    return OutlinedButton(
-      onPressed: _isLoading ? null : _handleGoogleSignIn,
-      style: OutlinedButton.styleFrom(
-        backgroundColor: AppColors.surface,
-        foregroundColor: AppColors.textPrimary,
-        side: const BorderSide(color: AppColors.lightGrey, width: 1.5),
-        minimumSize: const Size.fromHeight(AppDimens.buttonHeight),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppDimens.radiusMD),
-        ),
-        elevation: 0,
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          // Google "G" logo
-          Container(
-            width: 24,
-            height: 24,
-            decoration: BoxDecoration(
-              color: AppColors.white,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Center(
-              child: Text(
-                'G',
-                style: GoogleFonts.poppins(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: const Color(0xFF4285F4), // Google blue
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Text(
-            'Continue with Google',
-            style: GoogleFonts.poppins(
-              fontSize: 16,
-              fontWeight: FontWeight.w500,
-              color: AppColors.textPrimary,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _handleGoogleSignIn() async {
-    // Demo mode - just show a message
-    if (!isFirebaseInitialized) {
-      _showInfoSnackbar('Demo Mode: Google Sign-In requires Firebase configuration.');
-      return;
-    }
-
-    setState(() => _isLoading = true);
-
-    try {
-      final user = await AuthService.instance.signInWithGoogle();
-      if (user == null && mounted) {
-        // User cancelled
-        setState(() => _isLoading = false);
-        return;
-      }
-      // Navigation will be handled by auth state listener in main.dart
-    } on AuthException catch (e) {
-      if (mounted) {
-        _showErrorSnackbar(e.message);
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    }
   }
 }

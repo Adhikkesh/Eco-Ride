@@ -702,41 +702,42 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: AppColors.surface.withOpacity(0.95),
-            borderRadius: BorderRadius.circular(30),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 10),
-            ],
+            color: AppColors.white,
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: AppShadows.soft,
           ),
           child: Row(
             children: [
-              CircleAvatar(
-                radius: 16,
-                backgroundColor: AppColors.primary,
-                backgroundImage: _userPhoto != null ? NetworkImage(_userPhoto!) : null,
-                child: _userPhoto == null 
-                    ? const Icon(Icons.person, size: 20, color: Colors.white)
-                    : null,
+              Container(
+                width: 34,
+                height: 34,
+                decoration: const BoxDecoration(
+                  gradient: AppGradients.primaryButton,
+                  shape: BoxShape.circle,
+                ),
+                child: _userPhoto != null
+                    ? ClipOval(child: Image.network(_userPhoto!, fit: BoxFit.cover))
+                    : const Icon(Icons.person, size: 18, color: AppColors.white),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
                     _userName ?? 'Driver',
-                    style: GoogleFonts.poppins(
+                    style: GoogleFonts.inter(
                       color: AppColors.textPrimary,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
                     ),
                   ),
                   Text(
                     'Elite Driver',
-                    style: GoogleFonts.poppins(
-                      color: AppColors.primary,
-                      fontWeight: FontWeight.w500,
-                      fontSize: 10,
+                    style: GoogleFonts.inter(
+                      color: AppColors.primaryLight,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 11,
                     ),
                   ),
                 ],
@@ -751,11 +752,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           child: Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: Colors.red.withOpacity(0.15),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.red.withOpacity(0.3)),
+              color: AppColors.white,
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: AppShadows.soft,
             ),
-            child: const Icon(Icons.logout, color: Colors.red, size: 20),
+            child: Icon(Icons.logout_rounded, color: AppColors.error.withValues(alpha: 0.8), size: 20),
           ),
         ),
       ],
@@ -767,11 +768,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: AppColors.surface.withOpacity(0.95),
+        color: AppColors.white,
         borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 15, offset: const Offset(0, 5)),
-        ],
+        boxShadow: AppShadows.medium,
       ),
       child: Column(
         children: [
@@ -783,26 +782,56 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 children: [
                   Text(
                     _isOnline ? 'You are Online' : 'You are Offline',
-                    style: GoogleFonts.poppins(
+                    style: GoogleFonts.inter(
                       color: AppColors.textPrimary,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
+                  const SizedBox(height: 2),
                   Text(
                     _isOnline ? 'Accepting rides now' : 'Go online to start earning',
-                    style: GoogleFonts.poppins(
+                    style: GoogleFonts.inter(
                       color: AppColors.textSecondary,
-                      fontSize: 14,
+                      fontSize: 13,
                     ),
                   ),
                 ],
               ),
-              Switch(
-                value: _isOnline,
-                onChanged: (_) => _toggleOnlineStatus(),
-                activeColor: AppColors.primary,
-                activeTrackColor: AppColors.primary.withOpacity(0.3),
+              // Premium toggle
+              GestureDetector(
+                onTap: _toggleOnlineStatus,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
+                  width: 56,
+                  height: 32,
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    gradient: _isOnline ? AppGradients.primaryButton : null,
+                    color: _isOnline ? null : AppColors.lightGrey,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: _isOnline ? AppShadows.soft : [],
+                  ),
+                  child: AnimatedAlign(
+                    duration: const Duration(milliseconds: 300),
+                    alignment: _isOnline ? Alignment.centerRight : Alignment.centerLeft,
+                    child: Container(
+                      width: 26,
+                      height: 26,
+                      decoration: BoxDecoration(
+                        color: AppColors.white,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.1),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ],
           ),
@@ -814,9 +843,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   Widget _buildStatsRow() {
      return Row(
        children: [
-         Expanded(child: _buildStatItem('₹0.00', 'Today\'s Earnings', Icons.account_balance_wallet_outlined, Colors.green)),
+         Expanded(child: _buildStatItem('₹0.00', 'Today\'s Earnings', Icons.account_balance_wallet_outlined, AppColors.primaryLight)),
          const SizedBox(width: 12),
-         Expanded(child: _buildStatItem('0', 'Today\'s Rides', Icons.directions_car_outlined, Colors.blue)),
+         Expanded(child: _buildStatItem('0', 'Today\'s Rides', Icons.directions_car_outlined, AppColors.info)),
        ],
      );
   }
@@ -825,30 +854,37 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.surface.withOpacity(0.95),
+        color: AppColors.white,
         borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10),
-        ],
+        boxShadow: AppShadows.soft,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: color, size: 24),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: color, size: 22),
+          ),
           const SizedBox(height: 12),
           Text(
             value,
-            style: GoogleFonts.poppins(
+            style: GoogleFonts.inter(
               color: AppColors.textPrimary,
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
             ),
           ),
+          const SizedBox(height: 2),
           Text(
             label,
-            style: GoogleFonts.poppins(
+            style: GoogleFonts.inter(
               color: AppColors.textSecondary,
               fontSize: 12,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ],
@@ -863,11 +899,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.white,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 30, offset: const Offset(0, -8)),
-        ],
+        boxShadow: AppShadows.medium,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -875,8 +909,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           // Drag handle
           Container(
             margin: const EdgeInsets.only(top: 12),
-            width: 40, height: 4,
-            decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
+            width: 36, height: 4,
+            decoration: BoxDecoration(color: AppColors.lightGrey, borderRadius: BorderRadius.circular(2)),
           ),
           // Status header
           _buildStatusHeader(),
@@ -967,9 +1001,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: GoogleFonts.poppins(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                Text(title, style: GoogleFonts.inter(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
                 if (subtitle.isNotEmpty)
-                  Text(subtitle, style: GoogleFonts.poppins(color: Colors.white.withValues(alpha: 0.85), fontSize: 12)),
+                  Text(subtitle, style: GoogleFonts.inter(color: Colors.white.withValues(alpha: 0.85), fontSize: 12)),
               ],
             ),
           ),
@@ -1005,13 +1039,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(_riderName ?? 'Rider', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 15)),
+                Text(_riderName ?? 'Rider', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 15)),
                 if (_riderPhone != null && _riderPhone!.isNotEmpty)
                   Row(
                     children: [
                       Icon(Icons.phone_rounded, color: Colors.grey[500], size: 14),
                       const SizedBox(width: 4),
-                      Text(_riderPhone!, style: GoogleFonts.poppins(color: Colors.grey[600], fontSize: 12)),
+                      Text(_riderPhone!, style: GoogleFonts.inter(color: Colors.grey[600], fontSize: 12)),
                     ],
                   ),
               ],
@@ -1063,9 +1097,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(pickupName, style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(pickupName, style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
                 Container(margin: const EdgeInsets.symmetric(vertical: 8), height: 1, color: Colors.grey[200]),
-                Text(dropName, style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(dropName, style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
             ),
           ),
@@ -1091,10 +1125,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             children: [
               const Icon(Icons.currency_rupee_rounded, color: Color(0xFFF57C00), size: 20),
               const SizedBox(width: 6),
-              Text('Estimated Fare', style: GoogleFonts.poppins(fontSize: 13, color: const Color(0xFFF57C00), fontWeight: FontWeight.w500)),
+              Text('Estimated Fare', style: GoogleFonts.inter(fontSize: 13, color: const Color(0xFFF57C00), fontWeight: FontWeight.w500)),
             ],
           ),
-          Text('\u20B9$fare', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.bold, color: const Color(0xFFE65100))),
+          Text('\u20B9$fare', style: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.bold, color: const Color(0xFFE65100))),
         ],
       ),
     );
@@ -1135,7 +1169,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 ),
                 Text(
                   _formatTime(_otpTimeRemaining),
-                  style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.bold, color: isUrgent ? Colors.red : const Color(0xFF1565C0)),
+                  style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.bold, color: isUrgent ? Colors.red : const Color(0xFF1565C0)),
                 ),
               ],
             ),
@@ -1147,10 +1181,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               children: [
                 Text(
                   isUrgent ? 'Hurry! Time running out' : 'Waiting for rider',
-                  style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14, color: isUrgent ? Colors.red[700] : const Color(0xFF1565C0)),
+                  style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 14, color: isUrgent ? Colors.red[700] : const Color(0xFF1565C0)),
                 ),
                 const SizedBox(height: 2),
-                Text('Ride auto-cancels when timer expires', style: GoogleFonts.poppins(fontSize: 11, color: Colors.grey[600])),
+                Text('Ride auto-cancels when timer expires', style: GoogleFonts.inter(fontSize: 11, color: Colors.grey[600])),
               ],
             ),
           ),
@@ -1169,7 +1203,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               icon: _isDeclining
                   ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.close_rounded, size: 18),
-              label: Text('Decline', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+              label: Text('Decline', style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
               style: OutlinedButton.styleFrom(
                 foregroundColor: Colors.red,
                 padding: const EdgeInsets.symmetric(vertical: 16),
@@ -1192,7 +1226,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 icon: _isAccepting
                     ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                     : const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-                label: Text('Accept Ride', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                label: Text('Accept Ride', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.transparent,
                   shadowColor: Colors.transparent,
@@ -1217,7 +1251,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           icon: _isLoading
               ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
               : const Icon(Icons.flag_rounded, color: Colors.white, size: 22),
-          label: Text('Arrived at Pickup', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+          label: Text('Arrived at Pickup', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.transparent,
             shadowColor: Colors.transparent,
@@ -1237,7 +1271,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         child: ElevatedButton.icon(
           onPressed: _showOtpDialog,
           icon: const Icon(Icons.pin_rounded, color: Colors.white, size: 22),
-          label: Text('Enter OTP & Start Ride', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+          label: Text('Enter OTP & Start Ride', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.transparent,
             shadowColor: Colors.transparent,
@@ -1257,7 +1291,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         child: ElevatedButton.icon(
           onPressed: _handleCompleteRide,
           icon: const Icon(Icons.check_circle_outline_rounded, color: Colors.white, size: 22),
-          label: Text('Complete Ride', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+          label: Text('Complete Ride', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.transparent,
             shadowColor: Colors.transparent,
@@ -1300,9 +1334,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 child: const Icon(Icons.pin_rounded, color: Colors.white, size: 32),
               ),
               const SizedBox(height: 16),
-              Text('Enter Ride OTP', style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.bold)),
+              Text('Enter Ride OTP', style: GoogleFonts.inter(fontSize: 22, fontWeight: FontWeight.bold)),
               const SizedBox(height: 6),
-              Text('Ask the rider for their 4-digit verification code', style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey[600]), textAlign: TextAlign.center),
+              Text('Ask the rider for their 4-digit verification code', style: GoogleFonts.inter(fontSize: 13, color: Colors.grey[600]), textAlign: TextAlign.center),
               const SizedBox(height: 24),
               TextField(
                 controller: _otpController,
@@ -1310,10 +1344,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 maxLength: 4,
                 textAlign: TextAlign.center,
                 autofocus: true,
-                style: GoogleFonts.poppins(fontSize: 36, fontWeight: FontWeight.bold, letterSpacing: 16, color: const Color(0xFF1565C0)),
+                style: GoogleFonts.inter(fontSize: 36, fontWeight: FontWeight.bold, letterSpacing: 16, color: const Color(0xFF1565C0)),
                 decoration: InputDecoration(
                   hintText: '• • • •',
-                  hintStyle: GoogleFonts.poppins(fontSize: 36, color: Colors.grey[300], letterSpacing: 16),
+                  hintStyle: GoogleFonts.inter(fontSize: 36, color: Colors.grey[300], letterSpacing: 16),
                   counterText: '',
                   filled: true,
                   fillColor: Colors.grey[50],
@@ -1334,7 +1368,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                         side: BorderSide(color: Colors.grey[400]!),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                       ),
-                      child: Text('Cancel', style: GoogleFonts.poppins(color: Colors.grey[600], fontWeight: FontWeight.w500)),
+                      child: Text('Cancel', style: GoogleFonts.inter(color: Colors.grey[600], fontWeight: FontWeight.w500)),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -1359,7 +1393,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                           await _handleStartRide(otp);
                         },
                         icon: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 22),
-                        label: Text('Start Trip', style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                        label: Text('Start Trip', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.transparent,
                           shadowColor: Colors.transparent,

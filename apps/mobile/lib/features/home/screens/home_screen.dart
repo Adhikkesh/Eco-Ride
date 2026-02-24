@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/gestures.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -11,6 +12,7 @@ import '../../../core/constants/app_constants.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/services/map_service.dart';
 import '../../auth/screens/login_screen.dart';
+import '../../payment/screens/payment_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -225,31 +227,52 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted) return;
 
       setState(() {
+        // ALWAYS try to update driver details if they are present in the payload
+        _driverName = data['driverName'] as String? ?? _driverName ?? 'Driver';
+        _driverPhone = data['driverPhone'] as String? ?? _driverPhone ?? '';
+
         if (status == 'MATCHED' || status == 'PENDING_ACCEPTANCE') {
           if (_rideStatus == 'searching' || _rideStatus == 'idle') {
             _rideStatus = status == 'MATCHED' ? 'matched' : 'searching';
           }
           if (status == 'MATCHED') {
-            _driverName = data['driverName'] as String? ?? _driverName ?? 'Driver';
-            _driverPhone = data['driverPhone'] as String? ?? _driverPhone ?? '';
             _startOtpPolling();
           }
         } else if (status == 'ARRIVED') {
           _rideStatus = 'arrived';
-          _driverName = data['driverName'] as String? ?? _driverName;
         } else if (status == 'IN_PROGRESS') {
           _rideStatus = 'on_trip';
           _otpPollTimer?.cancel();
           _showOtp = false;
         } else if (status == 'COMPLETED') {
           _rideStatus = 'completed';
+          // Save ride info before resetting
+          final completedRideId = _rideId;
+          final fare = (data['fare'] as num?)?.toDouble() ?? 100.0;
           _resetRideState();
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Trip completed! 🎉'),
-              backgroundColor: Colors.green,
-            ),
-          );
+          // Navigate to payment screen
+          if (completedRideId != null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => PaymentScreen(
+                    rideId: completedRideId,
+                    fare: fare,
+                  ),
+                ),
+              ).then((paid) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(paid == true ? 'Payment successful! 🎉' : 'Trip completed! 🎉'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                }
+              });
+            });
+          }
         } else if (status == 'CANCELLED') {
           final reason = data['cancelReason'] as String?;
           _resetRideState();
@@ -282,24 +305,37 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_rideId == null) return;
     debugPrint('HomeScreen: Starting OTP polling for ride $_rideId');
 
-    // Poll every 10 seconds
+    // Fetch OTP immediately on match
+    _fetchOtp();
+
+    // Then poll every 10 seconds if not yet available
     _otpPollTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
       if (_rideId == null || (_rideStatus != 'matched' && _rideStatus != 'arrived')) {
         timer.cancel();
         return;
       }
-      final result = await MapService.getOtp(_rideId!);
-      if (result != null && result['success'] == true && mounted) {
-        if (result['otpAvailable'] == true && result['otp'] != null) {
-          setState(() {
-            _otp = result['otp'].toString();
-            _showOtp = true;
-          });
-          timer.cancel(); // Stop polling once OTP is available
-          debugPrint('HomeScreen: OTP received: $_otp');
-        }
+      if (_showOtp && _otp != null) {
+        timer.cancel(); // Already have OTP
+        return;
       }
+      _fetchOtp();
     });
+  }
+
+  /// Fetch OTP from backend
+  Future<void> _fetchOtp() async {
+    if (_rideId == null) return;
+    final result = await MapService.getOtp(_rideId!);
+    if (result != null && result['success'] == true && mounted) {
+      if (result['otpAvailable'] == true && result['otp'] != null) {
+        setState(() {
+          _otp = result['otp'].toString();
+          _showOtp = true;
+        });
+        _otpPollTimer?.cancel();
+        debugPrint('HomeScreen: OTP received: $_otp');
+      }
+    }
   }
 
   /// Cancel the current ride
@@ -381,7 +417,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           : _rideStatus == 'on_trip'
                               ? 'Trip In Progress 🚗'
                               : 'Finding driver...',
-              style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600),
+              style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w600),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
@@ -396,7 +432,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           : _rideStatus == 'on_trip'
                               ? 'Enjoy your ride with ${_driverName ?? "Driver"}'
                               : '',
-              style: GoogleFonts.poppins(color: Colors.grey[600], fontSize: 14),
+              style: GoogleFonts.inter(color: Colors.grey[600], fontSize: 14),
               textAlign: TextAlign.center,
             ),
 
@@ -404,16 +440,22 @@ class _HomeScreenState extends State<HomeScreen> {
             if ((_rideStatus == 'matched' || _rideStatus == 'arrived' || _rideStatus == 'on_trip') && _driverName != null) ...[
               const SizedBox(height: 16),
               Container(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: Colors.grey[100],
-                  borderRadius: BorderRadius.circular(12),
+                  color: AppColors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: AppShadows.soft,
                 ),
                 child: Row(
                   children: [
-                    const CircleAvatar(
-                      backgroundColor: Colors.green,
-                      child: Icon(Icons.person, color: Colors.white),
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: const BoxDecoration(
+                        gradient: AppGradients.primaryButton,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.person, color: AppColors.white, size: 22),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -422,14 +464,56 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           Text(
                             _driverName ?? 'Driver',
-                            style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 15),
+                            style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 15, color: AppColors.textPrimary),
                           ),
-                          if (_driverPhone != null && _driverPhone!.isNotEmpty)
-                            Text(
-                              _driverPhone!,
-                              style: GoogleFonts.poppins(color: Colors.grey[600], fontSize: 13),
-                            ),
+                          const SizedBox(height: 2),
+                          Row(
+                            children: [
+                              Icon(Icons.phone_outlined, size: 14, color: AppColors.textSecondary),
+                              const SizedBox(width: 4),
+                              Text(
+                                (_driverPhone != null && _driverPhone!.isNotEmpty)
+                                    ? _driverPhone!
+                                    : 'Fetching...',
+                                style: GoogleFonts.inter(
+                                  color: AppColors.textSecondary,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
                         ],
+                      ),
+                    ),
+                    // Call button — always visible
+                    GestureDetector(
+                      onTap: (_driverPhone != null && _driverPhone!.isNotEmpty)
+                          ? () async {
+                              final uri = Uri(scheme: 'tel', path: _driverPhone!);
+                              if (await canLaunchUrl(uri)) {
+                                await launchUrl(uri);
+                              }
+                            }
+                          : null,
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          gradient: (_driverPhone != null && _driverPhone!.isNotEmpty)
+                              ? AppGradients.primaryButton
+                              : null,
+                          color: (_driverPhone != null && _driverPhone!.isNotEmpty)
+                              ? null
+                              : AppColors.lightGrey,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          Icons.call_rounded,
+                          color: (_driverPhone != null && _driverPhone!.isNotEmpty)
+                              ? AppColors.white
+                              : AppColors.grey,
+                          size: 20,
+                        ),
                       ),
                     ),
                   ],
@@ -451,12 +535,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Text(
                       'Share this OTP with your driver',
-                      style: GoogleFonts.poppins(color: Colors.green[700], fontSize: 12),
+                      style: GoogleFonts.inter(color: Colors.green[700], fontSize: 12),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       _otp!,
-                      style: GoogleFonts.poppins(
+                      style: GoogleFonts.inter(
                         fontSize: 32,
                         fontWeight: FontWeight.bold,
                         color: Colors.green[800],
@@ -478,7 +562,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   side: const BorderSide(color: Colors.red),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
-                child: Text('Cancel Ride', style: GoogleFonts.poppins(color: Colors.red)),
+                child: Text('Cancel Ride', style: GoogleFonts.inter(color: Colors.red)),
               ),
           ],
         ),
@@ -914,12 +998,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Container(
                   decoration: BoxDecoration(
                     color: AppColors.surface,
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.2),
-                        blurRadius: 10,
-                        offset: const Offset(0, -5),
+                        color: Colors.black.withValues(alpha: 0.08),
+                        blurRadius: 20,
+                        offset: const Offset(0, -8),
                       ),
                     ],
                   ),
@@ -932,11 +1016,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       children: [
                         Center(
                           child: Container(
-                            width: 40,
+                            width: 36,
                             height: 4,
                             margin: const EdgeInsets.only(bottom: 20),
                             decoration: BoxDecoration(
-                              color: Colors.grey[600],
+                              color: AppColors.lightGrey,
                               borderRadius: BorderRadius.circular(2),
                             ),
                           ),
@@ -945,10 +1029,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         const SizedBox(height: 24),
                         Text(
                           'Quick Actions',
-                          style: GoogleFonts.poppins(
+                          style: GoogleFonts.inter(
                             color: AppColors.textPrimary,
                             fontSize: 16,
-                            fontWeight: FontWeight.w600,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
                         const SizedBox(height: 12),
@@ -956,10 +1040,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         const SizedBox(height: 24),
                         Text(
                           'Your Impact 🌍',
-                          style: GoogleFonts.poppins(
+                          style: GoogleFonts.inter(
                             color: AppColors.primary,
                             fontSize: 16,
-                            fontWeight: FontWeight.w600,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
                         const SizedBox(height: 12),
@@ -967,10 +1051,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         const SizedBox(height: 24),
                         Text(
                           'Nearby Drivers',
-                          style: GoogleFonts.poppins(
+                          style: GoogleFonts.inter(
                              color: AppColors.textPrimary,
                              fontSize: 16,
-                             fontWeight: FontWeight.w600,
+                             fontWeight: FontWeight.w700,
                           ),
                         ),
                         const SizedBox(height: 12),
@@ -993,20 +1077,18 @@ class _HomeScreenState extends State<HomeScreen> {
         GestureDetector(
           onTap: () => _scaffoldKey.currentState?.openDrawer(),
           child: Container(
-            padding: const EdgeInsets.all(10),
+            padding: const EdgeInsets.all(11),
             decoration: BoxDecoration(
-              color: AppColors.surface,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 4)),
-              ],
+              color: AppColors.white,
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: AppShadows.soft,
             ),
-            child: const Icon(Icons.menu, color: AppColors.textPrimary, size: 24),
+            child: const Icon(Icons.menu_rounded, color: AppColors.textPrimary, size: 22),
           ),
         ),
         const Spacer(),
         _buildRoleSwitch(),
-        const SizedBox(width: 12),
+        const SizedBox(width: 10),
         _buildUserAvatar(),
       ],
     );
@@ -1014,21 +1096,19 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildRoleSwitch() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
       decoration: BoxDecoration(
-        color: Colors.white,
+        gradient: AppGradients.primaryButton,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.primary.withOpacity(0.5)),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8),
-        ],
+        boxShadow: AppShadows.soft,
       ),
       child: Text(
         'Rider',
-        style: GoogleFonts.poppins(
-          color: AppColors.primary,
+        style: GoogleFonts.inter(
+          color: AppColors.white,
           fontSize: 12,
-          fontWeight: FontWeight.w600,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.5,
         ),
       ),
     );
@@ -1036,29 +1116,32 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildUserAvatar() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(30),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8),
-        ],
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: AppShadows.soft,
       ),
       child: Row(
         children: [
-          CircleAvatar(
-            radius: 14,
-            backgroundColor: AppColors.primary,
-            backgroundImage: _userPhoto != null ? NetworkImage(_userPhoto!) : null,
-            child: _userPhoto == null ? const Icon(Icons.person, size: 16, color: Colors.white) : null,
+          Container(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              gradient: AppGradients.primaryButton,
+              shape: BoxShape.circle,
+            ),
+            child: _userPhoto != null
+              ? ClipOval(child: Image.network(_userPhoto!, fit: BoxFit.cover))
+              : const Icon(Icons.person, size: 16, color: AppColors.white),
           ),
           const SizedBox(width: 8),
           Text(
             _userName?.split(' ')[0] ?? 'User',
-            style: GoogleFonts.poppins(
-              color: Colors.black,
+            style: GoogleFonts.inter(
+              color: AppColors.textPrimary,
               fontSize: 13,
-              fontWeight: FontWeight.w500,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ],
@@ -1069,12 +1152,9 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildRouteCard() {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 20, offset: const Offset(0, 10)),
-        ],
-        border: Border.all(color: Colors.grey.withOpacity(0.1)),
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: AppShadows.medium,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1082,23 +1162,23 @@ class _HomeScreenState extends State<HomeScreen> {
           // Pickup Field
           _buildSearchField(
             controller: _pickupController,
-            hint: 'Search Pickup Location...',
-            icon: Icons.my_location,
-            iconColor: Colors.blue,
+            hint: 'Pickup location',
+            icon: Icons.circle,
+            iconColor: AppColors.primaryLight,
             isPickup: true,
           ),
-          
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            child: Divider(height: 1, thickness: 0.5),
+
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 52),
+            child: Container(height: 1, color: AppColors.lightGrey.withValues(alpha: 0.5)),
           ),
 
           // Destination Field
           _buildSearchField(
             controller: _searchController,
-            hint: 'Search Destination...',
-            icon: Icons.location_on,
-            iconColor: Colors.red,
+            hint: 'Where to?',
+            icon: Icons.circle,
+            iconColor: AppColors.error,
             isPickup: false,
           ),
 
@@ -1125,10 +1205,10 @@ class _HomeScreenState extends State<HomeScreen> {
           Expanded(
             child: TextField(
               controller: controller,
-              style: GoogleFonts.poppins(color: Colors.black, fontSize: 14, fontWeight: FontWeight.w500),
+              style: GoogleFonts.inter(color: Colors.black, fontSize: 14, fontWeight: FontWeight.w500),
               decoration: InputDecoration(
                 hintText: hint,
-                hintStyle: GoogleFonts.poppins(color: Colors.black45, fontSize: 14),
+                hintStyle: GoogleFonts.inter(color: Colors.black45, fontSize: 14),
                 border: InputBorder.none,
                 isDense: true,
                 contentPadding: const EdgeInsets.symmetric(vertical: 12),
@@ -1166,7 +1246,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   leading: const Icon(Icons.my_location, color: Colors.blue, size: 20),
                   title: Text(
                     'Use Current Location',
-                    style: GoogleFonts.poppins(color: Colors.blue, fontSize: 13, fontWeight: FontWeight.w600),
+                    style: GoogleFonts.inter(color: Colors.blue, fontSize: 13, fontWeight: FontWeight.w600),
                   ),
                   dense: true,
                   onTap: _useCurrentLocationForPickup,
@@ -1178,7 +1258,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 leading: const Icon(Icons.location_on, color: Colors.grey, size: 18),
                 title: Text(
                   suggestion['description'],
-                  style: GoogleFonts.poppins(color: Colors.black87, fontSize: 13),
+                  style: GoogleFonts.inter(color: Colors.black87, fontSize: 13),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -1194,7 +1274,7 @@ class _HomeScreenState extends State<HomeScreen> {
             alignment: Alignment.centerRight,
             child: Text(
               'powered by Google',
-              style: GoogleFonts.poppins(
+              style: GoogleFonts.inter(
                 color: Colors.grey.withOpacity(0.5),
                 fontSize: 10,
                 fontStyle: FontStyle.italic,
@@ -1217,17 +1297,11 @@ class _HomeScreenState extends State<HomeScreen> {
           },
           child: Container(
             margin: const EdgeInsets.all(16),
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.2),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              ),
-            ],
+            color: AppColors.white,
+            borderRadius: BorderRadius.circular(28),
+            boxShadow: AppShadows.medium,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1236,10 +1310,10 @@ class _HomeScreenState extends State<HomeScreen> {
               // Handle Drag Indicator
               Center(
                 child: Container(
-                  width: 40,
+                  width: 36,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: Colors.grey[300],
+                    color: AppColors.lightGrey,
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -1249,9 +1323,9 @@ class _HomeScreenState extends State<HomeScreen> {
               // Title
               Text(
                 'Ride Estimate',
-                style: GoogleFonts.poppins(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
+                style: GoogleFonts.inter(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
                   color: AppColors.textPrimary,
                 ),
               ),
@@ -1266,10 +1340,10 @@ class _HomeScreenState extends State<HomeScreen> {
                        Container(
                          padding: const EdgeInsets.all(12),
                          decoration: BoxDecoration(
-                           color: AppColors.primary.withOpacity(0.1),
-                           borderRadius: BorderRadius.circular(12),
+                           gradient: AppGradients.mintFade,
+                           borderRadius: BorderRadius.circular(14),
                          ),
-                         child: const Icon(Icons.currency_rupee, color: AppColors.primary),
+                         child: const Icon(Icons.currency_rupee, color: AppColors.primary, size: 22),
                        ),
                        const SizedBox(width: 12),
                        Column(
@@ -1277,17 +1351,18 @@ class _HomeScreenState extends State<HomeScreen> {
                          children: [
                            Text(
                              'Estimated Fare',
-                             style: GoogleFonts.poppins(
+                             style: GoogleFonts.inter(
                                color: AppColors.textSecondary,
                                fontSize: 12,
+                               fontWeight: FontWeight.w500,
                              ),
                            ),
                            Text(
                              '₹${_estimateData!['fare']}',
-                             style: GoogleFonts.poppins(
+                             style: GoogleFonts.inter(
                                color: AppColors.textPrimary,
-                               fontSize: 24,
-                               fontWeight: FontWeight.bold,
+                               fontSize: 26,
+                               fontWeight: FontWeight.w800,
                              ),
                            ),
                          ],
@@ -1295,22 +1370,23 @@ class _HomeScreenState extends State<HomeScreen> {
                      ],
                    ),
                    
-                   // ETA
+                   // ETA Pill
                    Container(
-                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                      decoration: BoxDecoration(
                        color: AppColors.offWhite,
                        borderRadius: BorderRadius.circular(20),
+                       border: Border.all(color: AppColors.lightGrey.withValues(alpha: 0.5)),
                      ),
                      child: Row(
                        children: [
-                         const Icon(Icons.timer_outlined, size: 16, color: Colors.blue),
-                         const SizedBox(width: 4),
+                         const Icon(Icons.timer_outlined, size: 16, color: AppColors.info),
+                         const SizedBox(width: 6),
                          Text(
                            '${_estimateData!['eta_min']} min',
-                           style: GoogleFonts.poppins(
-                             fontWeight: FontWeight.w600,
-                             fontSize: 14,
+                           style: GoogleFonts.inter(
+                             fontWeight: FontWeight.w700,
+                             fontSize: 13,
                            ),
                          ),
                        ],
@@ -1322,34 +1398,41 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(height: 16),
               
               // CO2 Saved Badge
-               Container(
-                padding: const EdgeInsets.all(12),
+              Container(
+                padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Colors.green[50]!, Colors.green[100]!],
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFFECFDF5), Color(0xFFD1FAE5)],
                   ),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.green[200]!),
+                  borderRadius: BorderRadius.circular(16),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.eco, color: AppColors.primary),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: AppColors.primaryLight.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.eco, color: AppColors.primary, size: 20),
+                    ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Green Choice',
-                            style: GoogleFonts.poppins(
+                            'Green Choice 🌱',
+                            style: GoogleFonts.inter(
                               color: AppColors.primaryDark,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
                             ),
                           ),
+                          const SizedBox(height: 2),
                           Text(
-                            'You save ${_estimateData!['co2_saved_g']}g of CO2 with this Eco-Ride!',
-                            style: GoogleFonts.poppins(
+                            'Save ${_estimateData!['co2_saved_g']}g CO₂ with this Eco-Ride!',
+                            style: GoogleFonts.inter(
                               color: AppColors.primary,
                               fontSize: 12,
                             ),
@@ -1367,38 +1450,58 @@ class _HomeScreenState extends State<HomeScreen> {
               Row(
                 children: [
                   Expanded(
-                    child: OutlinedButton(
-                      onPressed: () {
-                         setState(() {
-                           _estimateData = null;
-                           _polylines = {};
-                           _markers.removeWhere((m) => m.markerId.value == 'pickup' || m.markerId.value == 'destination');
-                           _pickupController.clear();
-                           _searchController.clear();
-                           _pickupPosition = null;
-                           _destinationPosition = null;
-                         });
-                      },
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        side: const BorderSide(color: Colors.grey),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    child: Container(
+                      height: 52,
+                      decoration: BoxDecoration(
+                        color: AppColors.offWhite,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppColors.lightGrey),
                       ),
-                      child: Text('Cancel', style: GoogleFonts.poppins(color: Colors.black)),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () {
+                            setState(() {
+                              _estimateData = null;
+                              _polylines = {};
+                              _markers.removeWhere((m) => m.markerId.value == 'pickup' || m.markerId.value == 'destination');
+                              _pickupController.clear();
+                              _searchController.clear();
+                              _pickupPosition = null;
+                              _destinationPosition = null;
+                            });
+                          },
+                          borderRadius: BorderRadius.circular(16),
+                          child: Center(
+                            child: Text('Cancel', style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 16),
+                  const SizedBox(width: 14),
                   Expanded(
-                    child: ElevatedButton(
-                      onPressed: _handleRequestRide,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                         elevation: 0,
+                    flex: 2,
+                    child: Container(
+                      height: 52,
+                      decoration: BoxDecoration(
+                        gradient: AppGradients.primaryButton,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: AppShadows.glow,
                       ),
-                      child: Text('Request Ride', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: _handleRequestRide,
+                          borderRadius: BorderRadius.circular(16),
+                          child: Center(
+                            child: Text(
+                              'Find Ride',
+                              style: GoogleFonts.inter(fontWeight: FontWeight.w700, color: AppColors.white, fontSize: 16),
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -1481,7 +1584,7 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Text(
                   title,
-                  style: GoogleFonts.poppins(
+                  style: GoogleFonts.inter(
                     color: AppColors.textPrimary,
                     fontWeight: FontWeight.w600,
                     fontSize: 13,
@@ -1489,7 +1592,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 Text(
                   subtitle,
-                  style: GoogleFonts.poppins(
+                  style: GoogleFonts.inter(
                     color: AppColors.textSecondary,
                     fontSize: 10,
                   ),
@@ -1527,7 +1630,7 @@ class _HomeScreenState extends State<HomeScreen> {
       children: [
         Text(
           value,
-          style: GoogleFonts.poppins(
+          style: GoogleFonts.inter(
             color: AppColors.primary,
             fontSize: 18,
             fontWeight: FontWeight.bold,
@@ -1536,7 +1639,7 @@ class _HomeScreenState extends State<HomeScreen> {
         const SizedBox(height: 4),
         Text(
           label,
-          style: GoogleFonts.poppins(
+          style: GoogleFonts.inter(
             color: AppColors.textSecondary,
             fontSize: 10,
           ),
@@ -1564,8 +1667,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               child: Column(
                 children: [
-                  Text('0', style: GoogleFonts.poppins(color: AppColors.primary, fontSize: 24, fontWeight: FontWeight.bold)),
-                  Text('Available', style: GoogleFonts.poppins(color: AppColors.textSecondary, fontSize: 12)),
+                  Text('0', style: GoogleFonts.inter(color: AppColors.primary, fontSize: 24, fontWeight: FontWeight.bold)),
+                  Text('Available', style: GoogleFonts.inter(color: AppColors.textSecondary, fontSize: 12)),
                 ],
               ),
             ),
@@ -1580,8 +1683,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               child: Column(
                 children: [
-                   Text('0', style: GoogleFonts.poppins(color: Colors.orange, fontSize: 24, fontWeight: FontWeight.bold)),
-                  Text('Busy', style: GoogleFonts.poppins(color: AppColors.textSecondary, fontSize: 12)),
+                   Text('0', style: GoogleFonts.inter(color: Colors.orange, fontSize: 24, fontWeight: FontWeight.bold)),
+                  Text('Busy', style: GoogleFonts.inter(color: AppColors.textSecondary, fontSize: 12)),
                 ],
               ),
             ),
@@ -1603,34 +1706,34 @@ class _HomeScreenState extends State<HomeScreen> {
               backgroundImage: _userPhoto != null ? NetworkImage(_userPhoto!) : null,
               child: _userPhoto == null ? const Icon(Icons.person, color: AppColors.primary) : null,
             ),
-            accountName: Text(_userName ?? 'User', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
-            accountEmail: Text(_userEmail ?? '', style: GoogleFonts.poppins()),
+            accountName: Text(_userName ?? 'User', style: GoogleFonts.inter(fontWeight: FontWeight.bold)),
+            accountEmail: Text(_userEmail ?? '', style: GoogleFonts.inter()),
           ),
           ListTile(
             leading: const Icon(Icons.history, color: AppColors.textPrimary),
-            title: Text('Ride History', style: GoogleFonts.poppins(color: AppColors.textPrimary)),
+            title: Text('Ride History', style: GoogleFonts.inter(color: AppColors.textPrimary)),
             onTap: () {},
           ),
           ListTile(
             leading: const Icon(Icons.payment, color: AppColors.textPrimary),
-            title: Text('Payment Methods', style: GoogleFonts.poppins(color: AppColors.textPrimary)),
+            title: Text('Payment Methods', style: GoogleFonts.inter(color: AppColors.textPrimary)),
             onTap: () {},
           ),
           ListTile(
             leading: const Icon(Icons.card_giftcard, color: AppColors.textPrimary),
-            title: Text('Promos', style: GoogleFonts.poppins(color: AppColors.textPrimary)),
+            title: Text('Promos', style: GoogleFonts.inter(color: AppColors.textPrimary)),
             onTap: () {},
           ),
           ListTile(
             leading: const Icon(Icons.help_outline, color: AppColors.textPrimary),
-            title: Text('Support', style: GoogleFonts.poppins(color: AppColors.textPrimary)),
+            title: Text('Support', style: GoogleFonts.inter(color: AppColors.textPrimary)),
             onTap: () {},
           ),
           const Spacer(),
           const Divider(color: AppColors.lightGrey),
           ListTile(
             leading: const Icon(Icons.logout, color: Colors.red),
-            title: Text('Logout', style: GoogleFonts.poppins(color: Colors.red)),
+            title: Text('Logout', style: GoogleFonts.inter(color: Colors.red)),
             onTap: _handleLogout,
           ),
           const SizedBox(height: 20),

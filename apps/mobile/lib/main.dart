@@ -8,6 +8,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_stripe/flutter_stripe.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'core/constants/app_constants.dart';
@@ -54,6 +55,9 @@ void main() async {
     ),
   );
 
+  // Initialize Stripe
+  Stripe.publishableKey = ApiConfig.stripePublishableKey;
+
   runApp(const EcoRideApp());
 }
 
@@ -95,49 +99,53 @@ class EcoRideApp extends StatelessWidget {
         onError: AppColors.white,
       ),
 
-      // Text Theme
-      textTheme: GoogleFonts.poppinsTextTheme().copyWith(
-        displayLarge: GoogleFonts.poppins(
-          fontSize: 32,
-          fontWeight: FontWeight.bold,
+      // Text Theme — Inter for modern clarity
+      textTheme: GoogleFonts.interTextTheme().copyWith(
+        displayLarge: GoogleFonts.inter(
+          fontSize: 34,
+          fontWeight: FontWeight.w800,
           color: AppColors.textPrimary,
+          letterSpacing: -0.8,
         ),
-        displayMedium: GoogleFonts.poppins(
+        displayMedium: GoogleFonts.inter(
           fontSize: 28,
-          fontWeight: FontWeight.bold,
+          fontWeight: FontWeight.w700,
           color: AppColors.textPrimary,
+          letterSpacing: -0.5,
         ),
-        displaySmall: GoogleFonts.poppins(
+        displaySmall: GoogleFonts.inter(
           fontSize: 24,
           fontWeight: FontWeight.w600,
           color: AppColors.textPrimary,
         ),
-        headlineMedium: GoogleFonts.poppins(
+        headlineMedium: GoogleFonts.inter(
           fontSize: 20,
           fontWeight: FontWeight.w600,
           color: AppColors.textPrimary,
         ),
-        titleLarge: GoogleFonts.poppins(
+        titleLarge: GoogleFonts.inter(
           fontSize: 18,
           fontWeight: FontWeight.w600,
           color: AppColors.textPrimary,
         ),
-        titleMedium: GoogleFonts.poppins(
+        titleMedium: GoogleFonts.inter(
           fontSize: 16,
           fontWeight: FontWeight.w500,
           color: AppColors.textPrimary,
         ),
-        bodyLarge: GoogleFonts.poppins(
+        bodyLarge: GoogleFonts.inter(
           fontSize: 16,
           fontWeight: FontWeight.w400,
           color: AppColors.textPrimary,
+          height: 1.5,
         ),
-        bodyMedium: GoogleFonts.poppins(
+        bodyMedium: GoogleFonts.inter(
           fontSize: 14,
           fontWeight: FontWeight.w400,
           color: AppColors.textPrimary,
+          height: 1.5,
         ),
-        labelLarge: GoogleFonts.poppins(
+        labelLarge: GoogleFonts.inter(
           fontSize: 14,
           fontWeight: FontWeight.w600,
           color: AppColors.textPrimary,
@@ -146,30 +154,30 @@ class EcoRideApp extends StatelessWidget {
 
       // AppBar Theme
       appBarTheme: AppBarTheme(
-        backgroundColor: AppColors.background,
+        backgroundColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
         centerTitle: true,
         iconTheme: const IconThemeData(color: AppColors.textPrimary),
-        titleTextStyle: GoogleFonts.poppins(
+        titleTextStyle: GoogleFonts.inter(
           fontSize: 18,
           fontWeight: FontWeight.w600,
           color: AppColors.textPrimary,
         ),
       ),
 
-      // Button Themes
+      // Button Themes — Pill shaped with gradient-ready
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.primary,
           foregroundColor: AppColors.white,
-          elevation: 2,
-          shadowColor: AppColors.primary.withValues(alpha: 0.3),
+          elevation: 0,
+          shadowColor: Colors.transparent,
           minimumSize: const Size.fromHeight(AppDimens.buttonHeight),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppDimens.radiusMD),
+            borderRadius: BorderRadius.circular(16),
           ),
-          textStyle: GoogleFonts.poppins(
+          textStyle: GoogleFonts.inter(
             fontSize: 16,
             fontWeight: FontWeight.w600,
           ),
@@ -179,7 +187,7 @@ class EcoRideApp extends StatelessWidget {
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
           foregroundColor: AppColors.primary,
-          textStyle: GoogleFonts.poppins(
+          textStyle: GoogleFonts.inter(
             fontSize: 14,
             fontWeight: FontWeight.w600,
           ),
@@ -189,12 +197,12 @@ class EcoRideApp extends StatelessWidget {
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           foregroundColor: AppColors.primary,
-          side: const BorderSide(color: AppColors.primary, width: 1.5),
+          side: const BorderSide(color: AppColors.lightGrey, width: 1.5),
           minimumSize: const Size.fromHeight(AppDimens.buttonHeight),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppDimens.radiusMD),
+            borderRadius: BorderRadius.circular(16),
           ),
-          textStyle: GoogleFonts.poppins(
+          textStyle: GoogleFonts.inter(
             fontSize: 16,
             fontWeight: FontWeight.w600,
           ),
@@ -206,42 +214,42 @@ class EcoRideApp extends StatelessWidget {
         filled: true,
         fillColor: AppColors.offWhite,
         contentPadding: const EdgeInsets.symmetric(
-          horizontal: AppDimens.paddingMD,
-          vertical: AppDimens.paddingMD,
+          horizontal: 20,
+          vertical: 18,
         ),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(AppDimens.radiusMD),
-          borderSide: const BorderSide(color: AppColors.lightGrey),
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide.none,
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(AppDimens.radiusMD),
-          borderSide: const BorderSide(color: AppColors.lightGrey),
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: AppColors.lightGrey.withValues(alpha: 0.5)),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(AppDimens.radiusMD),
-          borderSide: const BorderSide(color: AppColors.primary, width: 2),
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(color: AppColors.primaryLight, width: 2),
         ),
         errorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(AppDimens.radiusMD),
+          borderRadius: BorderRadius.circular(16),
           borderSide: const BorderSide(color: AppColors.error),
         ),
-        labelStyle: GoogleFonts.poppins(
+        labelStyle: GoogleFonts.inter(
           color: AppColors.textSecondary,
           fontWeight: FontWeight.w500,
         ),
-        hintStyle: GoogleFonts.poppins(
+        hintStyle: GoogleFonts.inter(
           color: AppColors.grey,
           fontSize: 14,
         ),
       ),
 
-      // Card Theme
+      // Card Theme — Frosted glass ready
       cardTheme: CardThemeData(
         color: AppColors.cardBackground,
-        elevation: 2,
-        shadowColor: Colors.black.withValues(alpha: 0.1),
+        elevation: 0,
+        shadowColor: Colors.transparent,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppDimens.radiusMD),
+          borderRadius: BorderRadius.circular(20),
         ),
       ),
 
@@ -254,12 +262,12 @@ class EcoRideApp extends StatelessWidget {
       // Snackbar Theme
       snackBarTheme: SnackBarThemeData(
         backgroundColor: AppColors.textPrimary,
-        contentTextStyle: GoogleFonts.poppins(
+        contentTextStyle: GoogleFonts.inter(
           color: AppColors.white,
           fontWeight: FontWeight.w500,
         ),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppDimens.radiusMD),
+          borderRadius: BorderRadius.circular(16),
         ),
         behavior: SnackBarBehavior.floating,
       ),
@@ -270,11 +278,11 @@ class EcoRideApp extends StatelessWidget {
         selectedItemColor: AppColors.primary,
         unselectedItemColor: AppColors.grey,
         type: BottomNavigationBarType.fixed,
-        selectedLabelStyle: GoogleFonts.poppins(
+        selectedLabelStyle: GoogleFonts.inter(
           fontSize: 12,
           fontWeight: FontWeight.w600,
         ),
-        unselectedLabelStyle: GoogleFonts.poppins(
+        unselectedLabelStyle: GoogleFonts.inter(
           fontSize: 12,
           fontWeight: FontWeight.w400,
         ),

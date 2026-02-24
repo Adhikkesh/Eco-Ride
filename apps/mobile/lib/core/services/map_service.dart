@@ -670,4 +670,58 @@ class MapService {
     debugPrint('MapService: Final polyline point count: ${points.length}');
     return points;
   }
+
+  // ===== Payment =====
+
+  /// Create a Stripe PaymentIntent for a completed ride
+  static Future<Map<String, dynamic>?> createPaymentIntent(String rideId) async {
+    try {
+      final token = await AuthService.instance.getIdToken();
+      if (token == null) return null;
+
+      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.createPaymentIntent}');
+      debugPrint('MapService: Creating payment intent for ride $rideId');
+
+      final response = await _client.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: json.encode({'rideId': rideId}),
+      );
+
+      debugPrint('MapService: Payment intent status: ${response.statusCode}');
+      return json.decode(response.body);
+    } catch (e) {
+      debugPrint('MapService: Error creating payment intent: $e');
+      return null;
+    }
+  }
+
+  /// Confirm payment after Stripe succeeds
+  static Future<Map<String, dynamic>?> confirmPayment(String rideId, double amount) async {
+    try {
+      final token = await AuthService.instance.getIdToken();
+      if (token == null) return null;
+
+      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.confirmPayment}');
+      debugPrint('MapService: Confirming payment for ride $rideId, amount: $amount');
+
+      final response = await _client.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: json.encode({'rideId': rideId, 'amount': amount}),
+      );
+
+      debugPrint('MapService: Confirm payment status: ${response.statusCode}');
+      return json.decode(response.body);
+    } catch (e) {
+      debugPrint('MapService: Error confirming payment: $e');
+      return null;
+    }
+  }
 }

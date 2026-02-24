@@ -36,9 +36,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   String? _kycFileName;
   String? _licenseFileName;
 
-  // Design Colors
-  static const Color sageGreen = Color(0xFFC8E6C9);
-  static const Color ecoGreen = Color(0xFF4CAF50);
+  // Design Colors – updated to match design system
+  static const Color sageGreen = Color(0xFFECFDF5);
+  static const Color ecoGreen = Color(0xFF0D6B3B);
 
   @override
   void initState() {
@@ -205,17 +205,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Widget _buildMainCard() {
     return Container(
       constraints: const BoxConstraints(maxWidth: 500),
-      padding: const EdgeInsets.all(32),
+      padding: const EdgeInsets.all(28),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.white.withValues(alpha: 0.9),
         borderRadius: BorderRadius.circular(28),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          ),
-        ],
+        boxShadow: AppShadows.card,
       ),
       child: Form(
         key: _formKey,
@@ -223,36 +217,40 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           children: [
             // Icon
             Container(
-              padding: const EdgeInsets.all(12),
+              width: 72,
+              height: 72,
               decoration: BoxDecoration(
-                color: const Color(0xFF2E7D32),
-                shape: BoxShape.circle,
+                gradient: AppGradients.primaryButton,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: AppShadows.glow,
               ),
-              child: const Icon(Icons.directions_car, color: Colors.white, size: 32),
+              child: const Icon(Icons.directions_car_rounded, color: Colors.white, size: 36),
             ),
             const SizedBox(height: 16),
             
             // Title
             Text(
               'Complete Your Profile',
-              style: GoogleFonts.poppins(
+              style: GoogleFonts.inter(
                 fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF212121),
+                fontWeight: FontWeight.w800,
+                color: AppColors.textPrimary,
+                letterSpacing: -0.5,
               ),
             ),
+            const SizedBox(height: 4),
             Text(
               'Just a few more details to get you started',
-              style: GoogleFonts.poppins(
+              style: GoogleFonts.inter(
                 fontSize: 14,
-                color: Colors.grey[600],
+                color: AppColors.textSecondary,
               ),
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: 28),
 
             // Basic Fields
             _buildTextField(_nameController, 'Full Name', Icons.person_outline),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             _buildTextField(_phoneController, 'Phone Number', Icons.phone_outlined, keyboardType: TextInputType.phone),
             const SizedBox(height: 24),
 
@@ -261,10 +259,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               alignment: Alignment.centerLeft,
               child: Text(
                 'I want to join as',
-                style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14),
+                style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 14, color: AppColors.textSecondary),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Row(
               children: [
                 Expanded(child: _buildRoleChip(UserRole.rider, '🏃 Rider')),
@@ -280,21 +278,27 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               const SizedBox(height: 24),
             ],
 
-            // Submit Button
-            SizedBox(
+            // Gradient Submit Button
+            Container(
               width: double.infinity,
               height: 56,
-              child: ElevatedButton(
-                onPressed: _isLoading ? null : _handleSubmit,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: ecoGreen,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  elevation: 0,
+              decoration: BoxDecoration(
+                gradient: _isLoading ? null : AppGradients.primaryButton,
+                color: _isLoading ? AppColors.grey : null,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: _isLoading ? [] : AppShadows.glow,
+              ),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: _isLoading ? null : _handleSubmit,
+                  borderRadius: BorderRadius.circular(16),
+                  child: Center(
+                    child: _isLoading 
+                      ? const SizedBox(height: 24, width: 24, child: CircularProgressIndicator(strokeWidth: 2.5, valueColor: AlwaysStoppedAnimation<Color>(Colors.white)))
+                      : Text('Complete Registration', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
+                  ),
                 ),
-                child: _isLoading 
-                  ? const CircularProgressIndicator(color: Colors.white)
-                  : Text('Complete Registration', style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.bold)),
               ),
             ),
           ],
@@ -307,19 +311,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final isSelected = _selectedRole == role;
     return GestureDetector(
       onTap: () => setState(() => _selectedRole = role),
-      child: Container(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
         padding: const EdgeInsets.symmetric(vertical: 14),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: isSelected ? ecoGreen : Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: isSelected ? ecoGreen : Colors.grey[300]!),
+          gradient: isSelected ? AppGradients.primaryButton : null,
+          color: isSelected ? null : AppColors.offWhite,
+          borderRadius: BorderRadius.circular(14),
+          border: isSelected ? null : Border.all(color: AppColors.lightGrey),
+          boxShadow: isSelected ? AppShadows.soft : [],
         ),
         child: Text(
           label,
-          style: GoogleFonts.poppins(
-            fontWeight: FontWeight.bold,
-            color: isSelected ? Colors.white : Colors.black87,
+          style: GoogleFonts.inter(
+            fontWeight: FontWeight.w700,
+            color: isSelected ? Colors.white : AppColors.textSecondary,
           ),
         ),
       ),
@@ -330,16 +337,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFF9FBE7),
+        color: const Color(0xFFECFDF5),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.lime[100]!),
+        border: Border.all(color: AppColors.mint),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             'Driver Information',
-            style: GoogleFonts.poppins(fontWeight: FontWeight.bold, color: const Color(0xFF689F38)),
+            style: GoogleFonts.inter(fontWeight: FontWeight.w700, color: AppColors.primary),
           ),
           const SizedBox(height: 16),
           _buildFileUpload('KYC Document (PDF,JPEG)', _kycFileName, () => _pickFile(true)),
@@ -357,10 +364,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 child: Checkbox(
                   value: _isEv,
                   onChanged: (v) => setState(() => _isEv = v ?? false),
-                  activeColor: ecoGreen,
+                  activeColor: AppColors.primaryLight,
                 ),
               ),
-              Text('This is an Electric Vehicle (EV)', style: GoogleFonts.poppins(fontSize: 13)),
+              Text('This is an Electric Vehicle (EV)', style: GoogleFonts.inter(fontSize: 13, color: AppColors.textPrimary)),
             ],
           ),
           const SizedBox(height: 8),
@@ -407,7 +414,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w500)),
+        Text(label, style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w500)),
         const SizedBox(height: 6),
         InkWell(
           onTap: onTap,
