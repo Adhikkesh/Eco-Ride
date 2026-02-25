@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -40,6 +42,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   bool _isNavigating = false;
   Set<Marker> _markers = {};
   Set<Polyline> _polylines = {};
+  BitmapDescriptor? _carIcon;
+
+  // Simulation state (moves car along polyline like web simulator)
+  Timer? _simTimer;
+  List<LatLng> _simRoutePoints = [];
+  double _simDistanceTraveled = 0;
+  double _simTotalDistance = 0;
+  static const double _simSpeedMps = 12.5; // ~45 km/h in m/s
   
   // Ride lifecycle state
   String _rideStatus = 'idle'; // idle, pending, matched, arrived, in_progress, completed
@@ -48,16 +58,20 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   String? _riderPhone;
   bool _isAccepting = false;
   bool _isDeclining = false;
+  bool _isArriving = false;
   final TextEditingController _otpController = TextEditingController();
 
   String? _userName;
   String? _userPhoto;
+  StreamSubscription<DatabaseEvent>? _paymentSubscription;
+  double? _paidFare;
 
   @override
   void initState() {
     super.initState();
     _loadUserData();
     _checkInitialLocation();
+    _createCarIcon();
   }
 
   @override
@@ -66,6 +80,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     _pendingRideSubscription?.cancel();
     _rideSubscription?.cancel();
     _otpTimer?.cancel();
+    _paymentSubscription?.cancel();
+    _simTimer?.cancel();
     _otpController.dispose();
     if (_isOnline) {
       _goOffline();
@@ -151,13 +167,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
         if (mounted) {
           setState(() {
-            _currentPosition = newPos;
-            _currentHeading = heading;
+            // During navigation, simulation controls position — skip GPS updates
+            if (!_isNavigating) {
+              _currentPosition = newPos;
+              _currentHeading = heading;
+            }
           });
         }
 
-        _updateFirebaseLocation(newPos, heading);
-        _updateCamera(newPos);
+        // Only write GPS to Firebase and update camera when NOT navigating
+        if (!_isNavigating) {
+          _updateFirebaseLocation(newPos, heading);
+          _updateCamera(newPos);
+        }
       });
 
       // Listen for PENDING ride requests (driver must accept/decline)
@@ -370,7 +392,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         newPolylines.add(Polyline(
           polylineId: const PolylineId('to_pickup'),
           points: points,
-          color: Colors.blue,
+          color: const Color(0xFF2196F3), // Blue
           width: 5,
         ));
         allPoints.addAll(points);
@@ -382,17 +404,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         newPolylines.add(Polyline(
           polylineId: const PolylineId('to_destination'),
           points: points,
-          color: Colors.green,
+          color: const Color(0xFF4CAF50), // Green
           width: 5,
         ));
         allPoints.addAll(points);
       }
 
-      // Add markers for pickup and destination
+      // Add markers for pickup (blue) and destination (red)
       newMarkers.add(Marker(
         markerId: const MarkerId('pickup'),
         position: pickupLatLng,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
         infoWindow: InfoWindow(
           title: 'Pickup',
           snippet: _currentRide!['pickupName'] as String? ?? 'Pickup Location',
@@ -408,10 +430,30 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         ),
       ));
 
+      // Add the driver's car marker
+      if (_currentPosition != null) {
+        newMarkers.add(
+          Marker(
+            markerId: const MarkerId('driver_car'),
+            position: _currentPosition!,
+            rotation: _currentHeading,
+            anchor: const Offset(0.5, 0.5),
+            flat: true,
+            icon: _carIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+            zIndex: 10,
+          ),
+        );
+      }
+
       setState(() {
         _polylines = newPolylines;
         _markers = newMarkers;
       });
+
+      // Start simulation: move car along the to_pickup route
+      if (toPickup != null) {
+        _startSimulation(toPickup['points'] as List<LatLng>);
+      }
 
       // Fit camera to show all points
       if (allPoints.isNotEmpty) {
@@ -460,33 +502,39 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   Future<void> _handleArriveAtPickup() async {
     if (_rideId == null) return;
     
-    setState(() => _isLoading = true);
+    setState(() => _isArriving = true);
 
     try {
       // Notify backend (best-effort — timer starts regardless)
-      final result = await MapService.arriveAtPickup(_rideId!);
+      final result = await MapService.arriveAtPickup(_rideId!).timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => null,
+      );
       if (result != null && result['success'] == true) {
         debugPrint('DriverHome: Backend notified of arrival');
       } else {
-        debugPrint('DriverHome: Backend arrive call failed: ${result?['message']}');
+        debugPrint('DriverHome: Backend arrive call failed or timed out');
       }
     } catch (e) {
       debugPrint('DriverHome: Error notifying arrival: $e');
-    }
-
-    // Always transition to arrived state and start timer
-    if (mounted) {
-      setState(() {
-        _rideStatus = 'arrived';
-        _isLoading = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Arrived! Waiting for rider (5 min timer started)'),
-          backgroundColor: Colors.green,
-        ),
-      );
-      _startOtpTimer();
+    } finally {
+      // Always transition to arrived state and start timer
+      if (mounted) {
+        _stopSimulation(); // Stop car simulation since we've arrived
+        setState(() {
+          _rideStatus = 'arrived';
+          _isArriving = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Arrived! Waiting for rider (5 min timer started)'),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.only(top: 10, left: 16, right: 16, bottom: 600),
+          ),
+        );
+        _startOtpTimer();
+      }
     }
   }
 
@@ -527,12 +575,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final result = await MapService.startRide(_rideId!, otp);
     if (result != null && result['success'] == true && mounted) {
       setState(() => _rideStatus = 'in_progress');
+      _otpTimer?.cancel();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Trip started! 🚗'),
           backgroundColor: Colors.green,
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.only(top: 10, left: 16, right: 16, bottom: 600),
         ),
       );
+
+      // Start simulation from pickup to destination
+      _startTripSimulation();
     } else {
       final message = result?['message'] ?? 'Failed to start ride. Check OTP.';
       if (mounted) {
@@ -543,19 +597,68 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     }
   }
 
+  /// Fetch pickup→destination route and start new simulation
+  Future<void> _startTripSimulation() async {
+    if (_currentRide == null) return;
+
+    final pickup = _currentRide!['pickup'];
+    final drop = _currentRide!['drop'];
+    if (pickup == null || drop == null) return;
+
+    final pickupLatLng = LatLng(
+      (pickup['lat'] as num).toDouble(),
+      (pickup['lng'] as num).toDouble(),
+    );
+    final dropLatLng = LatLng(
+      (drop['lat'] as num).toDouble(),
+      (drop['lng'] as num).toDouble(),
+    );
+
+    try {
+      final directions = await MapService.getDirections(pickupLatLng, dropLatLng);
+      if (directions != null && mounted) {
+        final points = directions['points'] as List<LatLng>;
+
+        // Clear old polylines and show only trip route (green)
+        setState(() {
+          _polylines.clear();
+          _polylines.add(
+            Polyline(
+              polylineId: const PolylineId('to_destination'),
+              points: points,
+              color: const Color(0xFF4CAF50),
+              width: 5,
+            ),
+          );
+          // Remove pickup marker since trip has started
+          _markers.removeWhere((m) => m.markerId.value == 'pickup');
+          _isNavigating = true;
+        });
+
+        // Start car simulation along trip route
+        _startSimulation(points);
+      }
+    } catch (e) {
+      debugPrint('DriverHome: Error starting trip simulation: $e');
+    }
+  }
+
   /// Complete the ride via backend
   Future<void> _handleCompleteRide() async {
     if (_rideId == null) return;
 
     final result = await MapService.completeRide(_rideId!);
     if (result != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Trip completed! 🎉'),
-          backgroundColor: Colors.green,
-        ),
-      );
-      _resetRideState();
+      // Transition to waiting for payment state
+      setState(() {
+        _rideStatus = 'waiting_payment';
+        _paidFare = null;
+        _polylines.clear();
+        _markers.clear();
+        _isNavigating = false;
+      });
+      // Start listening for payment on this ride
+      _startPaymentListener(_rideId!);
     } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Error completing ride')),
@@ -563,8 +666,38 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     }
   }
 
+  /// Listen for payment confirmation on RTDB
+  void _startPaymentListener(String rideId) {
+    _paymentSubscription?.cancel();
+    debugPrint('DriverHome: Listening for payment at rides/$rideId');
+    _paymentSubscription = _rtdb.ref('rides/$rideId').onValue.listen((event) {
+      final data = event.snapshot.value as Map<dynamic, dynamic>?;
+      if (data == null) return;
+
+      final status = data['status'] as String?;
+      final paymentStatus = data['paymentStatus'] as String?;
+      final paidAmount = data['paidAmount'];
+      final fare = data['fare'];
+
+      debugPrint('DriverHome: Payment check — status=$status, paymentStatus=$paymentStatus, paidAmount=$paidAmount, fare=$fare');
+
+      if (paymentStatus == 'PAID' || status == 'PAYMENT_CONFIRMED') {
+        final amount = (paidAmount as num?)?.toDouble() ?? (fare as num?)?.toDouble() ?? 0;
+        debugPrint('DriverHome: Payment received! Amount: $amount');
+        if (mounted) {
+          setState(() {
+            _paidFare = amount;
+          });
+        }
+      }
+    });
+  }
+
   /// Reset all ride state
   void _resetRideState() {
+    _paymentSubscription?.cancel();
+    _paymentSubscription = null;
+    _stopSimulation();
     setState(() {
       _currentRide = null;
       _pendingRide = null;
@@ -573,6 +706,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       _rideId = null;
       _riderName = null;
       _riderPhone = null;
+      _paidFare = null;
       _polylines.clear();
       _markers.clear();
     });
@@ -611,6 +745,223 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     }
 
     setState(() => _isOnline = false);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // SIMULATION: Move car along polyline (mirrors backend DriverAgent)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /// Start simulation along a list of polyline points
+  void _startSimulation(List<LatLng> routePoints) {
+    _stopSimulation();
+    if (routePoints.length < 2) return;
+
+    _simRoutePoints = routePoints;
+    _simDistanceTraveled = 0;
+
+    // Calculate total route distance
+    _simTotalDistance = 0;
+    for (int i = 1; i < routePoints.length; i++) {
+      _simTotalDistance += _haversine(routePoints[i - 1], routePoints[i]);
+    }
+
+    debugPrint('DriverSim: Starting simulation, ${routePoints.length} points, ${_simTotalDistance.toStringAsFixed(0)}m total');
+
+    // 1-second tick loop (like backend simulator)
+    _simTimer = Timer.periodic(const Duration(seconds: 1), (_) => _simTick());
+  }
+
+  /// Stop simulation
+  void _stopSimulation() {
+    _simTimer?.cancel();
+    _simTimer = null;
+    _simRoutePoints = [];
+    _simDistanceTraveled = 0;
+    _simTotalDistance = 0;
+  }
+
+  /// Each tick: advance along route, update marker + RTDB + trim polyline
+  void _simTick() {
+    if (_simRoutePoints.length < 2) return;
+
+    // Advance distance
+    _simDistanceTraveled += _simSpeedMps; // ~12.5m per tick at 45 km/h
+
+    if (_simDistanceTraveled >= _simTotalDistance) {
+      // Arrived at end of route
+      _simDistanceTraveled = _simTotalDistance;
+      final lastPt = _simRoutePoints.last;
+      _updateSimPosition(lastPt, _currentHeading);
+      _stopSimulation();
+      debugPrint('DriverSim: Reached end of route');
+      return;
+    }
+
+    // Find position along polyline at _simDistanceTraveled
+    double accumulated = 0;
+    for (int i = 1; i < _simRoutePoints.length; i++) {
+      final segLen = _haversine(_simRoutePoints[i - 1], _simRoutePoints[i]);
+      if (accumulated + segLen >= _simDistanceTraveled) {
+        // Interpolate within this segment
+        final remaining = _simDistanceTraveled - accumulated;
+        final fraction = segLen > 0 ? remaining / segLen : 0.0;
+
+        final lat = _simRoutePoints[i - 1].latitude +
+            (_simRoutePoints[i].latitude - _simRoutePoints[i - 1].latitude) * fraction;
+        final lng = _simRoutePoints[i - 1].longitude +
+            (_simRoutePoints[i].longitude - _simRoutePoints[i - 1].longitude) * fraction;
+
+        final interpPos = LatLng(lat, lng);
+
+        // Calculate heading from previous to current
+        final heading = _bearing(_simRoutePoints[i - 1], _simRoutePoints[i]);
+
+        _updateSimPosition(interpPos, heading);
+
+        // Trim active polyline: show only remaining points ahead of the car
+        final remainingPoints = <LatLng>[interpPos, ..._simRoutePoints.sublist(i)];
+        setState(() {
+          // Determine which polyline is active and trim it
+          final hasPickup = _polylines.any((p) => p.polylineId.value == 'to_pickup');
+          final polyId = hasPickup ? 'to_pickup' : 'to_destination';
+          final polyColor = hasPickup ? const Color(0xFF2196F3) : const Color(0xFF4CAF50);
+
+          _polylines.removeWhere((p) => p.polylineId.value == polyId);
+          _polylines.add(
+            Polyline(
+              polylineId: PolylineId(polyId),
+              points: remainingPoints,
+              color: polyColor,
+              width: 5,
+            ),
+          );
+        });
+        return;
+      }
+      accumulated += segLen;
+    }
+  }
+
+  /// Update car marker position and write to RTDB
+  void _updateSimPosition(LatLng pos, double heading) {
+    if (!mounted) return;
+
+    setState(() {
+      _currentPosition = pos;
+      _currentHeading = heading;
+
+      // Update car marker
+      _markers.removeWhere((m) => m.markerId.value == 'driver_car');
+      _markers.add(
+        Marker(
+          markerId: const MarkerId('driver_car'),
+          position: pos,
+          rotation: heading,
+          anchor: const Offset(0.5, 0.5),
+          flat: true,
+          icon: _carIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          zIndex: 10,
+        ),
+      );
+    });
+
+    // Write to RTDB so rider app can see movement
+    _updateFirebaseLocation(pos, heading);
+  }
+
+  /// Haversine distance in meters
+  double _haversine(LatLng a, LatLng b) {
+    const R = 6371000.0; // Earth radius in meters
+    final dLat = _toRad(b.latitude - a.latitude);
+    final dLng = _toRad(b.longitude - a.longitude);
+    final sinLat = math.sin(dLat / 2);
+    final sinLng = math.sin(dLng / 2);
+    final h = sinLat * sinLat +
+        math.cos(_toRad(a.latitude)) * math.cos(_toRad(b.latitude)) * sinLng * sinLng;
+    return 2 * R * math.asin(math.sqrt(h));
+  }
+
+  /// Calculate bearing from point a to point b in degrees
+  double _bearing(LatLng a, LatLng b) {
+    final dLng = _toRad(b.longitude - a.longitude);
+    final lat1 = _toRad(a.latitude);
+    final lat2 = _toRad(b.latitude);
+    final y = math.sin(dLng) * math.cos(lat2);
+    final x = math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(dLng);
+    return (_toDeg(math.atan2(y, x)) + 360) % 360;
+  }
+
+  double _toRad(double deg) => deg * math.pi / 180;
+  double _toDeg(double rad) => rad * 180 / math.pi;
+
+  /// Create a custom car icon from canvas (same as rider app)
+  Future<void> _createCarIcon() async {
+    try {
+      const double size = 48;
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+
+      final bodyPaint = Paint()..color = const Color(0xFF22C55E);
+      final shadowPaint = Paint()..color = const Color(0xFF16A34A);
+
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(size * 0.2, size * 0.15, size * 0.6, size * 0.75),
+          const Radius.circular(6),
+        ),
+        shadowPaint,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(size * 0.22, size * 0.12, size * 0.56, size * 0.72),
+          const Radius.circular(5),
+        ),
+        bodyPaint,
+      );
+
+      final roofPaint = Paint()..color = const Color(0xFF86EFAC);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(size * 0.28, size * 0.28, size * 0.44, size * 0.3),
+          const Radius.circular(3),
+        ),
+        roofPaint,
+      );
+
+      final lightPaint = Paint()..color = Colors.white;
+      canvas.drawCircle(Offset(size * 0.32, size * 0.18), 2, lightPaint);
+      canvas.drawCircle(Offset(size * 0.68, size * 0.18), 2, lightPaint);
+
+      final rearPaint = Paint()..color = const Color(0xFFEF4444);
+      canvas.drawCircle(Offset(size * 0.32, size * 0.8), 2, rearPaint);
+      canvas.drawCircle(Offset(size * 0.68, size * 0.8), 2, rearPaint);
+
+      final wheelPaint = Paint()..color = const Color(0xFF1F2937);
+      for (final offset in [
+        Rect.fromLTWH(size * 0.14, size * 0.3, size * 0.1, size * 0.18),
+        Rect.fromLTWH(size * 0.76, size * 0.3, size * 0.1, size * 0.18),
+        Rect.fromLTWH(size * 0.14, size * 0.58, size * 0.1, size * 0.18),
+        Rect.fromLTWH(size * 0.76, size * 0.58, size * 0.1, size * 0.18),
+      ]) {
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(offset, const Radius.circular(2)),
+          wheelPaint,
+        );
+      }
+
+      final picture = recorder.endRecording();
+      final img = await picture.toImage(size.toInt(), size.toInt());
+      final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+
+      if (byteData != null && mounted) {
+        setState(() {
+          _carIcon = BitmapDescriptor.bytes(byteData.buffer.asUint8List());
+        });
+      }
+    } catch (e) {
+      debugPrint('DriverHome: Error creating car icon: $e');
+    }
   }
 
   void _updateFirebaseLocation(LatLng pos, double heading) async {
@@ -689,6 +1040,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           // 3. Incoming/Active Ride Sheet
           if (_pendingRide != null || _currentRide != null) 
              Align(alignment: Alignment.bottomCenter, child: _buildIncomingRideSheet()),
+
+          // 4. Waiting for Payment overlay
+          if (_rideStatus == 'waiting_payment')
+             _buildWaitingPaymentSheet(),
         ],
       ),
     );
@@ -892,6 +1247,97 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     );
   }
 
+  /// Waiting for payment bottom sheet
+  Widget _buildWaitingPaymentSheet() {
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        width: double.infinity,
+        margin: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.15),
+              blurRadius: 20,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_paidFare == null) ...[
+              // Waiting state
+              const Icon(Icons.hourglass_top_rounded, color: Color(0xFF2E7D32), size: 48),
+              const SizedBox(height: 16),
+              Text(
+                'Waiting for Payment',
+                style: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'The rider is completing payment...',
+                style: GoogleFonts.inter(color: Colors.grey[600], fontSize: 14),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 20),
+              const SizedBox(
+                width: 32, height: 32,
+                child: CircularProgressIndicator(color: Color(0xFF2E7D32), strokeWidth: 3),
+              ),
+            ] else ...[
+              // Payment received state
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE8F5E9),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(Icons.check_circle_rounded, color: Color(0xFF2E7D32), size: 56),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Payment Received! 🎉',
+                style: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.w700, color: const Color(0xFF2E7D32)),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '₹${_paidFare!.toStringAsFixed(0)}',
+                style: GoogleFonts.inter(fontSize: 36, fontWeight: FontWeight.w800, color: const Color(0xFF1B5E20)),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Trip fare collected',
+                style: GoogleFonts.inter(color: Colors.grey[600], fontSize: 14),
+              ),
+              const SizedBox(height: 24),
+              Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  gradient: const LinearGradient(colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)]),
+                ),
+                child: ElevatedButton.icon(
+                  onPressed: _resetRideState,
+                  icon: const Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 22),
+                  label: Text('Continue', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.transparent,
+                    shadowColor: Colors.transparent,
+                    minimumSize: const Size(double.infinity, 56),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildIncomingRideSheet() {
     final ride = _currentRide ?? _pendingRide;
     if (ride == null) return const SizedBox.shrink();
@@ -948,7 +1394,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         icon = Icons.notifications_active_rounded;
         title = 'New Ride Request!';
         subtitle = 'A rider is waiting for you';
-        gradientColors = [const Color(0xFFFF9800), const Color(0xFFF57C00)];
+        gradientColors = [const Color(0xFF388E3C), const Color(0xFF66BB6A)];
         break;
       case 'matched':
         icon = Icons.navigation_rounded;
@@ -960,13 +1406,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         icon = Icons.location_on_rounded;
         title = 'Waiting for Rider';
         subtitle = 'Enter OTP to start the trip';
-        gradientColors = [const Color(0xFF1565C0), const Color(0xFF42A5F5)];
+        gradientColors = [const Color(0xFF1B5E20), const Color(0xFF43A047)];
         break;
       case 'in_progress':
         icon = Icons.directions_car_rounded;
         title = 'Trip In Progress';
         subtitle = 'Drive safely to the destination';
-        gradientColors = [const Color(0xFF6A1B9A), const Color(0xFFAB47BC)];
+        gradientColors = [const Color(0xFF2E7D32), const Color(0xFF66BB6A)];
         break;
       default:
         icon = Icons.info_outline;
@@ -1247,8 +1693,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           boxShadow: [BoxShadow(color: const Color(0xFF2E7D32).withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 4))],
         ),
         child: ElevatedButton.icon(
-          onPressed: _isLoading ? null : _handleArriveAtPickup,
-          icon: _isLoading
+          onPressed: _isArriving ? null : _handleArriveAtPickup,
+          icon: _isArriving
               ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
               : const Icon(Icons.flag_rounded, color: Colors.white, size: 22),
           label: Text('Arrived at Pickup', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
@@ -1265,8 +1711,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       return Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(14),
-          gradient: const LinearGradient(colors: [Color(0xFF1565C0), Color(0xFF42A5F5)]),
-          boxShadow: [BoxShadow(color: const Color(0xFF1565C0).withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 4))],
+          gradient: const LinearGradient(colors: [Color(0xFF1B5E20), Color(0xFF43A047)]),
+          boxShadow: [BoxShadow(color: const Color(0xFF1B5E20).withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 4))],
         ),
         child: ElevatedButton.icon(
           onPressed: _showOtpDialog,
@@ -1285,8 +1731,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       return Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(14),
-          gradient: const LinearGradient(colors: [Color(0xFF6A1B9A), Color(0xFFAB47BC)]),
-          boxShadow: [BoxShadow(color: const Color(0xFF6A1B9A).withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 4))],
+          gradient: const LinearGradient(colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)]),
+          boxShadow: [BoxShadow(color: const Color(0xFF2E7D32).withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 4))],
         ),
         child: ElevatedButton.icon(
           onPressed: _handleCompleteRide,

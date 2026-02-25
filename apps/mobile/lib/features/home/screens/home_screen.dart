@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/material.dart';
@@ -64,12 +66,23 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _otpPollTimer;
   final FirebaseDatabase _rtdb = FirebaseDatabase.instance;
 
+  // Driver live tracking state
+  String? _driverId;
+  LatLng? _driverPosition;
+  double _driverHeading = 0;
+  StreamSubscription<DatabaseEvent>? _driverLocationSubscription;
+  LatLng? _lastDriverWrittenPosition; // For throttling marker updates
+  DateTime _lastRouteFetchTime = DateTime(2000); // For throttling route API calls
+  BitmapDescriptor? _carIcon; // Custom car icon for driver marker
+  String _cameraFittedForPhase = ''; // Track which ride phase camera was fitted for
+
     @override
   void initState() {
     super.initState();
     _loadUserData();
     _getCurrentLocation();
     _checkActiveRide();
+    _createCarIcon();
     _pickupController.addListener(() => _onSearchChanged(isPickup: true));
     _searchController.addListener(() => _onSearchChanged(isPickup: false));
   }
@@ -77,6 +90,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _rideStatusSubscription?.cancel();
+    _driverLocationSubscription?.cancel();
     _otpPollTimer?.cancel();
     _debounce?.cancel();
     _pickupController.dispose();
@@ -89,17 +103,44 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final result = await MapService.getActiveRide();
       if (result != null && result['success'] == true && result['rideId'] != null) {
-        debugPrint('HomeScreen: Restoring active ride: ${result['rideId']}');
+        final status = result['status'] as String?;
+        debugPrint('HomeScreen: Found ride ${result['rideId']} with status: $status');
+
+        // Only restore truly active rides
+        if (status == null ||
+            status == 'COMPLETED' ||
+            status == 'CANCELLED' ||
+            status == 'NO_DRIVERS') {
+          debugPrint('HomeScreen: Ride is not active ($status), skipping restore');
+          return;
+        }
+
         if (mounted) {
+          final driverId = result['driverId'] as String?;
           setState(() {
             _rideId = result['rideId'];
-            _rideStatus = 'matched';
             _isSearchingForDriver = true;
             _driverName = result['driverName'] ?? 'Driver';
             _driverPhone = result['driverPhone'] ?? '';
+            _driverId = driverId;
+
+            // Set ride status based on actual backend status
+            if (status == 'IN_PROGRESS') {
+              _rideStatus = 'on_trip';
+            } else if (status == 'MATCHED') {
+              _rideStatus = 'matched';
+            } else {
+              _rideStatus = 'searching';
+            }
           });
           _startRideStatusListener(_rideId!);
-          _startOtpPolling();
+          if (_rideStatus == 'matched') {
+            _startOtpPolling();
+          }
+          // Start tracking driver's live position
+          if (driverId != null) {
+            _startDriverLocationListener(driverId);
+          }
         }
       }
     } catch (e) {
@@ -231,12 +272,22 @@ class _HomeScreenState extends State<HomeScreen> {
         _driverName = data['driverName'] as String? ?? _driverName ?? 'Driver';
         _driverPhone = data['driverPhone'] as String? ?? _driverPhone ?? '';
 
+        // Capture driverId for live location tracking
+        final newDriverId = data['driverId'] as String?;
+        if (newDriverId != null && newDriverId != _driverId) {
+          _driverId = newDriverId;
+        }
+
         if (status == 'MATCHED' || status == 'PENDING_ACCEPTANCE') {
           if (_rideStatus == 'searching' || _rideStatus == 'idle') {
             _rideStatus = status == 'MATCHED' ? 'matched' : 'searching';
           }
           if (status == 'MATCHED') {
             _startOtpPolling();
+            // Start tracking driver's live position
+            if (_driverId != null) {
+              _startDriverLocationListener(_driverId!);
+            }
           }
         } else if (status == 'ARRIVED') {
           _rideStatus = 'arrived';
@@ -244,6 +295,13 @@ class _HomeScreenState extends State<HomeScreen> {
           _rideStatus = 'on_trip';
           _otpPollTimer?.cancel();
           _showOtp = false;
+          // Remove pickup marker when trip starts — driver already picked up rider
+          _markers.removeWhere((m) => m.markerId.value == 'pickup');
+          // Remove old route preview polylines
+          _polylines.removeWhere((p) => p.polylineId.value == 'route');
+          _polylines.removeWhere((p) => p.polylineId.value == 'driver_to_pickup');
+          // Reset camera fit so it auto-fits for the new phase
+          _cameraFittedForPhase = '';
         } else if (status == 'COMPLETED') {
           _rideStatus = 'completed';
           // Save ride info before resetting
@@ -363,6 +421,8 @@ class _HomeScreenState extends State<HomeScreen> {
   void _resetRideState() {
     _rideStatusSubscription?.cancel();
     _rideStatusSubscription = null;
+    _driverLocationSubscription?.cancel();
+    _driverLocationSubscription = null;
     _otpPollTimer?.cancel();
     setState(() {
       _rideId = null;
@@ -373,7 +433,315 @@ class _HomeScreenState extends State<HomeScreen> {
       _otp = null;
       _showOtp = false;
       _estimateData = null;
+      // Clear driver tracking state
+      _driverId = null;
+      _driverPosition = null;
+      _driverHeading = 0;
+      _lastDriverWrittenPosition = null;
+      _cameraFittedForPhase = '';
+      // Clear ALL markers and polylines
+      _markers.clear();
+      _polylines.clear();
+      // Clear pickup/destination positions and search text
+      _pickupPosition = null;
+      _destinationPosition = null;
+      _pickupController.clear();
+      _searchController.clear();
     });
+  }
+
+  /// Haversine distance between two LatLng points in meters
+  double _haversineDistance(LatLng a, LatLng b) {
+    const R = 6371e3; // Earth radius in meters
+    final dLat = _toRad(b.latitude - a.latitude);
+    final dLng = _toRad(b.longitude - a.longitude);
+    final aCalc = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(_toRad(a.latitude)) * math.cos(_toRad(b.latitude)) *
+        math.sin(dLng / 2) * math.sin(dLng / 2);
+    return R * 2 * math.atan2(math.sqrt(aCalc), math.sqrt(1 - aCalc));
+  }
+
+  double _toRad(double deg) => deg * math.pi / 180;
+
+  /// Start listening to driver's live position from RTDB
+  void _startDriverLocationListener(String driverId) {
+    _driverLocationSubscription?.cancel();
+    _lastDriverWrittenPosition = null;
+
+    final driverRef = _rtdb.ref('drivers-online/$driverId');
+    debugPrint('HomeScreen: Starting driver location tracking for $driverId');
+
+    _driverLocationSubscription = driverRef.onValue.listen((event) {
+      final data = event.snapshot.value as Map<dynamic, dynamic>?;
+      if (data == null) return;
+
+      final lat = (data['lat'] as num?)?.toDouble();
+      final lng = (data['lng'] as num?)?.toDouble();
+      final heading = (data['heading'] as num?)?.toDouble() ?? 0;
+
+      if (lat == null || lng == null) return;
+
+      final newPosition = LatLng(lat, lng);
+
+      // Throttle: only update if moved more than 10 meters
+      if (_lastDriverWrittenPosition != null) {
+        final distance = _haversineDistance(_lastDriverWrittenPosition!, newPosition);
+        if (distance < 10) return;
+      }
+
+      _lastDriverWrittenPosition = newPosition;
+
+      if (!mounted) return;
+
+      setState(() {
+        _driverPosition = newPosition;
+        _driverHeading = heading;
+
+        // Update or add driver car marker
+        _markers.removeWhere((m) => m.markerId.value == 'driver');
+        _markers.add(
+          Marker(
+            markerId: const MarkerId('driver'),
+            position: newPosition,
+            rotation: heading,
+            anchor: const Offset(0.5, 0.5),
+            flat: true,
+            icon: _carIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+            infoWindow: InfoWindow(title: _driverName ?? 'Driver'),
+            zIndex: 10,
+          ),
+        );
+      });
+
+      // Fetch route polylines on first position update or when ride status changes
+      _fetchDriverRoutes();
+
+      // Auto-fit camera ONCE per ride phase (don't override user zoom/pan)
+      if (_cameraFittedForPhase != _rideStatus) {
+        _cameraFittedForPhase = _rideStatus;
+        _fitCameraToDriverAndDestination();
+      }
+
+      debugPrint('HomeScreen: Driver at (${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)}) heading: ${heading.toStringAsFixed(0)}°');
+    });
+  }
+
+  /// Fetch and display route polylines based on current ride status
+  Future<void> _fetchDriverRoutes() async {
+    if (_driverPosition == null) return;
+
+    // Throttle: at most once every 5 seconds to avoid excessive Directions API calls
+    final now = DateTime.now();
+    if (now.difference(_lastRouteFetchTime).inSeconds < 5) return;
+    _lastRouteFetchTime = now;
+
+    try {
+      if (_rideStatus == 'matched' || _rideStatus == 'arrived') {
+        // Show driver → pickup route (blue)
+        if (_pickupPosition != null) {
+          final result = await MapService.getDirections(_driverPosition!, _pickupPosition!);
+          if (result != null && mounted) {
+            final points = result['points'] as List<LatLng>;
+            setState(() {
+              _polylines.removeWhere((p) => p.polylineId.value == 'driver_to_pickup');
+              _polylines.removeWhere((p) => p.polylineId.value == 'pickup_to_destination');
+              _polylines.add(
+                Polyline(
+                  polylineId: const PolylineId('driver_to_pickup'),
+                  points: points,
+                  color: const Color(0xFF2196F3), // Blue
+                  width: 5,
+                  jointType: JointType.round,
+                  startCap: Cap.roundCap,
+                  endCap: Cap.roundCap,
+                ),
+              );
+            });
+          }
+        }
+        // Also show pickup → destination route (green) if destination is set
+        if (_pickupPosition != null && _destinationPosition != null) {
+          final result = await MapService.getDirections(_pickupPosition!, _destinationPosition!);
+          if (result != null && mounted) {
+            final points = result['points'] as List<LatLng>;
+            setState(() {
+              _polylines.removeWhere((p) => p.polylineId.value == 'pickup_to_destination');
+              _polylines.add(
+                Polyline(
+                  polylineId: const PolylineId('pickup_to_destination'),
+                  points: points,
+                  color: const Color(0xFF4CAF50), // Green
+                  width: 4,
+                  jointType: JointType.round,
+                  startCap: Cap.roundCap,
+                  endCap: Cap.roundCap,
+                  patterns: [PatternItem.dash(20), PatternItem.gap(10)],
+                ),
+              );
+            });
+          }
+        }
+      } else if (_rideStatus == 'on_trip') {
+        // Show driver → destination route (green, solid)
+        if (_destinationPosition != null) {
+          final result = await MapService.getDirections(_driverPosition!, _destinationPosition!);
+          if (result != null && mounted) {
+            final points = result['points'] as List<LatLng>;
+            setState(() {
+              _polylines.removeWhere((p) => p.polylineId.value == 'driver_to_pickup');
+              _polylines.removeWhere((p) => p.polylineId.value == 'pickup_to_destination');
+              _polylines.add(
+                Polyline(
+                  polylineId: const PolylineId('pickup_to_destination'),
+                  points: points,
+                  color: const Color(0xFF4CAF50), // Green
+                  width: 5,
+                  jointType: JointType.round,
+                  startCap: Cap.roundCap,
+                  endCap: Cap.roundCap,
+                ),
+              );
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('HomeScreen: Error fetching driver routes: $e');
+    }
+  }
+
+  /// Fit camera to show driver position and relevant destination
+  Future<void> _fitCameraToDriverAndDestination() async {
+    if (_driverPosition == null) return;
+
+    try {
+      final controller = await _controller.future;
+      final points = <LatLng>[_driverPosition!];
+
+      if ((_rideStatus == 'matched' || _rideStatus == 'arrived') && _pickupPosition != null) {
+        points.add(_pickupPosition!);
+      }
+      if (_rideStatus == 'on_trip' && _destinationPosition != null) {
+        points.add(_destinationPosition!);
+      }
+
+      if (points.length < 2) {
+        controller.animateCamera(CameraUpdate.newLatLngZoom(_driverPosition!, 16));
+        return;
+      }
+
+      double minLat = points[0].latitude, maxLat = points[0].latitude;
+      double minLng = points[0].longitude, maxLng = points[0].longitude;
+      for (final p in points) {
+        if (p.latitude < minLat) minLat = p.latitude;
+        if (p.latitude > maxLat) maxLat = p.latitude;
+        if (p.longitude < minLng) minLng = p.longitude;
+        if (p.longitude > maxLng) maxLng = p.longitude;
+      }
+
+      final bounds = LatLngBounds(
+        southwest: LatLng(minLat, minLng),
+        northeast: LatLng(maxLat, maxLng),
+      );
+
+      controller.animateCamera(CameraUpdate.newLatLngBounds(bounds, 100));
+    } catch (e) {
+      debugPrint('HomeScreen: Error fitting camera: $e');
+    }
+  }
+
+  /// Create a custom car icon from canvas
+  Future<void> _createCarIcon() async {
+    try {
+      const double size = 48;
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+
+      // Car body
+      final bodyPaint = Paint()..color = const Color(0xFF22C55E);
+      final shadowPaint = Paint()..color = const Color(0xFF16A34A);
+
+      // Shadow
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(size * 0.2, size * 0.15, size * 0.6, size * 0.75),
+          const Radius.circular(6),
+        ),
+        shadowPaint,
+      );
+
+      // Main body
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(size * 0.22, size * 0.12, size * 0.56, size * 0.72),
+          const Radius.circular(5),
+        ),
+        bodyPaint,
+      );
+
+      // Roof / windshield
+      final roofPaint = Paint()..color = const Color(0xFF86EFAC);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(size * 0.28, size * 0.28, size * 0.44, size * 0.3),
+          const Radius.circular(3),
+        ),
+        roofPaint,
+      );
+
+      // Front lights
+      final lightPaint = Paint()..color = Colors.white;
+      canvas.drawCircle(Offset(size * 0.32, size * 0.18), 2, lightPaint);
+      canvas.drawCircle(Offset(size * 0.68, size * 0.18), 2, lightPaint);
+
+      // Rear lights
+      final rearPaint = Paint()..color = const Color(0xFFEF4444);
+      canvas.drawCircle(Offset(size * 0.32, size * 0.8), 2, rearPaint);
+      canvas.drawCircle(Offset(size * 0.68, size * 0.8), 2, rearPaint);
+
+      // Wheels
+      final wheelPaint = Paint()..color = const Color(0xFF1F2937);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(size * 0.14, size * 0.3, size * 0.1, size * 0.18),
+          const Radius.circular(2),
+        ),
+        wheelPaint,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(size * 0.76, size * 0.3, size * 0.1, size * 0.18),
+          const Radius.circular(2),
+        ),
+        wheelPaint,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(size * 0.14, size * 0.58, size * 0.1, size * 0.18),
+          const Radius.circular(2),
+        ),
+        wheelPaint,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(size * 0.76, size * 0.58, size * 0.1, size * 0.18),
+          const Radius.circular(2),
+        ),
+        wheelPaint,
+      );
+
+      final picture = recorder.endRecording();
+      final img = await picture.toImage(size.toInt(), size.toInt());
+      final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+
+      if (byteData != null && mounted) {
+        setState(() {
+          _carIcon = BitmapDescriptor.bytes(byteData.buffer.asUint8List());
+        });
+      }
+    } catch (e) {
+      debugPrint('HomeScreen: Error creating car icon: $e');
+    }
   }
 
   Widget _buildSearchingSheet() {
@@ -381,60 +749,79 @@ class _HomeScreenState extends State<HomeScreen> {
       alignment: Alignment.bottomCenter,
       child: Container(
         width: double.infinity,
-        margin: const EdgeInsets.all(16),
-        padding: const EdgeInsets.all(24),
+        margin: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(20),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.2),
-              blurRadius: 20,
-              offset: const Offset(0, 10),
+              color: Colors.black.withOpacity(0.15),
+              blurRadius: 15,
+              offset: const Offset(0, 5),
             ),
           ],
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(height: 8),
-            // Status icon
+            // Compact status row
             if (_rideStatus == 'searching')
-              const CircularProgressIndicator(color: Colors.green)
-            else if (_rideStatus == 'matched' || _rideStatus == 'arrived')
-              const Icon(Icons.check_circle, color: Colors.green, size: 48)
-            else if (_rideStatus == 'on_trip')
-              const Icon(Icons.directions_car, color: Colors.blue, size: 48),
-            const SizedBox(height: 16),
-            // Title
-            Text(
-              _rideStatus == 'searching'
-                  ? 'Contacting nearby drivers...'
-                  : _rideStatus == 'matched'
-                      ? 'Driver Found! 🎉'
-                      : _rideStatus == 'arrived'
-                          ? 'Driver Arrived! 📍'
-                          : _rideStatus == 'on_trip'
-                              ? 'Trip In Progress 🚗'
-                              : 'Finding driver...',
-              style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w600),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            // Subtitle
-            Text(
-              _rideStatus == 'searching'
-                  ? 'Please wait while we find you a ride.'
-                  : _rideStatus == 'matched'
-                      ? '${_driverName ?? "Driver"} is on the way'
-                      : _rideStatus == 'arrived'
-                          ? '${_driverName ?? "Driver"} is waiting at pickup'
-                          : _rideStatus == 'on_trip'
-                              ? 'Enjoy your ride with ${_driverName ?? "Driver"}'
-                              : '',
-              style: GoogleFonts.inter(color: Colors.grey[600], fontSize: 14),
-              textAlign: TextAlign.center,
-            ),
+              Row(
+                children: [
+                  const SizedBox(
+                    width: 24, height: 24,
+                    child: CircularProgressIndicator(color: Colors.green, strokeWidth: 3),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Contacting nearby drivers...',
+                      style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              )
+            else ...[
+              // Title row with icon
+              Row(
+                children: [
+                  Icon(
+                    _rideStatus == 'on_trip' ? Icons.directions_car : Icons.check_circle,
+                    color: _rideStatus == 'on_trip' ? Colors.blue : Colors.green,
+                    size: 28,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _rideStatus == 'matched'
+                              ? 'Driver Found! 🎉'
+                              : _rideStatus == 'arrived'
+                                  ? 'Driver Arrived! 📍'
+                                  : _rideStatus == 'on_trip'
+                                      ? 'Trip In Progress 🚗'
+                                      : 'Finding driver...',
+                          style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w600),
+                        ),
+                        Text(
+                          _rideStatus == 'matched'
+                              ? '${_driverName ?? "Driver"} is on the way'
+                              : _rideStatus == 'arrived'
+                                  ? '${_driverName ?? "Driver"} is waiting'
+                                  : _rideStatus == 'on_trip'
+                                      ? 'Enjoy your ride!'
+                                      : '',
+                          style: GoogleFonts.inter(color: Colors.grey[600], fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
 
             // Driver Info Card
             if ((_rideStatus == 'matched' || _rideStatus == 'arrived' || _rideStatus == 'on_trip') && _driverName != null) ...[
@@ -552,7 +939,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ],
 
-            const SizedBox(height: 20),
+            const SizedBox(height: 12),
             // Cancel button (only when searching or matched)
             if (_rideStatus == 'searching' || _rideStatus == 'matched')
               OutlinedButton(
@@ -968,8 +1355,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                      _buildTopBar(),
-                     const SizedBox(height: 12),
-                     _buildRouteCard(),
+                     // Hide route card when ride is active (matched, arrived, on_trip, searching)
+                     if (!_isSearchingForDriver) ...[
+                       const SizedBox(height: 12),
+                       _buildRouteCard(),
+                     ],
                   ],
                 ),
               ),
