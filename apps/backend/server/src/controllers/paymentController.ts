@@ -56,6 +56,7 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
         message: "Missing rideId",
         success: false,
       });
+    }
 
     const rideRef = db.collection("rides").doc(rideId);
     const rideDoc = await rideRef.get();
@@ -180,12 +181,13 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
       pointsUsed,
       success: true,
     });
-  } catch (error) 
+  } catch (error) {
     console.error("❌ Create Payment Intent Error:", error);
     return res.status(500).json({
       message: `Error creating payment intent: ${error instanceof Error ? error.message : "Unknown error"}`,
       success: false,
     });
+  }
 };
 
 /**
@@ -201,7 +203,7 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
  * @throws Returns 400 if `rideId` is missing.
  */
 export const confirmPayment = async (req: Request, res: Response) => {
-  try {_confirmPayment
+  try {
     const { rideId, amount, pointsUsed } = req.body;
 
     if (!rideId) {
