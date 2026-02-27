@@ -344,6 +344,8 @@ export default function RiderMap({
     lat: number;
     lng: number;
   } | null>(null);
+  const [ridePickup, setRidePickup] = useState<{ lat: number; lng: number } | null>(null);
+  const [rideDrop, setRideDrop] = useState<{ lat: number; lng: number } | null>(null);
   const [animatedAssignedDriver, setAnimatedAssignedDriver] = useState<{
     lat: number;
     lng: number;
@@ -404,6 +406,54 @@ export default function RiderMap({
   const pickupAutocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
   const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
   const lastMatchedDirectionUpdateRef = useRef<number>(0); // Throttle direction updates in matched state
+
+  const applyRideLocations = useCallback((data: unknown) => {
+    if (!data) return;
+    const rideData = data as {
+      pickup?: { lat: number; lng: number };
+      drop?: { lat: number; lng: number };
+      pickupLat?: number;
+      pickupLng?: number;
+      dropLat?: number;
+      dropLng?: number;
+      pickupName?: string;
+      dropName?: string;
+    };
+
+    const pickupFromRide =
+      rideData.pickup?.lat && rideData.pickup?.lng
+        ? rideData.pickup
+        : rideData.pickupLat !== undefined && rideData.pickupLng !== undefined
+          ? { lat: rideData.pickupLat, lng: rideData.pickupLng }
+          : null;
+
+    const dropFromRide =
+      rideData.drop?.lat && rideData.drop?.lng
+        ? rideData.drop
+        : rideData.dropLat !== undefined && rideData.dropLng !== undefined
+          ? { lat: rideData.dropLat, lng: rideData.dropLng }
+          : null;
+
+    if (pickupFromRide) {
+      setRidePickup(pickupFromRide);
+      setPickupLocation((prev) => (prev ? prev : pickupFromRide));
+      if (rideData.pickupName) {
+        setPickupSearchText(rideData.pickupName);
+      }
+    }
+
+    if (dropFromRide) {
+      setRideDrop(dropFromRide);
+      setDropOffLocation(dropFromRide);
+      setSelectedDestination((prev) => {
+        const name = rideData.dropName || prev?.name || "Destination";
+        if (prev && prev.lat === dropFromRide.lat && prev.lng === dropFromRide.lng) {
+          return prev.name === name ? prev : { ...prev, name };
+        }
+        return { lat: dropFromRide.lat, lng: dropFromRide.lng, name };
+      });
+    }
+  }, []);
 
   // Get current location
   useEffect(() => {
@@ -551,6 +601,7 @@ export default function RiderMap({
                 setOtp(rideData.otp);
                 setShowOtpModal(true);
               }
+              applyRideLocations(rideData);
               return; // Exit early if successful
             } else {
               // Ride is no longer valid, clear cache
@@ -585,6 +636,7 @@ export default function RiderMap({
             setAssignedDriverPhone(data.driverPhone || "No Phone");
             setDriverRating(data.driverRating || 0);
             setDriverRatingCount(data.driverRatingCount || 0);
+            applyRideLocations(data);
 
             // ETA logic
             // We can re-calculate ETA in the effect that watches driver location
@@ -607,7 +659,7 @@ export default function RiderMap({
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [applyRideLocations]);
 
   const handlePaymentSuccess = useCallback(async () => {
     // Notify backend about payment success so driver gets the popup
@@ -651,6 +703,8 @@ export default function RiderMap({
     setAssignedDriverId(null);
     setAssignedDriverName(null);
     setAssignedDriverLocation(null);
+    setRidePickup(null);
+    setRideDrop(null);
     setDirectionsToPickup(null);
     setDirectionsToDestination(null);
     setEta(null);
@@ -673,6 +727,7 @@ export default function RiderMap({
     const unsubscribe = onValue(rideStatusRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.val();
+        applyRideLocations(data);
         console.log("DEBUG: RTDB Ride Update:", data);
 
         if (data.status === "IN_PROGRESS") {
@@ -729,7 +784,7 @@ export default function RiderMap({
     });
 
     return () => unsubscribe();
-  }, [rideId, handlePaymentSuccess]);
+  }, [rideId, handlePaymentSuccess, applyRideLocations]);
 
   // Listen to online drivers with throttling to prevent excessive updates
   const driversBufferRef = useRef<Map<string, DriverLocation>>(new Map());
@@ -947,6 +1002,8 @@ export default function RiderMap({
     setAssignedDriverName(null);
     setAssignedDriverPhone(null);
     setAssignedDriverLocation(null);
+    setRidePickup(null);
+    setRideDrop(null);
     setEta(null);
     setDirectionsToPickup(null);
     setDirectionsToDestination(null);
@@ -970,6 +1027,7 @@ export default function RiderMap({
     const unsubscribe = onValue(rideRef, (snapshot) => {
       const data = snapshot.val();
       if (!data) return;
+      applyRideLocations(data);
 
       // Update ride status based on RTDB updates
       if (data.status === "MATCHED" && rideStatus === "pending_acceptance") {
@@ -1014,7 +1072,7 @@ export default function RiderMap({
     });
 
     return () => unsubscribe();
-  }, [rideId, rideStatus, clearLocalRideState]);
+  }, [rideId, rideStatus, clearLocalRideState, applyRideLocations]);
 
   // Poll for OTP when matched or arrived (available at 100m proximity)
   useEffect(() => {
@@ -1118,7 +1176,10 @@ export default function RiderMap({
 
   // Calculate and update route when driver location or destination changes
   useEffect(() => {
-    if (!isLoaded || (!assignedDriverLocation && !currentLocation) || !selectedDestination) {
+    const destination =
+      rideDrop ||
+      (selectedDestination ? { lat: selectedDestination.lat, lng: selectedDestination.lng } : null);
+    if (!isLoaded || (!assignedDriverLocation && !currentLocation) || !destination) {
       return;
     }
 
@@ -1126,14 +1187,14 @@ export default function RiderMap({
       directionsServiceRef.current = new google.maps.DirectionsService();
     }
 
-    const pickup = pickupLocation || currentLocation;
+    const pickup = ridePickup || pickupLocation || currentLocation;
 
     // CASE 1: PENDING_ACCEPTANCE (Show pickup -> destination preview while waiting)
     if (rideStatus === "pending_acceptance" && pickup) {
       // Just show planned route: Pickup -> Destination
       directionsServiceRef.current.route(
         {
-          destination: { lat: selectedDestination.lat, lng: selectedDestination.lng },
+          destination,
           origin: pickup,
           travelMode: google.maps.TravelMode.DRIVING,
         },
@@ -1179,7 +1240,7 @@ export default function RiderMap({
       // Also prepare route: Pickup -> Destination for display
       directionsServiceRef.current.route(
         {
-          destination: { lat: selectedDestination.lat, lng: selectedDestination.lng },
+          destination,
           origin: pickup,
           travelMode: google.maps.TravelMode.DRIVING,
         },
@@ -1205,7 +1266,7 @@ export default function RiderMap({
       // Calculate route: Driver (Current Loc) -> Destination
       directionsServiceRef.current.route(
         {
-          destination: { lat: selectedDestination.lat, lng: selectedDestination.lng },
+          destination,
           origin: assignedDriverLocation, // Driver's current location is the car location
           travelMode: google.maps.TravelMode.DRIVING,
         },
@@ -1240,6 +1301,8 @@ export default function RiderMap({
     assignedDriverLocation,
     currentLocation,
     pickupLocation,
+    ridePickup,
+    rideDrop,
     selectedDestination,
   ]);
 
@@ -1601,6 +1664,9 @@ export default function RiderMap({
         return;
       }
 
+      setRidePickup(pickup);
+      setRideDrop({ lat: selectedDestination.lat, lng: selectedDestination.lng });
+
       const token = await user.getIdToken();
 
       const response = await fetch(`${backendUrl}/ride/request`, {
@@ -1639,6 +1705,7 @@ export default function RiderMap({
         if (data.driverLocation) {
           setAssignedDriverLocation(data.driverLocation);
         }
+        applyRideLocations(data);
         setEta(data.eta || null);
 
         // Handle based on status from backend
