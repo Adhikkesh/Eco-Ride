@@ -1,10 +1,9 @@
-export const RIDE_STATUS = {
-  COMPLETED: "COMPLETED",
-  MATCHED: "MATCHED",
-  SEARCHING: "SEARCHING",
-} as const;
+/**
+ * @fileoverview Shared Package
+ * @description Common constants and utilities shared across all Eco-Ride
+ *              applications (web, mobile, backend).
+ * @module shared
+ */
 
-export interface User {
-  uid: string;
-  role: "rider" | "driver";
-}
+/** Placeholder constant exported from the shared package. */
+export const SHARED_CONSTANT = "shared";

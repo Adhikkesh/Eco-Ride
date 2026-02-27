@@ -3,6 +3,7 @@
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { FaMoon, FaShieldAlt, FaSignOutAlt, FaSun, FaUser } from "react-icons/fa";
@@ -44,7 +45,10 @@ export default function Dashboard(): React.ReactNode {
               try {
                 // Fetch latest status from backend API to ensure accuracy (bypass Firestore cache/sync issues)
                 const token = await currentUser.getIdToken();
-                const statusRes = await fetch(`${backendUrl}/api/v1/user/driver-status`, {
+                // Check if backendUrl is defined before making request
+                if (!backendUrl) throw new Error("Backend URL not configured");
+
+                const statusRes = await fetch(`${backendUrl}/user/driver-status`, {
                   headers: {
                     Authorization: `Bearer ${token}`,
                   },
@@ -55,12 +59,25 @@ export default function Dashboard(): React.ReactNode {
                   console.log("Driver API Status:", statusData);
                   setKycVerified(statusData.kyc_verified);
                 } else {
-                  console.error("Failed to fetch driver status, defaulting to Firestore");
-                  setKycVerified(userData?.kyc_verified || false);
+                  throw new Error("API returned error status");
                 }
               } catch (err) {
-                console.error("Error fetching driver status from API:", err);
-                setKycVerified(userData?.kyc_verified || false);
+                console.error(
+                  "Error fetching driver status from API, falling back to Firestore:",
+                  err,
+                );
+                // Fallback: Fetch directly from driver_profile collection which has the authoritative status
+                try {
+                  const driverProfileDoc = await getDoc(doc(db, "driver_profile", currentUser.uid));
+                  if (driverProfileDoc.exists()) {
+                    setKycVerified(driverProfileDoc.data()?.kyc_verified || false);
+                  } else {
+                    setKycVerified(false);
+                  }
+                } catch (firestoreErr) {
+                  console.error("Error fetching driver profile from Firestore:", firestoreErr);
+                  setKycVerified(false);
+                }
               }
             }
           } else {
@@ -267,67 +284,70 @@ export default function Dashboard(): React.ReactNode {
             </div>
 
             {/* Profile */}
-            <div
-              style={{
-                alignItems: "center",
-                background: darkMode ? "rgba(15, 23, 42, 0.5)" : "rgba(203, 213, 225, 0.2)",
-                borderRadius: "12px",
-                display: "flex",
-                gap: "12px",
-                padding: "8px 16px",
-                transition: "all 0.3s ease",
-              }}
-            >
-              {user?.photoURL ? (
-                <Image
-                  src={user.photoURL}
-                  alt="Profile"
-                  width={36}
-                  height={36}
-                  style={{
-                    border: "2px solid #22c55e",
-                    borderRadius: "50%",
-                    objectFit: "cover",
-                  }}
-                />
-              ) : (
-                <div
-                  style={{
-                    alignItems: "center",
-                    background: "linear-gradient(135deg, #22c55e, #10b981)",
-                    borderRadius: "50%",
-                    color: "white",
-                    display: "flex",
-                    height: "36px",
-                    justifyContent: "center",
-                    width: "36px",
-                  }}
-                >
-                  <FaUser style={{ fontSize: "14px" }} />
+            <Link href="/profile" style={{ textDecoration: "none" }}>
+              <div
+                style={{
+                  alignItems: "center",
+                  background: darkMode ? "rgba(15, 23, 42, 0.5)" : "rgba(203, 213, 225, 0.2)",
+                  borderRadius: "12px",
+                  cursor: "pointer",
+                  display: "flex",
+                  gap: "12px",
+                  padding: "8px 16px",
+                  transition: "all 0.3s ease",
+                }}
+              >
+                {user?.photoURL ? (
+                  <Image
+                    src={user.photoURL}
+                    alt="Profile"
+                    width={36}
+                    height={36}
+                    style={{
+                      border: "2px solid #22c55e",
+                      borderRadius: "50%",
+                      objectFit: "cover",
+                    }}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      alignItems: "center",
+                      background: "linear-gradient(135deg, #22c55e, #10b981)",
+                      borderRadius: "50%",
+                      color: "white",
+                      display: "flex",
+                      height: "36px",
+                      justifyContent: "center",
+                      width: "36px",
+                    }}
+                  >
+                    <FaUser style={{ fontSize: "14px" }} />
+                  </div>
+                )}
+                <div style={{ display: "flex", flexDirection: "column" }}>
+                  <span
+                    style={{
+                      color: darkMode ? "white" : "#1e293b",
+                      fontSize: "14px",
+                      fontWeight: "500",
+                      transition: "color 0.3s ease",
+                    }}
+                  >
+                    {user?.displayName || user?.email?.split("@")[0] || "User"}
+                  </span>
+                  <span
+                    style={{
+                      color: darkMode ? "#94a3b8" : "#64748b",
+                      fontSize: "11px",
+                      transition: "color 0.3s ease",
+                    }}
+                  >
+                    {user?.email}
+                  </span>
                 </div>
-              )}
-              <div style={{ display: "flex", flexDirection: "column" }}>
-                <span
-                  style={{
-                    color: darkMode ? "white" : "#1e293b",
-                    fontSize: "14px",
-                    fontWeight: "500",
-                    transition: "color 0.3s ease",
-                  }}
-                >
-                  {user?.displayName || user?.email?.split("@")[0] || "User"}
-                </span>
-                <span
-                  style={{
-                    color: darkMode ? "#94a3b8" : "#64748b",
-                    fontSize: "11px",
-                    transition: "color 0.3s ease",
-                  }}
-                >
-                  {user?.email}
-                </span>
               </div>
-            </div>
+            </Link>
 
             {/* Logout Button */}
             <Button

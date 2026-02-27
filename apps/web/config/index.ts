@@ -1,5 +1,16 @@
+/**
+ * @fileoverview Web Application Configuration
+ * @description Centralises environment-driven configuration for the web client.
+ *              Exports the Firebase client config object and the backend API base URL.
+ * @module config
+ */
+
 import "dotenv/config";
 
+/**
+ * Firebase client SDK configuration sourced from Next.js public environment variables.
+ * All keys use the `NEXT_PUBLIC_` prefix so they are available in the browser bundle.
+ */
 export const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
@@ -11,4 +22,10 @@ export const firebaseConfig = {
   storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
 };
 
-export const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+/**
+ * Fully-qualified base URL for the Eco-Ride REST API (v1).
+ *
+ * @example
+ * fetch(`${backendUrl}/ride/estimate`, { method: "POST", ... });
+ */
+export const backendUrl = `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/v1`;

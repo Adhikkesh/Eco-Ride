@@ -58,7 +58,7 @@ export default function Home(): React.ReactNode {
       if (user) {
         try {
           const token = await user.getIdToken();
-          const response = await fetch(`${backendUrl}/api/v1/auth/verify`, {
+          const response = await fetch(`${backendUrl}/auth/verify`, {
             headers: {
               Authorization: `Bearer ${token}`,
             },
