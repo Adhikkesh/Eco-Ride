@@ -1382,8 +1382,8 @@ export const getOtp = async (req: Request, res: Response) => {
         .json({ message: "Not authorized to access this ride", success: false });
     }
 
-    // Verify ride is in MATCHED status (driver accepted, heading to pickup)
-    if (rideData?.status !== "MATCHED") {
+    // OTP is only available during MATCHED (en route) or ARRIVED (at pickup)
+    if (rideData?.status !== "MATCHED" && rideData?.status !== "ARRIVED") {
       return res.status(400).json({
         message: `OTP not available for ride status: ${rideData?.status}`,
         success: false,
@@ -1405,12 +1405,21 @@ export const getOtp = async (req: Request, res: Response) => {
     const distanceInKm = geofire.distanceBetween(driverPos, pickupPos);
     const distanceInMeters = Math.round(distanceInKm * 1000);
 
-    // If requester is the rider, ALWAYS show OTP
+    // OTP is only shown to rider when driver has reached the pickup (≤100m)
     if (rideData.riderId === userId) {
+      if (distanceInMeters <= 100 || rideData.status === "ARRIVED") {
+        return res.status(200).json({
+          distanceToPickup: distanceInMeters,
+          otp: rideData.otp,
+          otpAvailable: true,
+          success: true,
+        });
+      }
+      // Driver still en route — don't reveal OTP yet
       return res.status(200).json({
         distanceToPickup: distanceInMeters,
-        otp: rideData.otp,
-        otpAvailable: true,
+        message: `Your driver is ${distanceInMeters}m away. OTP will be shown when driver arrives.`,
+        otpAvailable: false,
         success: true,
       });
     }
