@@ -155,6 +155,9 @@ export class DriverAgent {
   // Multi-passenger tracking for pooled rides
   private activePassengers: Map<string, RideAssignment> = new Map(); // rideId -> assignment for riders currently in vehicle
 
+  // Tracks whether the current TRIP destination is a PICKUP or DROP waypoint
+  private currentWaypointType: "PICKUP" | "DROP" = "DROP";
+
   /**
    * Creates a new DriverAgent.
    *
@@ -236,15 +239,15 @@ export class DriverAgent {
       `     Drop: (${assignment.drop.lat.toFixed(4)}, ${assignment.drop.lng.toFixed(4)})`,
     );
 
-    // DYNAMIC RE-ROUTING: If currently on a TRIP, interrupt to pick up the
-    // new rider immediately. The existing rider stays in activePassengers
-    // and will be delivered after the new pickup.
+    // TSP-LIKE ROUTING: If currently on a TRIP, add to queue and let
+    // routeToNearestWaypoint decide the optimal next stop — could be the
+    // current drop-off (closer) or the new rider's pickup (closer).
     if (this.mode === "TRIP") {
       console.log(
-        `  🔄 ${this.driverId} dynamically re-routing mid-trip to pick up ${assignment.rideId} (${this.activePassengers.size} pax aboard)`,
+        `  🔄 ${this.driverId} received pooled ride ${assignment.rideId} mid-trip (${this.activePassengers.size} pax aboard) — re-computing optimal route`,
       );
-      this.currentAssignment = assignment;
-      await this.startPickupMode();
+      this.queuedAssignments.push(assignment);
+      await this.routeToNearestWaypoint();
       return;
     }
 
@@ -381,22 +384,27 @@ export class DriverAgent {
         console.error(`  ❌ Failed to write rides-assigned for pickup:`, err);
       }
     } else {
-      // Mid-trip pooled pickup — update top-level to new rider so the driver
-      // dashboard routes to the new pickup, and set status back to MATCHED
-      // so the OTP flow triggers.
+      // Mid-trip pooled pickup — the backend's acceptRide already wrote the
+      // correct riders[] array and set top-level fields. We only update
+      // routing-relevant fields without clobbering the status, since the
+      // backend already set it correctly for the pooled scenario.
       try {
-        await rtdb.ref(`rides-assigned/${this.driverId}`).update({
-          drop: this.currentAssignment.drop,
-          pickup: this.currentAssignment.pickup,
-          rideId: this.currentAssignment.rideId,
-          riderId: this.currentAssignment.riderId,
-          riderName: "",
-          riderPhone: "",
-          status: "MATCHED",
-          timestamp: Date.now(),
-        });
+        const snap = await rtdb.ref(`rides-assigned/${this.driverId}`).once("value");
+        const existingData = snap.val();
+
+        // Only update top-level routing fields if backend hasn't already
+        // done so (e.g., if the rideId doesn't match the new assignment)
+        if (existingData?.rideId !== this.currentAssignment.rideId) {
+          await rtdb.ref(`rides-assigned/${this.driverId}`).update({
+            drop: this.currentAssignment.drop,
+            pickup: this.currentAssignment.pickup,
+            rideId: this.currentAssignment.rideId,
+            riderId: this.currentAssignment.riderId,
+            timestamp: Date.now(),
+          });
+        }
         console.log(
-          `  📝 ${this.driverId} mid-trip pickup: updated top-level to ride ${this.currentAssignment.rideId}`,
+          `  📝 ${this.driverId} mid-trip pickup: updated routing to ride ${this.currentAssignment.rideId}`,
         );
       } catch (err) {
         console.error(`  ❌ Failed to update rides-assigned for mid-trip pickup:`, err);
@@ -434,29 +442,49 @@ export class DriverAgent {
 
     this.mode = "WAITING";
     this.waitStartTime = Date.now();
+    const waitingForRideId = this.currentAssignment.rideId;
 
-    console.log(`  ⏳ ${this.driverId} waiting for OTP verification...`);
+    console.log(`  ⏳ ${this.driverId} waiting for OTP verification (ride ${waitingForRideId})...`);
 
-    // Update rides-assigned status to ARRIVED so driver web UI knows
+    // Update rides-assigned status to ARRIVED — pool-aware
     try {
-      await rtdb.ref(`rides-assigned/${this.driverId}`).update({
-        arrivedAt: Date.now(),
-        status: "ARRIVED",
-      });
+      const snap = await rtdb.ref(`rides-assigned/${this.driverId}`).once("value");
+      const existingData = snap.val();
+
+      // If there's a riders[] array, update only this rider's status
+      if (existingData?.riders && Array.isArray(existingData.riders)) {
+        const updatedRiders = existingData.riders.map(
+          (r: { rideId: string; [key: string]: unknown }) =>
+            r.rideId === waitingForRideId ? { ...r, status: "ARRIVED" } : r,
+        );
+        await rtdb.ref(`rides-assigned/${this.driverId}`).update({
+          arrivedAt: Date.now(),
+          riders: updatedRiders,
+          status: "ARRIVED",
+        });
+      } else {
+        // Solo ride — safe to set top-level status
+        await rtdb.ref(`rides-assigned/${this.driverId}`).update({
+          arrivedAt: Date.now(),
+          status: "ARRIVED",
+        });
+      }
       console.log(`  📝 ${this.driverId} RTDB rides-assigned status → ARRIVED`);
     } catch (err) {
       console.error(`  ❌ Failed to update rides-assigned status to ARRIVED:`, err);
     }
 
     // Listen for ride status change (OTP verified = IN_PROGRESS)
-    const assignmentRef = rtdb.ref(`rides-assigned/${this.driverId}`);
+    // Pool-aware: check the specific ride's status in riders[] if present,
+    // or check the rides/{rideId} node directly as a more reliable signal.
+    const rideStatusRef = rtdb.ref(`rides/${waitingForRideId}`);
 
     const callback = async (snapshot: import("firebase-admin/database").DataSnapshot) => {
       const data = snapshot.val();
 
-      // When OTP is verified, backend sets status to IN_PROGRESS
+      // When OTP is verified, backend sets rides/{rideId}.status to IN_PROGRESS
       if (data?.status === "IN_PROGRESS") {
-        console.log(`  ✅ ${this.driverId} OTP verified, starting trip!`);
+        console.log(`  ✅ ${this.driverId} OTP verified for ride ${waitingForRideId}, starting trip!`);
 
         // Cleanup listener
         if (this.otpListenerUnsubscribe) {
@@ -469,11 +497,11 @@ export class DriverAgent {
       }
     };
 
-    assignmentRef.on("value", callback);
+    rideStatusRef.on("value", callback);
 
     // Store unsubscribe function
     this.otpListenerUnsubscribe = () => {
-      assignmentRef.off("value", callback);
+      rideStatusRef.off("value", callback);
     };
   }
 
@@ -498,16 +526,35 @@ export class DriverAgent {
       console.error(`  ❌ Failed to update passenger count:`, err);
     }
 
-    // Update RTDB rides-assigned status to IN_PROGRESS so driver web UI syncs
+    // Update RTDB rides-assigned status to IN_PROGRESS — pool-aware
     try {
-      await rtdb.ref(`rides-assigned/${this.driverId}`).update({
-        status: "IN_PROGRESS",
-      });
+      const snap = await rtdb.ref(`rides-assigned/${this.driverId}`).once("value");
+      const existingData = snap.val();
+
+      // If there's a riders[] array, update this specific rider's status
+      if (existingData?.riders && Array.isArray(existingData.riders)) {
+        const updatedRiders = existingData.riders.map(
+          (r: { rideId: string; [key: string]: unknown }) =>
+            r.rideId === this.currentAssignment!.rideId
+              ? { ...r, status: "IN_PROGRESS" }
+              : r,
+        );
+        await rtdb.ref(`rides-assigned/${this.driverId}`).update({
+          riders: updatedRiders,
+          status: "IN_PROGRESS",
+        });
+      } else {
+        // Solo ride — safe to set top-level status
+        await rtdb.ref(`rides-assigned/${this.driverId}`).update({
+          status: "IN_PROGRESS",
+        });
+      }
+
       // Also update the rides/{rideId} node so the rider UI detects the trip started
       await rtdb.ref(`rides/${this.currentAssignment.rideId}`).update({
         status: "IN_PROGRESS",
       });
-      console.log(`  📝 ${this.driverId} RTDB rides-assigned status → IN_PROGRESS`);
+      console.log(`  📝 ${this.driverId} RTDB rides-assigned status → IN_PROGRESS (ride ${this.currentAssignment.rideId})`);
     } catch (err) {
       console.error(`  ❌ Failed to update rides-assigned status to IN_PROGRESS:`, err);
     }
@@ -515,13 +562,12 @@ export class DriverAgent {
     // Update Firestore ride status to STARTED
     await this.updateRideStatus("STARTED");
 
-    // Route to the nearest drop among ALL active passengers.
-    // This handles multi-pickup scenarios where Rider 1 is already in the
-    // vehicle and Rider 2 was just picked up.
-    await this.routeToNearestDrop();
+    // Route to the nearest waypoint (drop-off OR queued pickup) using
+    // nearest-neighbor heuristic — TSP-like interleaved routing.
+    await this.routeToNearestWaypoint();
 
     console.log(
-      `  🚀 ${this.driverId} trip started (${this.activePassengers.size} pax) — heading to nearest drop`,
+      `  🚀 ${this.driverId} trip started (${this.activePassengers.size} pax, ${this.queuedAssignments.length} queued) — heading to nearest waypoint`,
     );
   }
 
@@ -619,8 +665,8 @@ export class DriverAgent {
   }
 
   /**
-   * Per-tick handler for TRIP mode — moves toward the drop-off
-   * and calls {@link completeTrip} on arrival.
+   * Per-tick handler for TRIP mode — moves toward the current waypoint
+   * (which may be a PICKUP or DROP) and handles arrival appropriately.
    */
   private async tickTrip(deltaTimeMs: number): Promise<void> {
     if (!this.currentAssignment) {
@@ -630,18 +676,44 @@ export class DriverAgent {
 
     await this.moveAlongRoute(deltaTimeMs);
 
-    // Check if arrived at drop
-    const distanceToDrop = this.distanceTo(this.currentAssignment.drop);
+    // Determine destination based on waypoint type
+    const destination =
+      this.currentWaypointType === "PICKUP"
+        ? this.currentAssignment.pickup
+        : this.currentAssignment.drop;
 
-    if (distanceToDrop <= ARRIVAL_THRESHOLD_M) {
-      console.log(`  🏁 ${this.driverId} arrived at drop location!`);
-      await this.completeTrip();
+    const distanceToWaypoint = this.distanceTo(destination);
+
+    if (distanceToWaypoint <= ARRIVAL_THRESHOLD_M) {
+      if (this.currentWaypointType === "PICKUP") {
+        // Arrived at a pooled pickup while other passengers are aboard
+        console.log(
+          `  📍 ${this.driverId} arrived at pooled pickup for ride ${this.currentAssignment.rideId}!`,
+        );
+        await this.startWaitingMode();
+      } else {
+        console.log(`  🏁 ${this.driverId} arrived at drop location!`);
+        await this.completeTrip();
+      }
       return;
     }
 
-    // If route complete but not arrived (edge case), regenerate route
+    // If route complete but not arrived, snap if close or re-fetch
     if (this.isRouteComplete()) {
-      await this.fetchRoute(this.currentPosition, this.currentAssignment.drop);
+      if (distanceToWaypoint <= 500) {
+        this.currentPosition = { ...destination };
+        if (this.currentWaypointType === "PICKUP") {
+          console.log(
+            `  📍 ${this.driverId} snapped to pooled pickup (close enough)`,
+          );
+          await this.startWaitingMode();
+        } else {
+          console.log(`  🏁 ${this.driverId} snapped to drop (close enough)`);
+          await this.completeTrip();
+        }
+        return;
+      }
+      await this.fetchRoute(this.currentPosition, destination);
     }
 
     // Update RTDB (throttled)
@@ -691,21 +763,12 @@ export class DriverAgent {
     // 3. Pool-aware rides-assigned cleanup
     await this.updateRidesAssignedAfterDrop(rideId);
 
-    // ─── STILL HAVE PASSENGERS? → Route to next drop immediately ────────
-    if (this.activePassengers.size > 0) {
+    // ─── MORE WAYPOINTS? (passengers aboard OR queued pickups) ───────────
+    if (this.activePassengers.size > 0 || this.queuedAssignments.length > 0) {
       console.log(
-        `  🔄 ${this.driverId} has ${this.activePassengers.size} more passengers — routing to next drop`,
+        `  🔄 ${this.driverId} has ${this.activePassengers.size} pax + ${this.queuedAssignments.length} queued — routing to nearest waypoint`,
       );
-      await this.routeToNearestDrop();
-      return;
-    }
-
-    // ─── QUEUED RIDES? → Pick up the next rider ──────────────────────────
-    if (this.queuedAssignments.length > 0) {
-      const nextAssignment = this.queuedAssignments.shift()!;
-      console.log(`  📦 ${this.driverId} picking up queued pooled ride ${nextAssignment.rideId}`);
-      this.currentAssignment = nextAssignment;
-      await this.startPickupMode();
+      await this.routeToNearestWaypoint();
       return;
     }
 
@@ -739,40 +802,70 @@ export class DriverAgent {
   }
 
   /**
-   * Routes the driver to the nearest drop-off among all active passengers.
-   * Sets {@link currentAssignment} to the rider whose drop is closest.
+   * TSP-like nearest-neighbor routing: considers BOTH active passenger
+   * drop-offs AND queued ride pickups, routes to whichever is closest.
+   *
+   * This interleaves pickups and drop-offs optimally instead of processing
+   * riders sequentially.
    */
-  private async routeToNearestDrop(): Promise<void> {
-    let nearest: RideAssignment | null = null;
-    let nearestDist = Infinity;
+  private async routeToNearestWaypoint(): Promise<void> {
+    type Waypoint = {
+      type: "PICKUP" | "DROP";
+      assignment: RideAssignment;
+      location: Coordinate;
+      distance: number;
+    };
 
+    const waypoints: Waypoint[] = [];
+
+    // Add drop-offs for all active passengers currently in the vehicle
     for (const [, assignment] of this.activePassengers) {
-      const dist = this.distanceTo(assignment.drop);
-      if (dist < nearestDist) {
-        nearestDist = dist;
-        nearest = assignment;
-      }
+      waypoints.push({
+        type: "DROP",
+        assignment,
+        location: assignment.drop,
+        distance: this.distanceTo(assignment.drop),
+      });
     }
 
-    if (!nearest) {
-      // Edge case: no active passengers left
-      if (this.queuedAssignments.length > 0) {
-        const next = this.queuedAssignments.shift()!;
-        this.currentAssignment = next;
-        await this.startPickupMode();
-      } else {
-        await this.startIdleMode();
-      }
+    // Add pickups for all queued assignments waiting to be collected
+    for (const assignment of this.queuedAssignments) {
+      waypoints.push({
+        type: "PICKUP",
+        assignment,
+        location: assignment.pickup,
+        distance: this.distanceTo(assignment.pickup),
+      });
+    }
+
+    if (waypoints.length === 0) {
+      // Nothing left to do — should not normally reach here
+      // (completeTrip handles the AWAITING_PAYMENT / IDLE transition)
+      await this.startIdleMode();
       return;
     }
 
-    this.currentAssignment = nearest;
+    // Nearest-neighbor heuristic: pick the closest waypoint
+    waypoints.sort((a, b) => a.distance - b.distance);
+    const nearest = waypoints[0];
+
+    this.currentAssignment = nearest.assignment;
+    this.currentWaypointType = nearest.type;
     this.mode = "TRIP";
-    await this.fetchRoute(this.currentPosition, nearest.drop);
+
+    if (nearest.type === "PICKUP") {
+      // Remove from queued assignments since we're heading there now
+      this.queuedAssignments = this.queuedAssignments.filter(
+        (a) => a.rideId !== nearest.assignment.rideId,
+      );
+    }
+
+    const destination = nearest.type === "PICKUP" ? nearest.assignment.pickup : nearest.assignment.drop;
+    await this.fetchRoute(this.currentPosition, destination);
     this.setSpeedForMode("TRIP");
 
     console.log(
-      `  🚀 ${this.driverId} routing to nearest drop: ride ${nearest.rideId} (${nearestDist.toFixed(0)}m, ${this.activePassengers.size} pax)`,
+      `  🚀 ${this.driverId} routing to nearest ${nearest.type}: ride ${nearest.assignment.rideId} (${nearest.distance.toFixed(0)}m, ${this.activePassengers.size} pax, ${this.queuedAssignments.length} queued)`,
     );
   }
 

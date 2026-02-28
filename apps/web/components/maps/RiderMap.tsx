@@ -626,11 +626,8 @@ export default function RiderMap({
                 }
               }
 
-              // Set OTP if available (for legacy support or if stored)
-              if (rideData.otp) {
-                setOtp(rideData.otp);
-                setShowOtpModal(true);
-              }
+              // Don't show OTP on restore — let the polling effect check
+              // driver arrival status before revealing OTP to rider
               applyRideLocations(rideData);
               return; // Exit early if successful
             } else {
