@@ -40,6 +40,8 @@ export class SimulationEngine {
 
   // Track assignment listeners per driver
   private assignmentListeners: Map<string, () => void> = new Map();
+  // Track which rideIds we've already dispatched to agents (prevents re-pickup on data updates)
+  private processedRideIds: Map<string, Set<string>> = new Map();
 
   constructor() {
     console.log("═══════════════════════════════════════════════════════════════");
@@ -169,17 +171,19 @@ export class SimulationEngine {
     });
 
     // Listen for driver data updates (position sync from app)
-    driversRef.on("child_changed", (snapshot) => {
+    driversRef.on("child_changed", async (snapshot) => {
       const driverId = snapshot.key;
       if (!driverId) return;
 
       const data = snapshot.val();
       if (!data) return;
 
-      // Only sync if the update came from the driver app (not our simulator)
-      // We can detect this by checking if lastUpdated is significantly different
-      // For now, we'll skip syncing to avoid feedback loops
-      // The agent's position is authoritative while simulator is running
+      // If this driver was skipped at child_added (e.g. missing lat/lng),
+      // try to create the agent now that data may be available.
+      if (!this.agents.has(driverId)) {
+        console.log(`  🔄 Retrying agent creation for ${driverId} (child_changed)`);
+        await this.createAgent(driverId, data);
+      }
     });
 
     console.log("  ✓ Listening on /drivers-online");
@@ -212,15 +216,19 @@ export class SimulationEngine {
     }
 
     // Validate required position data
-    if (typeof data.lat !== "number" || typeof data.lng !== "number") {
-      console.log(`  ⚠️  Skipping ${driverId}: missing lat/lng (driver may be initializing)`);
+    const lat = Number(data.lat);
+    const lng = Number(data.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      console.log(
+        `  ⚠️  Skipping ${driverId}: missing or invalid lat/lng (driver may be initializing)`,
+      );
       return;
     }
 
     // Create initial position from RTDB data
     const initialPosition: Coordinate = {
-      lat: data.lat,
-      lng: data.lng,
+      lat,
+      lng,
     };
 
     // Create the agent
@@ -258,6 +266,9 @@ export class SimulationEngine {
       unsubscribe();
       this.assignmentListeners.delete(driverId);
     }
+
+    // Clear processed ride tracking for this driver
+    this.processedRideIds.delete(driverId);
 
     // Clean up any pending ride assignment for this driver
     await this.cleanupDriverRTDB(driverId);
@@ -312,24 +323,63 @@ export class SimulationEngine {
 
     const callback = async (snapshot: import("firebase-admin/database").DataSnapshot) => {
       const data = snapshot.val();
+      if (!data) return;
 
-      if (data) {
-        // New ride assignment
-        const assignment: RideAssignment = {
-          drop: {
-            lat: data.drop.lat,
-            lng: data.drop.lng,
-          },
-          pickup: {
-            lat: data.pickup.lat,
-            lng: data.pickup.lng,
-          },
-          rideId: data.rideId,
-          riderId: data.riderId,
-        };
-
-        await agent.handleRideAssignment(assignment);
+      // Determine which rideIds are present in this assignment
+      const rideIdsInData = new Set<string>();
+      if (data.rideId) rideIdsInData.add(data.rideId);
+      if (Array.isArray(data.riders)) {
+        for (const r of data.riders) {
+          if (r.rideId) rideIdsInData.add(r.rideId);
+        }
       }
+
+      // Get already-processed rideIds for this driver
+      if (!this.processedRideIds.has(driverId)) {
+        this.processedRideIds.set(driverId, new Set());
+      }
+      const processed = this.processedRideIds.get(driverId)!;
+
+      // Find NEW ride(s) that we haven't dispatched yet
+      const newRideIds = [...rideIdsInData].filter((id) => !processed.has(id));
+
+      if (newRideIds.length === 0) {
+        // No new rides — this is just a status update (ARRIVED, IN_PROGRESS, etc.)
+        return;
+      }
+
+      // Mark all current rideIds as processed
+      for (const id of rideIdsInData) {
+        processed.add(id);
+      }
+
+      // For pooled rides, route to the NEWEST rider's pickup (the one just added)
+      // For single rides, use top-level pickup/drop
+      const newestRideId = newRideIds[newRideIds.length - 1];
+      let assignmentPickup = { lat: data.pickup.lat, lng: data.pickup.lng };
+      let assignmentDrop = { lat: data.drop.lat, lng: data.drop.lng };
+      let assignmentRiderId = data.riderId;
+
+      if (Array.isArray(data.riders)) {
+        const newestRider = data.riders.find((r: { rideId: string }) => r.rideId === newestRideId);
+        if (newestRider) {
+          assignmentPickup = { lat: newestRider.pickup.lat, lng: newestRider.pickup.lng };
+          assignmentDrop = { lat: newestRider.drop.lat, lng: newestRider.drop.lng };
+          assignmentRiderId = newestRider.riderId;
+        }
+      }
+
+      const assignment: RideAssignment = {
+        drop: assignmentDrop,
+        pickup: assignmentPickup,
+        rideId: newestRideId,
+        riderId: assignmentRiderId,
+      };
+
+      console.log(
+        `  📦 New ride detected for ${driverId}: ${newestRideId} (total: ${rideIdsInData.size})`,
+      );
+      await agent.handleRideAssignment(assignment);
     };
 
     assignmentRef.on("value", callback);
@@ -359,6 +409,18 @@ export class SimulationEngine {
 
       if (data?.rideId) {
         console.log(`  📋 Found existing assignment for ${driverId}: ${data.rideId}`);
+
+        // Pre-populate processedRideIds so the onValue listener won't re-dispatch these
+        if (!this.processedRideIds.has(driverId)) {
+          this.processedRideIds.set(driverId, new Set());
+        }
+        const processed = this.processedRideIds.get(driverId)!;
+        processed.add(data.rideId);
+        if (Array.isArray(data.riders)) {
+          for (const r of data.riders) {
+            if (r.rideId) processed.add(r.rideId);
+          }
+        }
 
         const assignment: RideAssignment = {
           drop: {
@@ -443,7 +505,8 @@ export class SimulationEngine {
         WAITING: "⏳",
       }[state.mode];
 
-      const line = `  │ ${modeIcon} ${driverId}: ${state.mode.padEnd(7)} @ (${state.position.lat.toFixed(4)}, ${state.position.lng.toFixed(4)})`;
+      const paxInfo = state.passengerCount > 0 ? ` [${state.passengerCount} pax]` : "";
+      const line = `  │ ${modeIcon} ${driverId}: ${state.mode.padEnd(7)} @ (${state.position.lat.toFixed(4)}, ${state.position.lng.toFixed(4)})${paxInfo}`;
       console.log(`${line.padEnd(66)}│`);
     }
 

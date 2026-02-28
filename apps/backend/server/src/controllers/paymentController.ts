@@ -255,8 +255,32 @@ export const confirmPayment = async (req: Request, res: Response) => {
     }
 
     if (driverId) {
-      await rtdb.ref(`drivers-online/${driverId}`).update({ status: "AVAILABLE" });
-      console.log(`Driver ${driverId} is now AVAILABLE after payment confirmation`);
+      // ═══════════════════════════════════════════════════════════════
+      // Pool-Aware: Only set driver AVAILABLE if no other active rides
+      // ═══════════════════════════════════════════════════════════════
+      let hasOtherActiveRides = false;
+
+      try {
+        // Check if there are other active (non-completed) rides for this driver
+        const activeRidesSnap = await db
+          .collection("rides")
+          .where("driverId", "==", driverId)
+          .where("status", "in", ["MATCHED", "STARTED", "IN_PROGRESS", "COMPLETED"])
+          .get();
+
+        // Filter out the current ride — if other rides exist, driver stays busy
+        const otherActiveRides = activeRidesSnap.docs.filter((d) => d.id !== rideId);
+        hasOtherActiveRides = otherActiveRides.length > 0;
+      } catch (err) {
+        console.error("Error checking for other active rides:", err);
+      }
+
+      if (!hasOtherActiveRides) {
+        await rtdb.ref(`drivers-online/${driverId}`).update({ status: "AVAILABLE" });
+        console.log(`Driver ${driverId} is now AVAILABLE after payment confirmation`);
+      } else {
+        console.log(`Driver ${driverId} has other active pooled rides — staying BUSY`);
+      }
 
       // Update Driver's Wallet Balance
       try {

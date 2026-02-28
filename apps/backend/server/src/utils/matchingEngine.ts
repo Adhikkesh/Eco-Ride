@@ -84,7 +84,7 @@ export function optimizeRoute(
   let currentLocation = startLocation;
 
   // Track which riders have been picked up
-  const pickedUpRiders = new Set<string>();
+  const _pickedUpRiders = new Set<string>();
 
   // If a waypoint is a DROP, check if its corresponding PICKUP has been visited
   // However, for riders already in the car, we assume they are "picked up" effectively.
@@ -173,7 +173,7 @@ export function generateGeohash(
  * Get neighboring geohash cells (8 neighbors + center)
  */
 export function getNeighborGeohashes(geohash: string): string[] {
-  const neighbors = geofire.geohashQueryBounds(
+  const _neighbors = geofire.geohashQueryBounds(
     [
       parseFloat(geofire.geohashForLocation([0, 0], 1)), // Placeholder
       parseFloat(geofire.geohashForLocation([0, 0], 1)),
@@ -182,7 +182,7 @@ export function getNeighborGeohashes(geohash: string): string[] {
   );
 
   // Alternative: Generate neighbors manually
-  const chars = "0123456789bcdefghjkmnpqrstuvwxyz";
+  const _chars = "0123456789bcdefghjkmnpqrstuvwxyz";
   const neighbors9: string[] = [geohash];
 
   // For precision 6, we'll filter by actual distance instead
@@ -212,13 +212,13 @@ export function phase1SpatialFilter(
   for (const [driverId, location] of drivers) {
     // Check driver availability
     const isAvailable = location.status === "AVAILABLE";
-    const isOnTrip = location.status === "ON_TRIP";
+    const isOnTrip = location.status === "ON_TRIP" || location.status === "BUSY";
 
     // Validate coordinates
     const lat = Number(location.lat);
     const lng = Number(location.lng);
 
-    if (isNaN(lat) || isNaN(lng)) {
+    if (Number.isNaN(lat) || Number.isNaN(lng)) {
       console.warn(`[Phase 1] Driver ${driverId} has invalid coordinates:`, location);
       continue;
     }
@@ -254,7 +254,7 @@ export function phase1SpatialFilter(
         const destLat = Number(location.destination.lat);
         const destLng = Number(location.destination.lng);
 
-        if (isNaN(destLat) || isNaN(destLng)) {
+        if (Number.isNaN(destLat) || Number.isNaN(destLng)) {
           console.warn(
             `[Phase 1] Driver ${driverId} has invalid destination coordinates:`,
             location.destination,
@@ -397,6 +397,10 @@ export function phase2VectorAlignment(
   console.log(
     `[Phase 2] ${filtered.length}/${candidates.length} candidates passed alignment check`,
   );
+  if (filtered.length === 0) {
+    console.log("[Phase 2] No aligned drivers, falling back to all candidates");
+    return candidates;
+  }
   return filtered;
 }
 
@@ -439,7 +443,7 @@ export function phase3DetourFeasibility(
     // Distance = driver-to-pickup + pickup-to-destination
     const pickupDistance = candidate.distance; // Already calculated
     const pooledDistance = pickupDistance + directDistance;
-    const pooledTime = calculateTravelTimeMinutes(pooledDistance);
+    const _pooledTime = calculateTravelTimeMinutes(pooledDistance);
 
     // Marginal detour = pooled time - direct time
     // Since driver needs to reach pickup, the detour is the pickup distance
@@ -500,7 +504,7 @@ function normalize(value: number, min: number, max: number): number {
  */
 export function phase4GlobalOptimization(
   candidates: DriverCandidate[],
-  rideRequest: RideRequest,
+  _rideRequest: RideRequest,
 ): DriverCandidate | null {
   if (candidates.length === 0) {
     return null;

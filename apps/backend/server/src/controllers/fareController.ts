@@ -14,13 +14,15 @@ import type { Request, Response } from "express";
  * @property {number} BASE_FARE - Base fare for all rides in rupees
  * @property {number} PER_KM - Per kilometer charge in rupees
  * @property {number} PER_MIN - Per minute charge in rupees
- * @property {number} POOL_DISCOUNT - Discount percentage for pooled rides (0.2 = 20%)
+ * @property {number} POOL_BASE_DISCOUNT - Base discount for choosing pooled ride (25%)
+ * @property {number} POOL_PER_PASSENGER_DISCOUNT - Additional discount per extra passenger (5%)
  */
 const PRICING = {
   BASE_FARE: 40,
   PER_KM: 12,
   PER_MIN: 1.5,
-  POOL_DISCOUNT: 0.2,
+  POOL_BASE_DISCOUNT: 0.25,
+  POOL_PER_PASSENGER_DISCOUNT: 0.05,
 };
 
 /**
@@ -50,6 +52,20 @@ interface EstimateRequest {
   pickup: { lat: number; lng: number };
   drop: { lat: number; lng: number };
   isPooled?: boolean;
+  /** Current number of passengers sharing the ride (for dynamic discount) */
+  passengerCount?: number;
+}
+
+/**
+ * Calculates the pooling discount based on passenger count.
+ * Base discount of 25% for opting into pooling, plus 5% per additional passenger.
+ * Max discount capped at 40%.
+ */
+function getPoolDiscount(passengerCount: number): number {
+  const baseDiscount = PRICING.POOL_BASE_DISCOUNT;
+  const extraPassengers = Math.max(0, passengerCount - 1);
+  const totalDiscount = baseDiscount + extraPassengers * PRICING.POOL_PER_PASSENGER_DISCOUNT;
+  return Math.min(totalDiscount, 0.4); // Cap at 40%
 }
 
 /**
@@ -63,7 +79,7 @@ interface EstimateRequest {
  */
 export const calculateFare = async (req: Request, res: Response) => {
   try {
-    const { pickup, drop, isPooled } = req.body as EstimateRequest;
+    const { pickup, drop, isPooled, passengerCount = 1 } = req.body as EstimateRequest;
 
     if (!pickup?.lat || !pickup?.lng || !drop?.lat || !drop?.lng) {
       return res.status(400).json({
@@ -133,21 +149,41 @@ export const calculateFare = async (req: Request, res: Response) => {
     const distanceKm = distanceMeters / 1000;
     const durationMin = durationSeconds / 60;
 
-    // Pricing Logic
-    let totalFare = PRICING.BASE_FARE + distanceKm * PRICING.PER_KM + durationMin * PRICING.PER_MIN;
+    // ═══════════════════════════════════════════════════════════════
+    // PRICING LOGIC — Eco-Friendly Fare Calculation
+    // ═══════════════════════════════════════════════════════════════
+    const baseFare =
+      PRICING.BASE_FARE + distanceKm * PRICING.PER_KM + durationMin * PRICING.PER_MIN;
+
+    let finalFare = baseFare;
+    let poolDiscount = 0;
+    let poolSavings = 0;
 
     if (isPooled) {
-      totalFare = totalFare * (1 - PRICING.POOL_DISCOUNT);
+      poolDiscount = getPoolDiscount(passengerCount || 1);
+      poolSavings = Math.round(baseFare * poolDiscount);
+      finalFare = baseFare - poolSavings;
     }
 
-    const finalFare = Math.round(totalFare);
+    const roundedFare = Math.round(finalFare);
 
-    // CO2 Logic
+    // ═══════════════════════════════════════════════════════════════
+    // CO₂ & ECO CALCULATIONS
+    // ═══════════════════════════════════════════════════════════════
     const co2EmittedStandard = distanceKm * EMISSIONS.PETROL_G_PER_KM;
-    const co2Saved = Math.round(co2EmittedStandard); // 100% savings with EV
+    // For pooled rides, each rider's share of CO2 saved is proportional
+    const effectivePassengers = isPooled ? Math.max(passengerCount || 1, 1) : 1;
+    const co2SavedPerRider = Math.round(co2EmittedStandard / effectivePassengers);
+    const co2SavedTotal = Math.round(co2EmittedStandard);
+
+    // Green points: base + distance bonus, with pooling multiplier
+    const baseGreenPoints = Math.round(10 + distanceKm * 2);
+    const greenPointsMultiplier = isPooled ? 1.5 : 1.0;
+    const greenPoints = Math.round(baseGreenPoints * greenPointsMultiplier);
 
     return res.status(200).json({
-      co2_saved_g: co2Saved,
+      co2_saved_g: co2SavedTotal,
+      co2_saved_per_rider_g: co2SavedPerRider,
       currency: "INR",
       details: {
         distance_m: distanceMeters,
@@ -155,8 +191,14 @@ export const calculateFare = async (req: Request, res: Response) => {
       },
       distance_km: distanceKm.toFixed(1),
       eta_min: Math.round(durationMin),
-      fare: finalFare,
+      fare: roundedFare,
+      green_points: greenPoints,
+      is_pooled: isPooled || false,
+      passenger_count: effectivePassengers,
       polyline: route.polyline.encodedPolyline,
+      pool_discount_pct: isPooled ? Math.round(poolDiscount * 100) : 0,
+      pool_savings: poolSavings,
+      solo_fare: Math.round(baseFare),
       success: true,
     });
   } catch (error) {

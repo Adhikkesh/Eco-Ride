@@ -23,6 +23,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FaBriefcase,
+  FaCar,
   FaCheckCircle,
   FaClock,
   FaEdit,
@@ -390,6 +391,9 @@ export default function RiderMap({
   const [isGreenPointsUsed, setIsGreenPointsUsed] = useState(false);
   const [discountAmount, setDiscountAmount] = useState(0);
   const [pointsUsed, setPointsUsed] = useState(0);
+
+  // Pooling / Eco-Ride State
+  const [isPooled, setIsPooled] = useState(false);
 
   // Auto-complete trip state
   const [dropOffLocation, setDropOffLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -1317,20 +1321,6 @@ export default function RiderMap({
           }
         },
       );
-
-      // Also prepare route: Pickup -> Destination for display
-      directionsServiceRef.current.route(
-        {
-          destination,
-          origin: pickup,
-          travelMode: google.maps.TravelMode.DRIVING,
-        },
-        (result, status) => {
-          if (status === google.maps.DirectionsStatus.OK && result) {
-            setDirectionsToDestination(result);
-          }
-        },
-      );
     }
 
     // CASE 3: ON TRIP (Driving to Destination) - Update every 10s for live ETA
@@ -1683,10 +1673,14 @@ export default function RiderMap({
       return;
     }
 
-    const result = await getEstimate(pickup, {
-      lat: selectedDestination.lat,
-      lng: selectedDestination.lng,
-    });
+    const result = await getEstimate(
+      pickup,
+      {
+        lat: selectedDestination.lat,
+        lng: selectedDestination.lng,
+      },
+      isPooled,
+    );
 
     if (result?.polyline) {
       try {
@@ -1759,6 +1753,7 @@ export default function RiderMap({
           dropName: selectedDestination.name,
           duration: estimate?.details?.duration_s || null,
           fare: estimate?.fare || null,
+          isPooled,
           pickupLat: pickup.lat,
           pickupLng: pickup.lng,
           pickupName: pickupSearchText || "Current Location",
@@ -3129,6 +3124,130 @@ export default function RiderMap({
                   </button>
                 </div>
 
+                {/* ═══════════════════════════════════════════════════════ */}
+                {/* ECO-RIDE POOLING TOGGLE                               */}
+                {/* ═══════════════════════════════════════════════════════ */}
+                <div
+                  style={{
+                    background: isPooled
+                      ? "linear-gradient(135deg, rgba(34, 197, 94, 0.15), rgba(16, 185, 129, 0.15))"
+                      : "rgba(30, 41, 59, 0.6)",
+                    border: isPooled
+                      ? "1px solid rgba(34, 197, 94, 0.4)"
+                      : "1px solid rgba(71, 85, 105, 0.3)",
+                    borderRadius: "16px",
+                    marginBottom: "16px",
+                    padding: "16px",
+                    transition: "all 0.3s ease",
+                  }}
+                >
+                  <div
+                    style={{
+                      alignItems: "center",
+                      cursor: "pointer",
+                      display: "flex",
+                      justifyContent: "space-between",
+                    }}
+                    onClick={() => {
+                      setIsPooled(!isPooled);
+                      // Clear existing estimate when toggling so user re-estimates
+                      if (estimate) {
+                        clearEstimate();
+                        setDecodedPolyline([]);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        setIsPooled(!isPooled);
+                        if (estimate) {
+                          clearEstimate();
+                          setDecodedPolyline([]);
+                        }
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                  >
+                    <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
+                      <div
+                        style={{
+                          alignItems: "center",
+                          background: isPooled
+                            ? "linear-gradient(135deg, #22c55e, #10b981)"
+                            : "rgba(71, 85, 105, 0.5)",
+                          borderRadius: "12px",
+                          display: "flex",
+                          height: "40px",
+                          justifyContent: "center",
+                          transition: "all 0.3s ease",
+                          width: "40px",
+                        }}
+                      >
+                        <FaUsers style={{ color: "white", fontSize: "18px" }} />
+                      </div>
+                      <div>
+                        <div style={{ color: "#e2e8f0", fontSize: "15px", fontWeight: 600 }}>
+                          Share Ride
+                        </div>
+                        <div style={{ color: "#94a3b8", fontSize: "12px" }}>
+                          Save up to 35% & reduce CO₂
+                        </div>
+                      </div>
+                    </div>
+                    {/* Toggle Switch */}
+                    <div
+                      style={{
+                        background: isPooled
+                          ? "linear-gradient(135deg, #22c55e, #10b981)"
+                          : "rgba(71, 85, 105, 0.5)",
+                        borderRadius: "14px",
+                        height: "28px",
+                        position: "relative",
+                        transition: "all 0.3s ease",
+                        width: "52px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          background: "white",
+                          borderRadius: "50%",
+                          boxShadow: "0 2px 4px rgba(0,0,0,0.3)",
+                          height: "22px",
+                          left: isPooled ? "27px" : "3px",
+                          position: "absolute",
+                          top: "3px",
+                          transition: "all 0.3s ease",
+                          width: "22px",
+                        }}
+                      />
+                    </div>
+                  </div>
+                  {isPooled && (
+                    <div
+                      style={{
+                        borderTop: "1px solid rgba(34, 197, 94, 0.2)",
+                        display: "flex",
+                        gap: "16px",
+                        marginTop: "12px",
+                        paddingTop: "12px",
+                      }}
+                    >
+                      <div style={{ alignItems: "center", display: "flex", flex: 1, gap: "6px" }}>
+                        <FaLeaf style={{ color: "#22c55e", fontSize: "12px" }} />
+                        <span style={{ color: "#86efac", fontSize: "12px" }}>
+                          25% fare discount
+                        </span>
+                      </div>
+                      <div style={{ alignItems: "center", display: "flex", flex: 1, gap: "6px" }}>
+                        <FaLeaf style={{ color: "#22c55e", fontSize: "12px" }} />
+                        <span style={{ color: "#86efac", fontSize: "12px" }}>
+                          1.5x green points
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {/* Error message */}
                 {errorMessage && (
                   <div
@@ -3154,13 +3273,39 @@ export default function RiderMap({
                 {estimate ? (
                   <div
                     style={{
-                      background: "rgba(34, 197, 94, 0.1)",
-                      border: "1px solid rgba(34, 197, 94, 0.3)",
+                      background: isPooled
+                        ? "linear-gradient(135deg, rgba(34, 197, 94, 0.12), rgba(16, 185, 129, 0.12))"
+                        : "rgba(34, 197, 94, 0.1)",
+                      border: isPooled
+                        ? "1px solid rgba(34, 197, 94, 0.4)"
+                        : "1px solid rgba(34, 197, 94, 0.3)",
                       borderRadius: "16px",
                       marginBottom: "10px",
                       padding: "16px",
                     }}
                   >
+                    {/* Pooled ride badge */}
+                    {isPooled && (
+                      <div
+                        style={{
+                          alignItems: "center",
+                          background: "linear-gradient(135deg, #22c55e, #10b981)",
+                          borderRadius: "8px",
+                          color: "white",
+                          display: "inline-flex",
+                          fontSize: "11px",
+                          fontWeight: 700,
+                          gap: "4px",
+                          letterSpacing: "0.5px",
+                          marginBottom: "10px",
+                          padding: "4px 10px",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        <FaUsers size={10} /> SHARED RIDE
+                      </div>
+                    )}
+
                     <div
                       style={{
                         alignItems: "flex-end",
@@ -3170,10 +3315,37 @@ export default function RiderMap({
                       }}
                     >
                       <div>
-                        <div style={{ color: "#94a3b8", fontSize: "12px" }}>Total Fare</div>
-                        <div style={{ color: "#22c55e", fontSize: "24px", fontWeight: "bold" }}>
-                          ₹{estimate.fare}
+                        <div style={{ color: "#94a3b8", fontSize: "12px" }}>
+                          {isPooled ? "Pooled Fare" : "Total Fare"}
                         </div>
+                        <div style={{ alignItems: "baseline", display: "flex", gap: "8px" }}>
+                          <span style={{ color: "#22c55e", fontSize: "24px", fontWeight: "bold" }}>
+                            ₹{estimate.fare}
+                          </span>
+                          {isPooled && estimate.solo_fare && estimate.solo_fare > estimate.fare && (
+                            <span
+                              style={{
+                                color: "#64748b",
+                                fontSize: "14px",
+                                textDecoration: "line-through",
+                              }}
+                            >
+                              ₹{estimate.solo_fare}
+                            </span>
+                          )}
+                        </div>
+                        {isPooled && (estimate.pool_discount_pct ?? 0) > 0 && (
+                          <div
+                            style={{
+                              color: "#4ade80",
+                              fontSize: "12px",
+                              fontWeight: 600,
+                              marginTop: "2px",
+                            }}
+                          >
+                            You save ₹{estimate.pool_savings} ({estimate.pool_discount_pct}% off)
+                          </div>
+                        )}
                       </div>
                       <div style={{ textAlign: "right" }}>
                         <div
@@ -3189,6 +3361,58 @@ export default function RiderMap({
                         </div>
                         <div style={{ color: "#94a3b8", fontSize: "12px" }}>
                           {estimate.distance_km} km
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Eco Impact Row */}
+                    <div
+                      style={{
+                        borderTop: "1px solid rgba(34, 197, 94, 0.2)",
+                        display: "flex",
+                        gap: "12px",
+                        marginBottom: "12px",
+                        paddingTop: "10px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          alignItems: "center",
+                          background: "rgba(34, 197, 94, 0.1)",
+                          borderRadius: "8px",
+                          display: "flex",
+                          flex: 1,
+                          gap: "6px",
+                          padding: "8px 10px",
+                        }}
+                      >
+                        <FaLeaf style={{ color: "#22c55e", fontSize: "14px" }} />
+                        <div>
+                          <div style={{ color: "#94a3b8", fontSize: "10px" }}>CO₂ Saved</div>
+                          <div style={{ color: "#4ade80", fontSize: "13px", fontWeight: 600 }}>
+                            {((estimate.co2_saved_g || 0) / 1000).toFixed(1)} kg
+                          </div>
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          alignItems: "center",
+                          background: "rgba(34, 197, 94, 0.1)",
+                          borderRadius: "8px",
+                          display: "flex",
+                          flex: 1,
+                          gap: "6px",
+                          padding: "8px 10px",
+                        }}
+                      >
+                        <FaStar style={{ color: "#fbbf24", fontSize: "14px" }} />
+                        <div>
+                          <div style={{ color: "#94a3b8", fontSize: "10px" }}>Green Points</div>
+                          <div style={{ color: "#fbbf24", fontSize: "13px", fontWeight: 600 }}>
+                            +
+                            {estimate.green_points ||
+                              Math.round(10 + parseFloat(estimate.distance_km) * 2)}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -3225,7 +3449,7 @@ export default function RiderMap({
                           padding: "12px",
                         }}
                       >
-                        Confirm Ride
+                        {isPooled ? "Confirm Shared Ride" : "Confirm Ride"}
                       </button>
                     </div>
                   </div>
@@ -3360,7 +3584,7 @@ export default function RiderMap({
                   }}
                 >
                   {/* Route Directions - Driver to Pickup (BLUE) */}
-                  {directionsToPickup && (
+                  {(rideStatus === "matched" || rideStatus === "arrived") && directionsToPickup && (
                     <DirectionsRenderer
                       directions={directionsToPickup}
                       options={{
@@ -3375,31 +3599,34 @@ export default function RiderMap({
                   )}
 
                   {/* Route Directions - Pickup to Destination (GREEN) */}
-                  {directionsToDestination && (
-                    <DirectionsRenderer
-                      directions={directionsToDestination}
-                      options={{
-                        polylineOptions: {
+                  {(rideStatus === "pending_acceptance" || rideStatus === "on_trip") &&
+                    directionsToDestination && (
+                      <DirectionsRenderer
+                        directions={directionsToDestination}
+                        options={{
+                          polylineOptions: {
+                            strokeColor: "#22c55e",
+                            strokeOpacity: 0.9,
+                            strokeWeight: 5,
+                          },
+                          suppressMarkers: true,
+                        }}
+                      />
+                    )}
+
+                  {/* Estimated Route Polyline (Green) - Only show before ride starts */}
+                  {rideStatus === "idle" &&
+                    decodedPolyline.length > 0 &&
+                    !directionsToDestination && (
+                      <Polyline
+                        path={decodedPolyline}
+                        options={{
                           strokeColor: "#22c55e",
                           strokeOpacity: 0.9,
-                          strokeWeight: 5,
-                        },
-                        suppressMarkers: true,
-                      }}
-                    />
-                  )}
-
-                  {/* Estimated Route Polyline (Green) - Only show when no active ride */}
-                  {decodedPolyline.length > 0 && !directionsToDestination && (
-                    <Polyline
-                      path={decodedPolyline}
-                      options={{
-                        strokeColor: "#22c55e",
-                        strokeOpacity: 0.9,
-                        strokeWeight: 6,
-                      }}
-                    />
-                  )}
+                          strokeWeight: 6,
+                        }}
+                      />
+                    )}
 
                   {/* Current Location Marker */}
                   {currentLocation && (
