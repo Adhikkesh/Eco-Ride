@@ -10,7 +10,7 @@ import {
 import { onAuthStateChanged } from "firebase/auth";
 import { onDisconnect, onValue, ref, remove, set, update } from "firebase/database";
 import * as geofire from "geofire-common";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FaCar,
   FaCheckCircle,
@@ -283,6 +283,12 @@ export default function DriverLiveMap({
   >([]);
   const [showPaymentPopup, setShowPaymentPopup] = useState(false);
   const [receivedAmount, setReceivedAmount] = useState(0);
+
+  // Per-rider payment notifications for pooled rides
+  const [completedRideIds, setCompletedRideIds] = useState<string[]>([]);
+  const [paymentNotifications, setPaymentNotifications] = useState<
+    { rideId: string; amount: number; greenPoints: number }[]
+  >([]);
 
   // Pending Ride Acceptance State
   const [pendingRide, setPendingRide] = useState<PendingRide | null>(null);
@@ -917,11 +923,11 @@ export default function DriverLiveMap({
 
         if (hasRemainingRiders) {
           // Other pooled riders still active — don't go to payment mode.
-          // The backend updated rides-assigned with remaining riders;
-          // the RTDB listener will re-route to the next rider automatically.
+          // Track this completed ride for per-rider payment notification.
           console.log(
             `[Pool] ${remainingRiders.length} riders remaining — continuing trip`,
           );
+          setCompletedRideIds((prev) => [...prev, assignedRide.rideId]);
           autoCompleteTriggeredRef.current = false;
           // Reset OTP state so the next rider's pickup triggers OTP flow
           otpVerifiedRef.current = false;
@@ -1357,7 +1363,7 @@ export default function DriverLiveMap({
     );
   }, [userId]);
 
-  // Listen for ride COMPLETED status from RTDB
+  // Listen for ride COMPLETED status from RTDB (last/only rider)
   useEffect(() => {
     if (!currentRideId || !rtdb || !isOnline) return;
 
@@ -1397,6 +1403,54 @@ export default function DriverLiveMap({
 
     return () => unsubscribe();
   }, [currentRideId, isOnline, showPaymentPopup]);
+
+  // Listen for per-rider payment confirmations on mid-pool completed rides
+  useEffect(() => {
+    if (!rtdb || completedRideIds.length === 0) return;
+
+    const unsubscribes: (() => void)[] = [];
+
+    for (const rId of completedRideIds) {
+      console.log(`[Pool Payment] Subscribing to rides/${rId} for payment`);
+      const rideRef = ref(rtdb, `rides/${rId}`);
+      const unsub = onValue(rideRef, (snapshot) => {
+        const data = snapshot.val();
+        if (!data) return;
+
+        if (data.paymentStatus === "PAID") {
+          console.log(`[Pool Payment] Rider ${rId} paid ₹${data.paidAmount}`);
+          // Add notification (avoid duplicates)
+          setPaymentNotifications((prev) => {
+            if (prev.some((n) => n.rideId === rId)) return prev;
+            return [
+              ...prev,
+              {
+                amount: data.paidAmount || 0,
+                greenPoints: data.greenPointsRedeemed || 0,
+                rideId: rId,
+              },
+            ];
+          });
+          // Remove from completedRideIds once paid
+          setCompletedRideIds((prev) => prev.filter((id) => id !== rId));
+        }
+      });
+      unsubscribes.push(unsub);
+    }
+
+    return () => unsubscribes.forEach((unsub) => unsub());
+  }, [completedRideIds]);
+
+  // Auto-dismiss per-rider payment notifications after 5 seconds
+  useEffect(() => {
+    if (paymentNotifications.length === 0) return;
+
+    const timer = setTimeout(() => {
+      setPaymentNotifications((prev) => prev.slice(1));
+    }, 5000);
+
+    return () => clearTimeout(timer);
+  }, [paymentNotifications]);
 
   const _goOnline = useCallback(async () => {
     if (!rtdb) {
@@ -1875,6 +1929,60 @@ export default function DriverLiveMap({
                       title={`${wp.type} - Stop ${index + 1}`}
                     />
                   ))
+                ) : assignedRide?.riders && assignedRide.riders.length > 0 ? (
+                  /* Per-rider pickup and drop markers for pooled rides */
+                  <>
+                    {assignedRide.riders.map((rider, index) => (
+                      <React.Fragment key={`rider-markers-${rider.rideId}`}>
+                        {/* Pickup marker (blue) — show unless rider is IN_PROGRESS or completed */}
+                        {rider.pickup && rider.status !== "IN_PROGRESS" && (
+                          <Marker
+                            position={rider.pickup}
+                            label={{
+                              color: "white",
+                              fontWeight: "bold",
+                              text: `P${index + 1}`,
+                            }}
+                            icon={{
+                              anchor: new google.maps.Point(16, 16),
+                              scaledSize: new google.maps.Size(32, 32),
+                              url:
+                                "data:image/svg+xml;charset=UTF-8," +
+                                encodeURIComponent(`
+                                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+                                  <circle cx="16" cy="16" r="14" fill="#3b82f6" stroke="#ffffff" stroke-width="3"/>
+                                </svg>
+                              `),
+                            }}
+                            title={`Pickup - Rider ${index + 1}${rider.riderName ? ` (${rider.riderName})` : ""}`}
+                          />
+                        )}
+                        {/* Drop marker (green) — always show for active riders */}
+                        {rider.drop && (
+                          <Marker
+                            position={rider.drop}
+                            label={{
+                              color: "white",
+                              fontWeight: "bold",
+                              text: `D${index + 1}`,
+                            }}
+                            icon={{
+                              anchor: new google.maps.Point(16, 16),
+                              scaledSize: new google.maps.Size(32, 32),
+                              url:
+                                "data:image/svg+xml;charset=UTF-8," +
+                                encodeURIComponent(`
+                                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+                                  <circle cx="16" cy="16" r="14" fill="#22c55e" stroke="#ffffff" stroke-width="3"/>
+                                </svg>
+                              `),
+                            }}
+                            title={`Drop-off - Rider ${index + 1}${rider.riderName ? ` (${rider.riderName})` : ""}`}
+                          />
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </>
                 ) : (
                   // Legacy/Single Ride Fallback Markers
                   <>
@@ -3380,6 +3488,57 @@ export default function DriverLiveMap({
               Continue Driving
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Per-rider payment notification toasts (pooled rides, non-blocking) */}
+      {paymentNotifications.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "12px",
+            position: "fixed",
+            right: "24px",
+            top: "24px",
+            zIndex: 3000,
+          }}
+        >
+          {paymentNotifications.map((notification) => (
+            <div
+              key={notification.rideId}
+              onClick={() =>
+                setPaymentNotifications((prev) =>
+                  prev.filter((n) => n.rideId !== notification.rideId),
+                )
+              }
+              style={{
+                alignItems: "center",
+                animation: "fadeIn 0.4s ease-out",
+                backdropFilter: "blur(12px)",
+                background: "linear-gradient(135deg, rgba(34, 197, 94, 0.95), rgba(16, 185, 129, 0.95))",
+                border: "1px solid rgba(255,255,255,0.2)",
+                borderRadius: "16px",
+                boxShadow: "0 8px 32px rgba(34, 197, 94, 0.4)",
+                color: "white",
+                cursor: "pointer",
+                display: "flex",
+                gap: "12px",
+                padding: "16px 20px",
+                minWidth: "280px",
+              }}
+            >
+              <FaCheckCircle style={{ fontSize: "24px", flexShrink: 0 }} />
+              <div>
+                <p style={{ fontWeight: 700, fontSize: "15px", margin: "0 0 2px" }}>
+                  Payment Received!
+                </p>
+                <p style={{ fontSize: "13px", margin: 0, opacity: 0.9 }}>
+                  ₹{notification.amount + (notification.greenPoints || 0)} earned from rider
+                </p>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
