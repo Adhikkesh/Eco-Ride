@@ -91,13 +91,19 @@ const calculateETA = (distanceKm: number) => {
   return Math.ceil(distanceKm * 2);
 };
 
+interface Driver {
+  id: string;
+  status: string;
+  distance?: number;
+}
+
 // Filter available drivers
-const filterAvailableDrivers = (drivers: { status: string; id: string }[]) => {
+const filterAvailableDrivers = (drivers: Driver[]) => {
   return drivers.filter((d) => d.status === "AVAILABLE");
 };
 
 // Sort drivers by distance
-const sortDriversByDistance = (drivers: { distance: number; id: string }[]) => {
+const sortDriversByDistance = (drivers: Required<Driver>[]) => {
   return [...drivers].sort((a, b) => a.distance - b.distance);
 };
 
@@ -278,9 +284,9 @@ describe("Ride Controller - Business Logic", () => {
   describe("sortDriversByDistance", () => {
     it("should sort drivers by distance ascending", () => {
       const drivers = [
-        { distance: 5, id: "1" },
-        { distance: 2, id: "2" },
-        { distance: 8, id: "3" },
+        { distance: 5, id: "1", status: "AVAILABLE" },
+        { distance: 2, id: "2", status: "AVAILABLE" },
+        { distance: 8, id: "3", status: "AVAILABLE" },
       ];
       const result = sortDriversByDistance(drivers);
       expect(result[0].distance).toBe(2);
@@ -290,8 +296,8 @@ describe("Ride Controller - Business Logic", () => {
 
     it("should handle drivers with same distance", () => {
       const drivers = [
-        { distance: 5, id: "1" },
-        { distance: 5, id: "2" },
+        { distance: 5, id: "1", status: "AVAILABLE" },
+        { distance: 5, id: "2", status: "AVAILABLE" },
       ];
       const result = sortDriversByDistance(drivers);
       expect(result.length).toBe(2);
@@ -299,8 +305,8 @@ describe("Ride Controller - Business Logic", () => {
 
     it("should not modify original array", () => {
       const drivers = [
-        { distance: 5, id: "1" },
-        { distance: 2, id: "2" },
+        { distance: 5, id: "1", status: "AVAILABLE" },
+        { distance: 2, id: "2", status: "AVAILABLE" },
       ];
       sortDriversByDistance(drivers);
       expect(drivers[0].distance).toBe(5);

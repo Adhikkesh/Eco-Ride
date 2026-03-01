@@ -11,6 +11,11 @@ import type { Request, Response } from "express";
 import { FieldValue } from "firebase-admin/firestore";
 import * as geofire from "geofire-common";
 import { db, rtdb } from "../config/firebase.js";
+import {
+  type DriverLocation as MatchingDriverLocation,
+  matchDriver,
+  type RideRequest,
+} from "../utils/matchingEngine.js";
 
 /**
  * Interface representing a driver's real-time location data.
@@ -28,10 +33,14 @@ interface DriverLocation {
   lat: number;
   lng: number;
   heading: number;
-  status: "AVAILABLE" | "BUSY" | "RESERVED";
+  status: "AVAILABLE" | "BUSY" | "RESERVED" | "ON_TRIP";
   lastUpdated: number;
   vehicleType?: string;
   geohash?: string;
+  destination?: { lat: number; lng: number };
+  currentPassengers?: number;
+  maxPassengers?: number;
+  pooledRides?: string[];
 }
 
 /**
@@ -83,6 +92,7 @@ export const requestRide = async (req: Request, res: Response) => {
       duration,
       co2Saved,
       fare,
+      isPooled = false,
       declinedDrivers = [],
     } = req.body;
     const pickupLatNum = Number(pickupLat);
@@ -110,7 +120,6 @@ export const requestRide = async (req: Request, res: Response) => {
       });
     }
 
-    const center: [number, number] = [pickupLatNum, pickupLngNum];
     const radiusIncrement = 5; // 5km increments
     const maxRadius = 100; // Maximum search radius to prevent infinite loops
 
@@ -128,10 +137,8 @@ export const requestRide = async (req: Request, res: Response) => {
     }
 
     // ---------------------------------------------------------
-    // STEP 2: FILTER BY DISTANCE AND STATUS (WITH EXPANDING RADIUS)
+    // STEP 2: MATCH DRIVER (POOLING-AWARE MATCHING ENGINE)
     // ---------------------------------------------------------
-    const matchingDrivers: DriverMatch[] = [];
-    let currentRadius = radiusIncrement;
     const declinedSet = new Set(declinedDrivers as string[]);
     const now = Date.now();
     const STALE_THRESHOLD = 5 * 60 * 1000; // 5 minutes threshold for stale location updates
@@ -140,107 +147,102 @@ export const requestRide = async (req: Request, res: Response) => {
     console.log("Total drivers online:", Object.keys(driversData).length);
     console.log("Declined drivers:", declinedDrivers);
 
-    // Keep expanding radius until we find drivers or hit max radius
-    while (matchingDrivers.length === 0 && currentRadius <= maxRadius) {
-      console.log(`Searching within ${currentRadius}km radius...`);
+    const driversMap = new Map<string, MatchingDriverLocation>();
 
-      for (const [driverId, locationData] of Object.entries(driversData)) {
-        try {
-          const driver = locationData as DriverLocation;
+    for (const [driverId, locationData] of Object.entries(driversData)) {
+      const driver = locationData as DriverLocation;
 
-          // Skip drivers with missing location data
-          if (driver.lat === undefined || driver.lng === undefined) {
-            console.log(`  -> Skipping ${driverId}: missing location data`);
-            continue;
-          }
-
-          // Filter out stale drivers (older than 5 mins)
-          if (!driver.lastUpdated || now - driver.lastUpdated > STALE_THRESHOLD) {
-            console.log(`  -> Skipping ${driverId}: stale location update`);
-            continue;
-          }
-
-          // Skip declined drivers
-          if (declinedSet.has(driverId)) {
-            console.log(`  -> Skipping ${driverId}: previously declined`);
-            continue;
-          }
-
-          const driverLat = typeof driver.lat === "number" ? driver.lat : Number(driver.lat);
-          const driverLng = typeof driver.lng === "number" ? driver.lng : Number(driver.lng);
-          if (!Number.isFinite(driverLat) || !Number.isFinite(driverLng)) {
-            console.log(`  -> Skipping: invalid coordinates for driver ${driverId}`);
-            continue;
-          }
-
-          // Calculate distance from pickup location
-          const distanceInKm = geofire.distanceBetween([driverLat, driverLng], center);
-          console.log(`  -> Distance: ${distanceInKm.toFixed(2)} km`);
-
-          if (distanceInKm <= currentRadius) {
-            matchingDrivers.push({
-              distance: distanceInKm,
-              driverId,
-              lat: driverLat,
-              lng: driverLng,
-              status: driver.status,
-            });
-            console.log(`  -> ADDED to matching drivers`);
-          } else {
-            console.log(`  -> Skipping: outside ${currentRadius}km radius`);
-          }
-        } catch (driverErr) {
-          console.error(`Error processing driver ${driverId}:`, driverErr);
-        }
+      if (driver.lat === undefined || driver.lng === undefined) {
+        console.log(`  -> Skipping ${driverId}: missing location data`);
+        continue;
       }
 
-      if (matchingDrivers.length === 0) {
-        console.log(`No drivers found within ${currentRadius}km, expanding radius...`);
-        currentRadius += radiusIncrement;
+      if (driver.lastUpdated && now - driver.lastUpdated > STALE_THRESHOLD) {
+        console.log(`  -> Skipping ${driverId}: stale location update`);
+        continue;
       }
+
+      if (declinedSet.has(driverId)) {
+        console.log(`  -> Skipping ${driverId}: previously declined`);
+        continue;
+      }
+
+      const driverLat = typeof driver.lat === "number" ? driver.lat : Number(driver.lat);
+      const driverLng = typeof driver.lng === "number" ? driver.lng : Number(driver.lng);
+      if (!Number.isFinite(driverLat) || !Number.isFinite(driverLng)) {
+        console.log(`  -> Skipping: invalid coordinates for driver ${driverId}`);
+        continue;
+      }
+
+      const normalizedStatus = driver.status === "BUSY" ? "ON_TRIP" : driver.status;
+
+      driversMap.set(driverId, {
+        currentPassengers: driver.currentPassengers,
+        destination: driver.destination,
+        geohash: driver.geohash,
+        heading: driver.heading ?? 0,
+        lastUpdated: driver.lastUpdated,
+        lat: driverLat,
+        lng: driverLng,
+        maxPassengers: driver.maxPassengers,
+        pooledRides: driver.pooledRides,
+        status: normalizedStatus,
+        vehicleType: driver.vehicleType,
+      });
     }
 
-    // Sort by distance (nearest first)
-    matchingDrivers.sort((a, b) => a.distance - b.distance);
+    const rideRequest: RideRequest = {
+      destination: { lat: dropLatNum, lng: dropLngNum },
+      origin: { lat: pickupLatNum, lng: pickupLngNum },
+    };
 
-    console.log(`Final search radius: ${currentRadius}km`);
-    console.log("Matching drivers count:", matchingDrivers.length);
+    const matchResult = matchDriver(driversMap, rideRequest, radiusIncrement);
 
-    if (matchingDrivers.length === 0) {
+    if (!matchResult.driver) {
       return res.status(404).json({
-        message: `No available drivers found within ${maxRadius}km of your location`,
+        message: matchResult.message || `No available drivers found within ${maxRadius}km`,
         success: false,
       });
     }
 
     // ---------------------------------------------------------
-    // STEP 3: RESERVE THE NEAREST DRIVER (Direct Update)
+    // STEP 3: RESERVE DRIVER (AVAILABLE) OR ASSIGN (POOLED)
     // ---------------------------------------------------------
+    const matched = matchResult.driver;
     let assignedDriver: DriverMatch | null = null;
+    const driverRef = rtdb.ref(`drivers-online/${matched.driverId}`);
 
-    for (const driver of matchingDrivers) {
-      console.log(`Attempting to reserve driver: ${driver.driverId}`);
-      const driverRef = rtdb.ref(`drivers-online/${driver.driverId}`);
+    try {
+      const snapshot = await driverRef.once("value");
+      const currentData = snapshot.val() as DriverLocation | null;
+      const currentStatus = currentData?.status === "BUSY" ? "ON_TRIP" : currentData?.status;
 
-      try {
-        // Re-check current status before updating
-        const snapshot = await driverRef.once("value");
-        const currentData = snapshot.val() as DriverLocation | null;
+      console.log(`Current data for ${matched.driverId}:`, currentData);
 
-        console.log(`Current data for ${driver.driverId}:`, currentData);
-
-        if (currentData && currentData.status === "AVAILABLE") {
-          // Update status to RESERVED (pending acceptance)
-          await driverRef.update({ status: "RESERVED" });
-          assignedDriver = driver;
-          console.log(`Successfully reserved driver: ${driver.driverId}`);
-          break;
-        } else {
-          console.log(`Driver ${driver.driverId} not available, status: ${currentData?.status}`);
-        }
-      } catch (err) {
-        console.error(`Error reserving driver ${driver.driverId}:`, err);
+      if (currentStatus === "AVAILABLE") {
+        await driverRef.update({ status: "RESERVED" });
+        assignedDriver = {
+          distance: matched.distance,
+          driverId: matched.driverId,
+          lat: matched.location.lat,
+          lng: matched.location.lng,
+          status: "RESERVED",
+        };
+        console.log(`Successfully reserved driver: ${matched.driverId}`);
+      } else if (currentStatus === "ON_TRIP") {
+        assignedDriver = {
+          distance: matched.distance,
+          driverId: matched.driverId,
+          lat: matched.location.lat,
+          lng: matched.location.lng,
+          status: currentStatus,
+        };
+        console.log(`Assigned pooled driver: ${matched.driverId}`);
+      } else {
+        console.log(`Driver ${matched.driverId} not eligible, status: ${currentData?.status}`);
       }
+    } catch (err) {
+      console.error(`Error reserving driver ${matched.driverId}:`, err);
     }
 
     if (!assignedDriver) {
@@ -284,9 +286,10 @@ export const requestRide = async (req: Request, res: Response) => {
       console.error("Error fetching user details:", err);
     }
 
-    // Calculate Green Points (10 base + 2 per km)
+    // Calculate Green Points (10 base + 2 per km, 1.5x multiplier for pooled rides)
     const distanceKm = distance ? parseFloat(distance) : 0;
-    const greenPointsAwarded = Math.round(10 + distanceKm * 2);
+    const baseGreenPoints = Math.round(10 + distanceKm * 2);
+    const greenPointsAwarded = isPooled ? Math.round(baseGreenPoints * 1.5) : baseGreenPoints;
 
     const rideData = {
       co2Saved: co2Saved || 0,
@@ -299,6 +302,7 @@ export const requestRide = async (req: Request, res: Response) => {
       duration: duration || null,
       fare: fare || null,
       greenPointsAwarded,
+      isPooled: isPooled || false,
       otp: Math.floor(1000 + Math.random() * 9000).toString(), // Generate 4-digit OTP (hidden until 100m)
       otpRevealed: false, // OTP is not revealed until driver is within 100m
       pickup: { lat: pickupLatNum, lng: pickupLngNum },
@@ -409,15 +413,78 @@ export const cancelRide = async (req: Request, res: Response) => {
       status: "CANCELLED",
     });
 
-    // 2. Notify Driver (Remove assignment/pending) & Make Driver Available
+    // 2. Pool-aware driver & RTDB cleanup
     if (driverId) {
-      await Promise.all([
-        rtdb.ref(`rides-assigned/${driverId}`).remove(),
-        rtdb.ref(`rides-pending/${driverId}`).remove(),
-        rtdb.ref(`drivers-online/${driverId}`).update({
-          status: "AVAILABLE",
-        }),
-      ]);
+      // Check if this is a pooled ride with other active riders
+      const assignedSnap = await rtdb.ref(`rides-assigned/${driverId}`).once("value");
+      const assignedData = assignedSnap.val();
+
+      if (assignedData?.riders && Array.isArray(assignedData.riders)) {
+        // Remove only the cancelling rider from the riders array
+        const remainingRiders = assignedData.riders.filter(
+          (r: { rideId: string }) => r.rideId !== rideId,
+        );
+
+        if (remainingRiders.length > 0) {
+          // Other riders remain — update the assignment, don't remove it
+          const firstRider = remainingRiders[0];
+          const waypoints = [
+            ...remainingRiders.map(
+              (r: { pickup: { lat: number; lng: number }; riderId: string }) => ({
+                lat: r.pickup.lat,
+                lng: r.pickup.lng,
+                riderId: r.riderId,
+                type: "PICKUP" as const,
+              }),
+            ),
+            ...remainingRiders.map(
+              (r: { drop: { lat: number; lng: number }; riderId: string }) => ({
+                lat: r.drop.lat,
+                lng: r.drop.lng,
+                riderId: r.riderId,
+                type: "DROP" as const,
+              }),
+            ),
+          ];
+
+          await rtdb.ref(`rides-assigned/${driverId}`).update({
+            drop: firstRider.drop,
+            pickup: firstRider.pickup,
+            rideId: firstRider.rideId,
+            riderId: firstRider.riderId,
+            riders: remainingRiders,
+            waypoints,
+          });
+
+          // Update driver's passenger count
+          const driverRef = rtdb.ref(`drivers-online/${driverId}`);
+          const driverSnap = await driverRef.once("value");
+          const driverData = driverSnap.val();
+          if (driverData?.currentPassengers && driverData.currentPassengers > 1) {
+            await driverRef.update({
+              currentPassengers: driverData.currentPassengers - 1,
+            });
+          }
+
+          console.log(
+            `Pool-aware cancel: removed rider from pool, ${remainingRiders.length} riders remain`,
+          );
+        } else {
+          // No riders left — full cleanup
+          await Promise.all([
+            rtdb.ref(`rides-assigned/${driverId}`).remove(),
+            rtdb.ref(`rides-pending/${driverId}`).remove(),
+            rtdb.ref(`drivers-online/${driverId}`).update({ status: "AVAILABLE" }),
+          ]);
+        }
+      } else {
+        // Solo ride — full cleanup
+        await Promise.all([
+          rtdb.ref(`rides-assigned/${driverId}`).remove(),
+          rtdb.ref(`rides-pending/${driverId}`).remove(),
+          rtdb.ref(`drivers-online/${driverId}`).update({ status: "AVAILABLE" }),
+        ]);
+      }
     }
 
     return res.status(200).json({
@@ -495,15 +562,40 @@ export const arriveAtPickup = async (req: Request, res: Response) => {
               status: "CANCELLED",
             });
 
-            // Sync to RTDB
-            await Promise.all([
-              rtdb.ref(`rides/${rideId}`).update({
-                cancelReason: "TIMEOUT",
-                status: "CANCELLED",
-              }),
-              rtdb.ref(`rides-assigned/${driverId}`).remove(),
-              rtdb.ref(`drivers-online/${driverId}`).update({ status: "AVAILABLE" }),
-            ]);
+            // Sync to RTDB — pool-aware: only remove this rider, not the entire node
+            await rtdb.ref(`rides/${rideId}`).update({
+              cancelReason: "TIMEOUT",
+              status: "CANCELLED",
+            });
+
+            const assignedSnap = await rtdb.ref(`rides-assigned/${driverId}`).once("value");
+            const assignedData = assignedSnap.val();
+
+            if (assignedData?.riders && Array.isArray(assignedData.riders)) {
+              const remaining = assignedData.riders.filter(
+                (r: { rideId: string }) => r.rideId !== rideId,
+              );
+              if (remaining.length > 0) {
+                // Other pooled riders still active — update assignment
+                const next = remaining[0];
+                await rtdb.ref(`rides-assigned/${driverId}`).update({
+                  drop: next.drop,
+                  pickup: next.pickup,
+                  rideId: next.rideId,
+                  riderId: next.riderId,
+                  riders: remaining,
+                  status: "IN_PROGRESS",
+                });
+              } else {
+                // No riders left — clear assignment
+                await rtdb.ref(`rides-assigned/${driverId}`).remove();
+                await rtdb.ref(`drivers-online/${driverId}`).update({ status: "AVAILABLE" });
+              }
+            } else {
+              // Solo ride — clear assignment
+              await rtdb.ref(`rides-assigned/${driverId}`).remove();
+              await rtdb.ref(`drivers-online/${driverId}`).update({ status: "AVAILABLE" });
+            }
           }
         } catch (err) {
           console.error(`Error in auto-cancellation for ride ${rideId}:`, err);
@@ -635,10 +727,70 @@ export const completeRide = async (req: Request, res: Response) => {
       }
     }
 
-    // 2. Remove ride assignment but keep driver BUSY until payment is confirmed
-    // Driver status will be set to AVAILABLE after payment confirmation
+    // 2. Pool-aware: remove only this rider from assignment, not the entire node
     if (driverId) {
-      await rtdb.ref(`rides-assigned/${driverId}`).remove();
+      const assignedSnap = await rtdb.ref(`rides-assigned/${driverId}`).once("value");
+      const assignedData = assignedSnap.val();
+
+      if (assignedData?.riders && Array.isArray(assignedData.riders)) {
+        // Remove the completed rider from the riders array
+        const remainingRiders = assignedData.riders.filter(
+          (r: { rideId: string }) => r.rideId !== rideId,
+        );
+
+        if (remainingRiders.length > 0) {
+          // Other riders still active — update assignment with remaining riders
+          const nextRider = remainingRiders[0];
+          const waypoints = [
+            ...remainingRiders.map(
+              (r: { pickup: { lat: number; lng: number }; riderId: string }) => ({
+                lat: r.pickup.lat,
+                lng: r.pickup.lng,
+                riderId: r.riderId,
+                type: "PICKUP" as const,
+              }),
+            ),
+            ...remainingRiders.map(
+              (r: { drop: { lat: number; lng: number }; riderId: string }) => ({
+                lat: r.drop.lat,
+                lng: r.drop.lng,
+                riderId: r.riderId,
+                type: "DROP" as const,
+              }),
+            ),
+          ];
+
+          await rtdb.ref(`rides-assigned/${driverId}`).update({
+            drop: nextRider.drop,
+            pickup: nextRider.pickup,
+            rideId: nextRider.rideId,
+            riderId: nextRider.riderId,
+            riders: remainingRiders,
+            waypoints,
+          });
+
+          // Decrement passenger count
+          const driverRef = rtdb.ref(`drivers-online/${driverId}`);
+          const driverSnap = await driverRef.once("value");
+          const driverData = driverSnap.val();
+          if (driverData?.currentPassengers && driverData.currentPassengers > 1) {
+            await driverRef.update({
+              currentPassengers: driverData.currentPassengers - 1,
+            });
+          }
+
+          console.log(
+            `Pool-aware complete: ride ${rideId} done, ${remainingRiders.length} riders remain`,
+          );
+        } else {
+          // Last rider completed — remove entire assignment
+          await rtdb.ref(`rides-assigned/${driverId}`).remove();
+          console.log(`Last pooled rider completed, cleared rides-assigned for ${driverId}`);
+        }
+      } else {
+        // Solo ride — remove assignment
+        await rtdb.ref(`rides-assigned/${driverId}`).remove();
+      }
       // NOTE: Driver stays BUSY until payment is confirmed via confirmPayment
     }
 
@@ -853,10 +1005,127 @@ export const acceptRide = async (req: Request, res: Response) => {
       status: "MATCHED",
       timestamp: Date.now(),
     };
-    await rtdb.ref(`rides-assigned/${driverId}`).set(assignedRideData);
 
-    // 3. Update driver status to BUSY
-    await rtdb.ref(`drivers-online/${driverId}`).update({ status: "BUSY" });
+    const assignedRef = rtdb.ref(`rides-assigned/${driverId}`);
+    const existingAssignedSnap = await assignedRef.once("value");
+    const existingAssigned = existingAssignedSnap.val() as
+      | (typeof assignedRideData & {
+          riders?: Array<{
+            drop: { lat: number; lng: number };
+            pickup: { lat: number; lng: number };
+            rideId: string;
+            riderId: string;
+            riderName?: string;
+            riderPhone?: string;
+            status?: string;
+          }>;
+          waypoints?: Array<{
+            lat: number;
+            lng: number;
+            riderId: string;
+            type: "PICKUP" | "DROP";
+          }>;
+        })
+      | null;
+
+    const newRider = {
+      drop: rideData.drop,
+      pickup: rideData.pickup,
+      rideId,
+      riderId: rideData.riderId,
+      riderName,
+      riderPhone,
+      status: "MATCHED",
+    };
+
+    let nextAssigned: Record<string, unknown> = assignedRideData;
+
+    if (existingAssigned?.rideId) {
+      const baseRiders = Array.isArray(existingAssigned.riders)
+        ? existingAssigned.riders
+        : [
+            {
+              drop: existingAssigned.drop,
+              pickup: existingAssigned.pickup,
+              rideId: existingAssigned.rideId,
+              riderId: existingAssigned.riderId,
+              riderName: existingAssigned.riderName,
+              riderPhone: existingAssigned.riderPhone,
+              status: existingAssigned.status || "MATCHED",
+            },
+          ];
+
+      const riders = baseRiders.some((r) => r.rideId === newRider.rideId)
+        ? baseRiders
+        : [...baseRiders, newRider];
+
+      const waypoints = [
+        ...riders.map((r) => ({
+          lat: r.pickup.lat,
+          lng: r.pickup.lng,
+          riderId: r.riderId,
+          type: "PICKUP" as const,
+        })),
+        ...riders.map((r) => ({
+          lat: r.drop.lat,
+          lng: r.drop.lng,
+          riderId: r.riderId,
+          type: "DROP" as const,
+        })),
+      ];
+
+      // When the trip is already in progress (or driver has arrived at a
+      // previous pickup), update the top-level fields to point to the NEW
+      // rider so the driver dashboard re-routes to the new pickup and the
+      // OTP flow triggers for the new rider.
+      const isMidTrip =
+        existingAssigned.status === "IN_PROGRESS" || existingAssigned.status === "ARRIVED";
+
+      nextAssigned = {
+        ...existingAssigned,
+        riders,
+        timestamp: Date.now(),
+        waypoints,
+        // Mid-trip: surface the new rider + reset status to MATCHED
+        ...(isMidTrip
+          ? {
+              drop: newRider.drop,
+              pickup: newRider.pickup,
+              rideId: newRider.rideId,
+              riderId: newRider.riderId,
+              riderName: newRider.riderName,
+              riderPhone: newRider.riderPhone,
+              status: "MATCHED",
+            }
+          : {
+              // Pre-trip: keep existing status
+              status: existingAssigned.status || "MATCHED",
+            }),
+      };
+    }
+
+    await assignedRef.set(nextAssigned);
+
+    // 3. Update driver status (pooling-aware)
+    const driverRef = rtdb.ref(`drivers-online/${driverId}`);
+    const driverSnapshot = await driverRef.once("value");
+    const driverData = driverSnapshot.val() as DriverLocation | null;
+    const currentStatus = driverData?.status === "BUSY" ? "ON_TRIP" : driverData?.status;
+
+    if (currentStatus === "ON_TRIP") {
+      const currentPassengers = driverData?.currentPassengers ?? 1;
+      const maxPassengers = driverData?.maxPassengers ?? currentPassengers + 1;
+      const pooledRides = Array.isArray(driverData?.pooledRides) ? driverData.pooledRides : [];
+      const nextPassengers = Math.min(currentPassengers + 1, maxPassengers);
+
+      await driverRef.update({
+        currentPassengers: nextPassengers,
+        pooledRides: pooledRides.includes(rideId) ? pooledRides : [...pooledRides, rideId],
+        status: "ON_TRIP",
+      });
+    } else {
+      await driverRef.update({ status: "BUSY" });
+    }
 
     // 4. Update rides node for rider tracking
     await rtdb.ref(`rides/${rideId}`).update({
@@ -1113,8 +1382,8 @@ export const getOtp = async (req: Request, res: Response) => {
         .json({ message: "Not authorized to access this ride", success: false });
     }
 
-    // Verify ride is in MATCHED status (driver accepted, heading to pickup)
-    if (rideData?.status !== "MATCHED") {
+    // OTP is only available during MATCHED (en route) or ARRIVED (at pickup)
+    if (rideData?.status !== "MATCHED" && rideData?.status !== "ARRIVED") {
       return res.status(400).json({
         message: `OTP not available for ride status: ${rideData?.status}`,
         success: false,
@@ -1136,12 +1405,21 @@ export const getOtp = async (req: Request, res: Response) => {
     const distanceInKm = geofire.distanceBetween(driverPos, pickupPos);
     const distanceInMeters = Math.round(distanceInKm * 1000);
 
-    // If requester is the rider, ALWAYS show OTP
+    // OTP is only shown to rider when driver has reached the pickup (≤100m)
     if (rideData.riderId === userId) {
+      if (distanceInMeters <= 100 || rideData.status === "ARRIVED") {
+        return res.status(200).json({
+          distanceToPickup: distanceInMeters,
+          otp: rideData.otp,
+          otpAvailable: true,
+          success: true,
+        });
+      }
+      // Driver still en route — don't reveal OTP yet
       return res.status(200).json({
         distanceToPickup: distanceInMeters,
-        otp: rideData.otp,
-        otpAvailable: true,
+        message: `Your driver is ${distanceInMeters}m away. OTP will be shown when driver arrives.`,
+        otpAvailable: false,
         success: true,
       });
     }

@@ -5,8 +5,6 @@
  * @module config
  */
 
-import "dotenv/config";
-
 /**
  * Firebase client SDK configuration sourced from Next.js public environment variables.
  * All keys use the `NEXT_PUBLIC_` prefix so they are available in the browser bundle.

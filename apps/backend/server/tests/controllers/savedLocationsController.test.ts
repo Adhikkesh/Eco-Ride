@@ -29,6 +29,13 @@
 import { describe, expect, it } from "vitest";
 
 /**
+ * User object interface for authentication validation
+ */
+interface AuthUser {
+  uid: string;
+}
+
+/**
  * Validation functions for saved locations
  */
 
@@ -49,7 +56,7 @@ const validateAuth = (user: unknown) => {
  * Validates if the location type is supported.
  * @param type - Location type (home, work, favourite)
  */
-const validateLocationType = (type: string) => {
+const validateLocationType = (type: string | undefined) => {
   const validTypes = ["home", "work", "favourite"];
   if (!type || !validTypes.includes(type)) {
     return {

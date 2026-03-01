@@ -51,14 +51,14 @@ const createMockResponse = (): MockResponse => {
     json: vi.fn((responseData: unknown) => {
       data = responseData;
       return res;
-    }),
+    }) as MockResponse["json"],
     status: vi.fn((code: number) => {
       statusCode = code;
       return res;
-    }),
+    }) as MockResponse["status"],
   };
 
-  return res as MockResponse;
+  return res;
 };
 
 /**

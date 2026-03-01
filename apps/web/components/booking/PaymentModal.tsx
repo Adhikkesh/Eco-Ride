@@ -3,14 +3,18 @@
 import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
 import { loadStripe } from "@stripe/stripe-js";
 import { useState } from "react";
-import { FaCheckCircle, FaExclamationTriangle, FaLock, FaRedo } from "react-icons/fa";
+import { FaCheckCircle, FaExclamationTriangle, FaLeaf, FaLock, FaRedo } from "react-icons/fa";
 
 // Initialize Stripe outside of component
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || "");
 
 interface PaymentModalProps {
-  clientSecret: string;
+  clientSecret: string | null;
   amount: number;
+  greenPointsBalance: number;
+  isPointsUsed: boolean;
+  onTogglePoints: (usePoints: boolean) => void;
+  discountAmount: number;
   onSuccess: () => void;
   onClose: () => void;
 }
@@ -323,9 +327,16 @@ function CheckoutForm({ amount, onSuccess }: { amount: number; onSuccess: () => 
 export default function PaymentModal({
   clientSecret,
   amount,
+  greenPointsBalance,
+  isPointsUsed,
+  onTogglePoints,
+  discountAmount,
   onSuccess,
 }: PaymentModalProps): JSX.Element | null {
-  if (!clientSecret) return null;
+  // If amount is 0, we don't need clientSecret
+  const isFullRedemption = amount === 0;
+
+  if (!clientSecret && !isFullRedemption) return null;
 
   return (
     <div
@@ -382,22 +393,139 @@ export default function PaymentModal({
           </p>
         </div>
 
-        <Elements
-          stripe={stripePromise}
-          options={{
-            appearance: {
-              theme: "night",
-              variables: {
-                colorBackground: "#1e293b",
-                colorPrimary: "#22c55e",
-                colorText: "#ffffff",
-              },
-            },
-            clientSecret,
-          }}
-        >
-          <CheckoutForm amount={amount} onSuccess={onSuccess} />
-        </Elements>
+        {/* Green Points Section */}
+        {greenPointsBalance > 0 && (
+          <div
+            style={{
+              background: "rgba(34, 197, 94, 0.1)",
+              border: "1px solid rgba(34, 197, 94, 0.3)",
+              borderRadius: "16px",
+              marginBottom: "24px",
+              padding: "16px",
+            }}
+          >
+            <div
+              style={{
+                alignItems: "center",
+                display: "flex",
+                justifyContent: "space-between",
+                marginBottom: "8px",
+              }}
+            >
+              <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                <FaLeaf style={{ color: "#22c55e" }} />
+                <span style={{ color: "white", fontWeight: 600 }}>Green Points</span>
+              </div>
+              <span style={{ color: "#22c55e", fontWeight: "bold" }}>
+                {greenPointsBalance} Available
+              </span>
+            </div>
+
+            <label
+              style={{ alignItems: "center", cursor: "pointer", display: "flex", gap: "12px" }}
+            >
+              <input
+                type="checkbox"
+                checked={isPointsUsed}
+                onChange={(e) => onTogglePoints(e.target.checked)}
+                style={{ height: "18px", width: "18px" }}
+              />
+              <span style={{ color: "#cbd5e1", fontSize: "14px" }}>
+                Use points to save up to ₹{greenPointsBalance}
+              </span>
+            </label>
+
+            {isPointsUsed && discountAmount > 0 && (
+              <div
+                style={{
+                  borderTop: "1px solid rgba(255,255,255,0.1)",
+                  marginTop: "12px",
+                  paddingTop: "12px",
+                }}
+              >
+                <div
+                  style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}
+                >
+                  <span style={{ color: "#94a3b8", fontSize: "14px" }}>Original Fare:</span>
+                  <span style={{ color: "#94a3b8", fontSize: "14px" }}>
+                    ₹{amount + discountAmount}
+                  </span>
+                </div>
+                <div
+                  style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}
+                >
+                  <span style={{ color: "#22c55e", fontSize: "14px" }}>Discount Applied:</span>
+                  <span style={{ color: "#22c55e", fontSize: "14px" }}>-₹{discountAmount}</span>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    fontWeight: "bold",
+                    justifyContent: "space-between",
+                    marginTop: "4px",
+                  }}
+                >
+                  <span style={{ color: "white" }}>To Pay:</span>
+                  <span style={{ color: "white" }}>₹{amount}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {isFullRedemption ? (
+          <div style={{ textAlign: "center" }}>
+            <div style={{ marginBottom: "20px" }}>
+              <div style={{ color: "#94a3b8", fontSize: "14px" }}>Amount to Pay</div>
+              <div style={{ color: "white", fontSize: "32px", fontWeight: "bold" }}>₹0</div>
+              <div style={{ color: "#22c55e", fontSize: "14px", marginTop: "4px" }}>
+                Fully covered by Green Points!
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={onSuccess}
+              style={{
+                alignItems: "center",
+                background: "linear-gradient(135deg, #22c55e, #10b981)",
+                border: "none",
+                borderRadius: "12px",
+                color: "white",
+                cursor: "pointer",
+                display: "flex",
+                fontSize: "16px",
+                fontWeight: 600,
+                gap: "10px",
+                justifyContent: "center",
+                padding: "16px",
+                width: "100%",
+              }}
+            >
+              <FaCheckCircle /> Confirm & Finish
+            </button>
+          </div>
+        ) : (
+          clientSecret && (
+            <Elements
+              stripe={stripePromise}
+              options={{
+                appearance: {
+                  theme: "night",
+                  variables: {
+                    colorBackground: "#1e293b",
+                    colorPrimary: "#22c55e",
+                    colorText: "#ffffff",
+                  },
+                },
+                clientSecret,
+              }}
+              key={clientSecret}
+            >
+              <CheckoutForm amount={amount} onSuccess={onSuccess} />
+            </Elements>
+          )
+        )}
       </div>
     </div>
   );

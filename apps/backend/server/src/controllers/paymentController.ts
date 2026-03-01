@@ -11,6 +11,8 @@ import { FieldValue } from "firebase-admin/firestore";
 import Stripe from "stripe";
 import { db, rtdb } from "../config/firebase.js";
 
+console.log("------------------ PAYMENT CONTROLLER LOADED ------------------");
+
 /**
  * Lazily-initialized Stripe SDK instance.
  * Created on first use rather than at module load time.
@@ -41,22 +43,13 @@ const getStripe = () => {
   return stripeInstance;
 };
 
-/**
- * Creates a Stripe PaymentIntent for an existing ride.
- *
- * Looks up the ride document in Firestore to determine the fare, enforces the
- * Stripe minimum of ₹50, and returns the `clientSecret` the frontend needs to
- * complete the payment flow.
- *
- * @param req - Express request containing `rideId` in the body.
- * @param res - Express response.
- * @returns JSON with `clientSecret`, `amount`, and `success` flag.
- * @throws Returns 400 if `rideId` is missing, 404 if the ride doesn't exist,
- *         or 503 if Stripe is not configured.
- */
 export const createPaymentIntent = async (req: Request, res: Response) => {
   try {
-    const { rideId } = req.body;
+    const { rideId, useGreenPoints } = req.body;
+
+    console.log(
+      `[PaymentDebug] createPaymentIntent called. rideId: ${rideId}, useGreenPoints: ${useGreenPoints}`,
+    );
 
     if (!rideId) {
       return res.status(400).json({
@@ -76,9 +69,67 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
     }
 
     const rideData = rideDoc.data();
-    const fare = rideData?.fare;
+    const fare = Number(rideData?.fare || 0);
+    const riderId = rideData?.riderId;
 
-    let finalFare = fare || 100;
+    // Fallback for legacy rides (created before fare was saved)
+    let finalFare = fare > 0 ? fare : 100;
+    let discountAmount = 0;
+    let pointsUsed = 0;
+    let availablePoints = 0;
+
+    console.log(`[PaymentDebug] Initial Fare: ${fare}, finalFare: ${finalFare}`);
+
+    // 2. Calculate Green Points Discount
+    if (useGreenPoints && riderId) {
+      const userDoc = await db.collection("users").doc(riderId).get();
+      const userData = userDoc.data();
+      availablePoints = Number(userData?.green_points || 0);
+
+      if (availablePoints > 0) {
+        console.log(
+          `[PaymentDebug] Available Points: ${availablePoints}, starting finalFare: ${finalFare}`,
+        );
+        // 1 Point = 1 Rupee
+        discountAmount = Math.min(finalFare, availablePoints);
+
+        console.log(`[PaymentDebug] Initial discountAmount: ${discountAmount}`);
+
+        // Ensure we don't drop below Stripe minimum (₹50) unless we cover the FULL amount
+        const remainingAmount = finalFare - discountAmount;
+        if (remainingAmount > 0 && remainingAmount < 50) {
+          // Adjust discount to leave exactly ₹50 to pay
+          discountAmount = Math.max(0, finalFare - 50);
+          console.log(`[PaymentDebug] Adjusted discountAmount (Stripe min): ${discountAmount}`);
+        }
+
+        pointsUsed = discountAmount;
+        const prevFare = finalFare;
+
+        // Explicitly handle full coverage to avoid any floating point issues
+        if (discountAmount >= finalFare) {
+          finalFare = 0;
+        } else {
+          finalFare = finalFare - discountAmount;
+        }
+
+        console.log(
+          `[PaymentDebug] Updated finalFare: ${finalFare} (was ${prevFare}) - discount: ${discountAmount}`,
+        );
+      }
+    }
+
+    // 3. Handle 100% Discount (No Stripe Payment Needed)
+    if (finalFare === 0) {
+      return res.status(200).json({
+        amount: 0,
+        clientSecret: null,
+        discountAmount,
+        message: "Ride fully covered by Green Points",
+        pointsUsed,
+        success: true,
+      });
+    }
 
     if (finalFare < 50) {
       console.warn(`Fare ₹${finalFare} is below Stripe minimum. Adjusting to ₹50.`);
@@ -87,6 +138,7 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
 
     const amountInPaise = Math.round(finalFare * 100);
 
+    // 4. Create Payment Intent
     const stripe = getStripe();
     if (!stripe) {
       console.error("❌ Stripe is not initialized. Missing API Key.");
@@ -97,7 +149,9 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
       });
     }
 
-    console.log(`Creating payment intent for ride: ${rideId}, amount: ${finalFare}`);
+    console.log(
+      `Creating payment intent for ride: ${rideId}, amount: ${finalFare}, points used: ${pointsUsed}`,
+    );
 
     const paymentIntent = await stripe.paymentIntents.create({
       amount: amountInPaise,
@@ -106,8 +160,9 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
       },
       currency: "inr",
       metadata: {
+        pointsUsed: pointsUsed.toString(),
         rideId,
-        riderId: rideData?.riderId || "unknown",
+        riderId: riderId || "unknown",
       },
     });
 
@@ -116,6 +171,14 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
     return res.status(200).json({
       amount: finalFare,
       clientSecret: paymentIntent.client_secret,
+      debug: {
+        availablePoints,
+        calculatedDiscount: discountAmount,
+        finalCalculatedFare: finalFare,
+        originalFareFromDB: fare,
+      },
+      discountAmount,
+      pointsUsed,
       success: true,
     });
   } catch (error) {
@@ -141,7 +204,7 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
  */
 export const confirmPayment = async (req: Request, res: Response) => {
   try {
-    const { rideId, amount } = req.body;
+    const { rideId, amount, pointsUsed } = req.body;
 
     if (!rideId) {
       return res.status(400).json({
@@ -150,26 +213,74 @@ export const confirmPayment = async (req: Request, res: Response) => {
       });
     }
 
-    console.log(`Confirming payment for ride: ${rideId}, amount: ${amount}`);
+    console.log(
+      `Confirming payment for ride: ${rideId}, amount: ${amount}, points used: ${pointsUsed}`,
+    );
+
+    const updates: any = {
+      paidAmount: amount,
+      paymentStatus: "PAID",
+    };
+
+    if (pointsUsed) {
+      updates.greenPointsRedeemed = pointsUsed;
+    }
 
     const rideDoc = await db.collection("rides").doc(rideId).get();
     const driverId = rideDoc.data()?.driverId;
 
+    // Update RTDB to notify driver
     await rtdb.ref(`rides/${rideId}`).update({
-      paidAmount: amount,
-      paymentStatus: "PAID",
+      ...updates,
       status: "PAYMENT_CONFIRMED",
     });
 
-    // Update Firestore
-    await db.collection("rides").doc(rideId).update({
-      paidAmount: amount,
-      paymentStatus: "PAID",
-    });
+    // Update Firestore Ride Doc
+    const rideRef = db.collection("rides").doc(rideId);
+    await rideRef.update(updates);
+
+    // Deduct points from User if used
+    if (pointsUsed && pointsUsed > 0) {
+      const riderId = rideDoc.data()?.riderId;
+
+      if (riderId) {
+        await db
+          .collection("users")
+          .doc(riderId)
+          .update({
+            green_points: FieldValue.increment(-pointsUsed),
+          });
+        console.log(`Deducted ${pointsUsed} green points from user ${riderId}`);
+      }
+    }
 
     if (driverId) {
-      await rtdb.ref(`drivers-online/${driverId}`).update({ status: "AVAILABLE" });
-      console.log(`Driver ${driverId} is now AVAILABLE after payment confirmation`);
+      // ═══════════════════════════════════════════════════════════════
+      // Pool-Aware: Only set driver AVAILABLE if no other active rides
+      // ═══════════════════════════════════════════════════════════════
+      let hasOtherActiveRides = false;
+
+      try {
+        // Check if there are other active (non-completed) rides for this driver
+        const activeRidesSnap = await db
+          .collection("rides")
+          .where("driverId", "==", driverId)
+          .where("status", "in", ["MATCHED", "STARTED", "IN_PROGRESS", "COMPLETED"])
+          .get();
+
+        // Filter out the current ride — if other rides exist, driver stays busy
+        const otherActiveRides = activeRidesSnap.docs.filter((d) => d.id !== rideId);
+        hasOtherActiveRides = otherActiveRides.length > 0;
+      } catch (err) {
+        console.error("Error checking for other active rides:", err);
+      }
+
+      if (!hasOtherActiveRides) {
+        await rtdb.ref(`drivers-online/${driverId}`).update({ status: "AVAILABLE" });
+        console.log(`Driver ${driverId} is now AVAILABLE after payment confirmation`);
+      } else {
+        console.log(`Driver ${driverId} has other active pooled rides — staying BUSY`);
+      }
 
       // Update Driver's Wallet Balance
       try {

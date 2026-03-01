@@ -1,0 +1,60 @@
+# Dependencies
+node_modules
+**/node_modules
+
+# Build outputs
+dist
+**/dist
+.next
+out
+build
+
+# Git
+.git
+.gitignore
+.gitmodules
+
+# Environment files (secrets)
+.env
+.env.*
+!.env.example
+
+# IDE & OS
+.vscode
+.turbo
+.DS_Store
+*.pem
+
+# Firebase credentials (mounted via volume, not copied)
+firebase_credential.json
+**/firebase_credential.json
+
+# Apps not being dockerized
+apps/mobile
+
+# Reports & logs
+*.log
+*.txt
+biome_report.json
+driver_lint.json
+driver_lint_clean.json
+
+# Misc
+.husky
+.github
+docs
+docs_backup
+assets
+api
+.firebaserc
+firebase.json
+firestore.rules
+typedoc.json
+.npmrc
+.lintstagedrc.json.disabled
+stripe_integration_guide.md
+
+# Tests
+**/tests
+**/coverage
+**/vitest.config.ts

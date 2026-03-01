@@ -2,7 +2,16 @@
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { FaCalendar, FaCar, FaFileAlt, FaIdCard, FaLeaf, FaPhone, FaUser } from "react-icons/fa";
+import {
+  FaCalendar,
+  FaCar,
+  FaFileAlt,
+  FaIdCard,
+  FaLeaf,
+  FaPhone,
+  FaUser,
+  FaUsers,
+} from "react-icons/fa";
 import { auth, storage } from "@/lib/firebase";
 import { backendUrl } from "../../config";
 
@@ -22,7 +31,10 @@ export default function Onboarding(): React.ReactNode {
   const [licenseFile, setLicenseFile] = useState<File | null>(null);
   const [plateNumber, setPlateNumber] = useState("");
   const [model, setModel] = useState("");
-  const [isEv, setIsEv] = useState(false);
+  const [vehicleType, setVehicleType] = useState<"PETROL" | "DIESEL" | "HYBRID" | "ELECTRIC">(
+    "PETROL",
+  );
+  const [passengerCapacity, setPassengerCapacity] = useState(4);
   const [pollutionExpiry, setPollutionExpiry] = useState("");
 
   // UI state
@@ -93,7 +105,9 @@ export default function Onboarding(): React.ReactNode {
         payload.license_url = licenseUrl;
         payload.plate_number = plateNumber;
         payload.model = model;
-        payload.is_ev = isEv;
+        payload.vehicle_type = vehicleType;
+        payload.passenger_capacity = passengerCapacity;
+        payload.is_ev = vehicleType === "ELECTRIC";
         payload.pollution_expiry = pollutionExpiry;
       }
 
@@ -447,31 +461,53 @@ export default function Onboarding(): React.ReactNode {
                 </div>
               </div>
 
-              {/* Is EV */}
+              {/* Vehicle Type */}
               <div style={{ marginBottom: "20px" }}>
-                <label
+                <label htmlFor="vehicleType" style={labelStyle}>
+                  <FaLeaf style={{ color: "#4caf50", marginRight: "8px" }} />
+                  Vehicle Type *
+                </label>
+                <select
+                  id="vehicleType"
+                  value={vehicleType}
+                  onChange={(e) =>
+                    setVehicleType(e.target.value as "PETROL" | "DIESEL" | "HYBRID" | "ELECTRIC")
+                  }
+                  required={role === "driver"}
                   style={{
-                    alignItems: "center",
+                    ...inputStyle,
                     cursor: "pointer",
-                    display: "flex",
-                    gap: "12px",
+                    paddingLeft: "16px",
                   }}
                 >
+                  <option value="PETROL">Petrol</option>
+                  <option value="DIESEL">Diesel</option>
+                  <option value="HYBRID">Hybrid</option>
+                  <option value="ELECTRIC">Electric (EV)</option>
+                </select>
+              </div>
+
+              {/* Passenger Capacity */}
+              <div style={{ marginBottom: "20px" }}>
+                <label htmlFor="passengerCapacity" style={labelStyle}>
+                  <FaUsers style={{ color: "#4caf50", marginRight: "8px" }} />
+                  Passenger Capacity *
+                </label>
+                <div style={{ position: "relative" }}>
                   <input
-                    type="checkbox"
-                    checked={isEv}
-                    onChange={(e) => setIsEv(e.target.checked)}
+                    id="passengerCapacity"
+                    type="number"
+                    min={1}
+                    max={8}
+                    value={passengerCapacity}
+                    onChange={(e) => setPassengerCapacity(Number(e.target.value))}
+                    required={role === "driver"}
                     style={{
-                      accentColor: "#4caf50",
-                      height: "20px",
-                      width: "20px",
+                      ...inputStyle,
+                      paddingLeft: "16px",
                     }}
                   />
-                  <span style={{ color: "#333", fontSize: "15px", fontWeight: "500" }}>
-                    <FaLeaf style={{ color: "#4caf50", marginRight: "8px" }} />
-                    This is an Electric Vehicle (EV)
-                  </span>
-                </label>
+                </div>
               </div>
 
               {/* Pollution Expiry */}

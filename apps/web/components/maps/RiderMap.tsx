@@ -12,7 +12,14 @@ import {
 } from "@react-google-maps/api";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { onValue, ref } from "firebase/database";
-import { doc, getDoc } from "firebase/firestore";
+import {
+  type DocumentData,
+  type DocumentSnapshot,
+  doc,
+  type FirestoreError,
+  getDoc,
+  onSnapshot,
+} from "firebase/firestore";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FaBriefcase,
@@ -381,10 +388,17 @@ export default function RiderMap({
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentAmount, setPaymentAmount] = useState<number>(0);
   const [showPayment, setShowPayment] = useState(false);
+  const [isGreenPointsUsed, setIsGreenPointsUsed] = useState(false);
+  const [discountAmount, setDiscountAmount] = useState(0);
+  const [pointsUsed, setPointsUsed] = useState(0);
+
+  // Pooling / Eco-Ride State
+  const [isPooled, setIsPooled] = useState(false);
 
   // Auto-complete trip state
   const [dropOffLocation, setDropOffLocation] = useState<{ lat: number; lng: number } | null>(null);
   const autoCompleteTriggeredRef = useRef(false);
+  const tripStartTimeRef = useRef<number | null>(null);
 
   // Estimation State
   const { getEstimate, estimate, loading: estimating, clearEstimate } = useTripEstimator();
@@ -455,15 +469,24 @@ export default function RiderMap({
     }
   }, []);
 
-  // Get current location
+  // Get current location — pan map to GPS only on the first fix
+  const hasInitialGpsPanRef = useRef(false);
+
   useEffect(() => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          setCurrentLocation({
+          const loc = {
             lat: position.coords.latitude,
             lng: position.coords.longitude,
-          });
+          };
+          setCurrentLocation(loc);
+          // Pan map to GPS location only once (initial load)
+          if (!hasInitialGpsPanRef.current && mapRef.current) {
+            mapRef.current.panTo(loc);
+            mapRef.current.setZoom(14);
+            hasInitialGpsPanRef.current = true;
+          }
         },
         (error) => {
           console.error("Error getting location:", error);
@@ -471,13 +494,20 @@ export default function RiderMap({
         { enableHighAccuracy: true },
       );
 
-      // Watch for location changes
+      // Watch for location changes (updates state only, does NOT move the map)
       const watchId = navigator.geolocation.watchPosition(
         (position) => {
-          setCurrentLocation({
+          const loc = {
             lat: position.coords.latitude,
             lng: position.coords.longitude,
-          });
+          };
+          setCurrentLocation(loc);
+          // One-time fallback in case getCurrentPosition was slow
+          if (!hasInitialGpsPanRef.current && mapRef.current) {
+            mapRef.current.panTo(loc);
+            mapRef.current.setZoom(14);
+            hasInitialGpsPanRef.current = true;
+          }
         },
         (error) => {
           console.error("Error watching location:", error);
@@ -495,22 +525,39 @@ export default function RiderMap({
   useEffect(() => {
     // Use the imported onAuthStateChanged
 
-    const unsubscribe = onAuthStateChanged(auth, async (user: { uid: string } | null) => {
+    const unsubscribe = onAuthStateChanged(auth, (user: { uid: string } | null) => {
+      let unsubscribeSnapshot: (() => void) | undefined;
+
       if (user && db) {
         try {
-          const userDoc = await getDoc(doc(db, "users", user.uid));
-          if (userDoc.exists()) {
-            const data = userDoc.data() as UserData;
-            setUserStats((prev) => ({
-              ...prev,
-              greenPoints: data.green_points ?? 0,
-              trustScore: data.trust_score ?? 0,
-            }));
-          }
+          // Real-time listener for user stats
+          unsubscribeSnapshot = onSnapshot(
+            doc(db, "users", user.uid),
+            (docSnapshot: DocumentSnapshot<DocumentData>) => {
+              if (docSnapshot.exists()) {
+                const data = docSnapshot.data() as UserData;
+                setUserStats((prev) => ({
+                  ...prev,
+                  greenPoints: data.green_points ?? 0,
+                  trustScore: data.trust_score ?? 0,
+                }));
+              }
+            },
+            (error: FirestoreError) => {
+              console.error("Error listening to user stats:", error);
+            },
+          );
         } catch (error) {
-          console.error("Error fetching user stats:", error);
+          console.error("Error setting up user listener:", error);
         }
       }
+
+      // Cleanup snapshot listener when auth state changes or component unmounts
+      return () => {
+        if (unsubscribeSnapshot) {
+          unsubscribeSnapshot();
+        }
+      };
     });
 
     return () => unsubscribe();
@@ -596,11 +643,8 @@ export default function RiderMap({
                 }
               }
 
-              // Set OTP if available (for legacy support or if stored)
-              if (rideData.otp) {
-                setOtp(rideData.otp);
-                setShowOtpModal(true);
-              }
+              // Don't show OTP on restore — let the polling effect check
+              // driver arrival status before revealing OTP to rider
               applyRideLocations(rideData);
               return; // Exit early if successful
             } else {
@@ -638,6 +682,18 @@ export default function RiderMap({
             setDriverRatingCount(data.driverRatingCount || 0);
             applyRideLocations(data);
 
+            // RESTORE ROUTE STATE
+            if (data.pickup) {
+              setPickupLocation(data.pickup);
+            }
+            if (data.drop) {
+              setSelectedDestination({
+                lat: data.drop.lat,
+                lng: data.drop.lng,
+                name: "Destination", // Default name as backend only stores lat/lng
+              });
+            }
+
             // ETA logic
             // We can re-calculate ETA in the effect that watches driver location
           }
@@ -661,6 +717,45 @@ export default function RiderMap({
     return () => unsubscribe();
   }, [applyRideLocations]);
 
+  const handleGreenPointsToggle = async (usePoints: boolean) => {
+    setIsGreenPointsUsed(usePoints);
+
+    // Refresh payment intent with new setting
+    if (rideId && auth.currentUser) {
+      try {
+        const token = await auth.currentUser.getIdToken();
+        const response = await fetch(`${backendUrl}/payment/create-intent`, {
+          body: JSON.stringify({
+            rideId,
+            useGreenPoints: usePoints,
+          }),
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        });
+        const data = await response.json();
+        console.log("[PaymentDebug] Payment Intent Response:", data);
+
+        if (data.debug) {
+          alert(
+            `DEBUG INFO:\nOriginal Fare From DB: ${data.debug.originalFareFromDB}\nAvailable Points: ${data.debug.availablePoints}\nCalculated Discount: ${data.debug.calculatedDiscount}\nFinal Fare: ${data.debug.finalCalculatedFare}`,
+          );
+        }
+
+        if (data.success) {
+          setClientSecret(data.clientSecret);
+          setPaymentAmount(data.amount);
+          setDiscountAmount(data.discountAmount || 0);
+          setPointsUsed(data.pointsUsed || 0);
+        }
+      } catch (error) {
+        console.error("Error updating payment intent:", error);
+      }
+    }
+  };
+
   const handlePaymentSuccess = useCallback(async () => {
     // Notify backend about payment success so driver gets the popup
     if (rideId && auth.currentUser) {
@@ -669,6 +764,7 @@ export default function RiderMap({
         await fetch(`${backendUrl}/ride/confirm-payment`, {
           body: JSON.stringify({
             amount: paymentAmount,
+            pointsUsed,
             rideId,
           }),
           headers: {
@@ -714,10 +810,14 @@ export default function RiderMap({
     setSearchDestination("");
     setManualPickupMode(false);
     setErrorMessage(null);
+    setIsGreenPointsUsed(false);
+    setDiscountAmount(0);
+    setPointsUsed(0);
     setDropOffLocation(null);
     setDecodedPolyline([]);
     autoCompleteTriggeredRef.current = false;
-  }, [rideId, paymentAmount, assignedDriverId, assignedDriverName]);
+    tripStartTimeRef.current = null;
+  }, [rideId, paymentAmount, pointsUsed, assignedDriverId, assignedDriverName]);
 
   // Listen for ride status changes (Start/Complete) via RTDB (Bypasses Firestore permissions)
   useEffect(() => {
@@ -731,6 +831,7 @@ export default function RiderMap({
         console.log("DEBUG: RTDB Ride Update:", data);
 
         if (data.status === "IN_PROGRESS") {
+          tripStartTimeRef.current = tripStartTimeRef.current || Date.now();
           setRideStatus("on_trip");
         } else if (data.status === "COMPLETED" && data.paymentStatus !== "PAID") {
           // Trip Completed Logic - Trigger Payment
@@ -887,9 +988,6 @@ export default function RiderMap({
   }, []);
 
   // Listen to assigned driver location updates with route-snapping to eliminate zigzag
-  const assignedDriverBufferRef = useRef<{ lat: number; lng: number; time: number } | null>(null);
-  const lastAssignedUpdateRef = useRef<number>(0);
-  const assignedDriverDebounceRef = useRef<NodeJS.Timeout | null>(null);
   const currentRouteRef = useRef<google.maps.DirectionsResult | null>(null);
 
   // Store the current active route for snapping
@@ -917,77 +1015,23 @@ export default function RiderMap({
       if (!data) return;
 
       let newLocation = { lat: data.lat, lng: data.lng };
-      const now = Date.now();
 
       // ROUTE SNAPPING: Snap driver position to the route to eliminate GPS jitter & zigzag
       if (currentRouteRef.current) {
         const snapped = findClosestPointOnRoute(newLocation, currentRouteRef.current);
         if (snapped) {
-          console.log(
-            `🧲 Snapped driver from (${newLocation.lat.toFixed(5)}, ${newLocation.lng.toFixed(5)}) to route`,
-          );
           newLocation = { lat: snapped.lat, lng: snapped.lng };
-          // Also update heading from route direction (more accurate than GPS heading)
           data.heading = snapped.heading;
         }
       }
 
-      // Constants for filtering (now even more lenient since we're route-snapping)
-      const MIN_DISTANCE_METERS = 5; // Reduced from 12 since snapping reduces noise
-      const MIN_UPDATE_INTERVAL = 1500; // Reduced from 2500
-      const MAX_UPDATE_INTERVAL = 4000; // Reduced from 5000
-      const DEBOUNCE_DELAY = 500; // Reduced from 800
-
-      // Clear any pending debounced update
-      if (assignedDriverDebounceRef.current) {
-        clearTimeout(assignedDriverDebounceRef.current);
-      }
-
-      // Debounce the update to prevent rapid-fire changes
-      assignedDriverDebounceRef.current = setTimeout(() => {
-        const timeSinceLastUpdate = now - lastAssignedUpdateRef.current;
-        let shouldUpdate = false;
-
-        if (!assignedDriverBufferRef.current) {
-          // First update, always accept
-          shouldUpdate = true;
-        } else {
-          const distance = haversineDistance(
-            assignedDriverBufferRef.current.lat,
-            assignedDriverBufferRef.current.lng,
-            newLocation.lat,
-            newLocation.lng,
-          );
-
-          // Update only if significant distance AND enough time passed
-          if (distance >= MIN_DISTANCE_METERS && timeSinceLastUpdate >= MIN_UPDATE_INTERVAL) {
-            shouldUpdate = true;
-          } else if (timeSinceLastUpdate >= MAX_UPDATE_INTERVAL) {
-            // Force update after max interval to catch slow movements
-            shouldUpdate = true;
-          }
-        }
-
-        if (shouldUpdate) {
-          assignedDriverBufferRef.current = { ...newLocation, time: now };
-          lastAssignedUpdateRef.current = now;
-          setAssignedDriverLocation(newLocation);
-          console.log(
-            `✅ Driver location updated: ${newLocation.lat.toFixed(4)}, ${newLocation.lng.toFixed(4)}`,
-          );
-        } else {
-          console.log(
-            `⏭️  Driver update filtered (distance: ${assignedDriverBufferRef.current ? haversineDistance(assignedDriverBufferRef.current.lat, assignedDriverBufferRef.current.lng, newLocation.lat, newLocation.lng).toFixed(1) : "N/A"}m)`,
-          );
-        }
-      }, DEBOUNCE_DELAY);
+      // Pass every update directly — the requestAnimationFrame lerp loop
+      // handles smooth visual interpolation, so no throttling needed here.
+      setAssignedDriverLocation(newLocation);
     });
 
     return () => {
       unsubscribe();
-      if (assignedDriverDebounceRef.current) {
-        clearTimeout(assignedDriverDebounceRef.current);
-      }
     };
   }, [assignedDriverId, rideStatus]);
 
@@ -1016,6 +1060,7 @@ export default function RiderMap({
     setSearchDestination("");
     setDropOffLocation(null);
     autoCompleteTriggeredRef.current = false;
+    tripStartTimeRef.current = null;
   }, []);
 
   // Listen for ride status updates from RTDB (e.g., driver accepts, trip starts)
@@ -1047,6 +1092,7 @@ export default function RiderMap({
         (rideStatus === "matched" || rideStatus === "arrived")
       ) {
         console.log("Trip started!");
+        tripStartTimeRef.current = Date.now();
         setRideStatus("on_trip");
       } else if (data.status === "SEARCHING" && rideStatus === "pending_acceptance") {
         // Driver declined, system is re-matching
@@ -1116,6 +1162,8 @@ export default function RiderMap({
   }, [rideStatus, rideId]);
 
   // Auto-complete trip when driver reaches within 100m of destination
+  // Guards: require minimum 30s trip duration AND driver must have traveled
+  // away from pickup to prevent premature completion when pickup ≈ drop-off.
   useEffect(() => {
     if (
       rideStatus !== "on_trip" ||
@@ -1127,6 +1175,26 @@ export default function RiderMap({
       return;
     }
 
+    // Guard 1: Minimum trip duration (30 seconds) to let driver travel
+    const MIN_TRIP_DURATION_MS = 30_000;
+    const tripElapsed = tripStartTimeRef.current ? Date.now() - tripStartTimeRef.current : 0;
+    if (tripElapsed < MIN_TRIP_DURATION_MS) {
+      return;
+    }
+
+    // Guard 2: Driver must have moved at least 100m from pickup
+    if (ridePickup) {
+      const distFromPickup = haversineDistance(
+        assignedDriverLocation.lat,
+        assignedDriverLocation.lng,
+        ridePickup.lat,
+        ridePickup.lng,
+      );
+      if (distFromPickup < 100) {
+        return; // Driver is still near the pickup — don't auto-complete yet
+      }
+    }
+
     const distance = haversineDistance(
       assignedDriverLocation.lat,
       assignedDriverLocation.lng,
@@ -1134,7 +1202,9 @@ export default function RiderMap({
       dropOffLocation.lng,
     );
 
-    console.log(`Distance to destination: ${distance.toFixed(0)}m`);
+    console.log(
+      `Distance to destination: ${distance.toFixed(0)}m (trip elapsed: ${(tripElapsed / 1000).toFixed(0)}s)`,
+    );
 
     if (distance <= 100) {
       console.log("Driver within 100m of destination - Auto-completing trip...");
@@ -1162,17 +1232,19 @@ export default function RiderMap({
             // The RTDB listener will handle showing the payment modal
           } else {
             console.error("Failed to auto-complete trip:", data.message);
-            autoCompleteTriggeredRef.current = false; // Allow retry
+            autoCompleteTriggeredRef.current = false;
+            tripStartTimeRef.current = null; // Allow retry
           }
         } catch (error) {
           console.error("Error auto-completing trip:", error);
-          autoCompleteTriggeredRef.current = false; // Allow retry
+          autoCompleteTriggeredRef.current = false;
+          tripStartTimeRef.current = null; // Allow retry
         }
       };
 
       autoCompleteRide();
     }
-  }, [assignedDriverLocation, dropOffLocation, rideStatus, rideId]);
+  }, [assignedDriverLocation, dropOffLocation, rideStatus, rideId, ridePickup]);
 
   // Calculate and update route when driver location or destination changes
   useEffect(() => {
@@ -1233,20 +1305,6 @@ export default function RiderMap({
             }
           } else {
             console.error("Directions to pickup failed:", status);
-          }
-        },
-      );
-
-      // Also prepare route: Pickup -> Destination for display
-      directionsServiceRef.current.route(
-        {
-          destination,
-          origin: pickup,
-          travelMode: google.maps.TravelMode.DRIVING,
-        },
-        (result, status) => {
-          if (status === google.maps.DirectionsStatus.OK && result) {
-            setDirectionsToDestination(result);
           }
         },
       );
@@ -1451,8 +1509,8 @@ export default function RiderMap({
       // Ultra-smooth interpolation for assigned driver (user's primary focus)
       const distance = haversineDistance(current.lat, current.lng, target.lat, target.lng);
 
-      // Very slow interpolation for buttery-smooth movement
-      const posLerp = distance < 10 ? 0.03 : distance < 30 ? 0.05 : 0.07;
+      // Adaptive interpolation — faster convergence with frequent updates
+      const posLerp = distance < 5 ? 0.05 : distance < 20 ? 0.08 : 0.12;
 
       const newLat = current.lat + (target.lat - current.lat) * posLerp;
       const newLng = current.lng + (target.lng - current.lng) * posLerp;
@@ -1475,7 +1533,7 @@ export default function RiderMap({
         let headingDiff = targetHeading - current.heading;
         if (headingDiff > 180) headingDiff -= 360;
         if (headingDiff < -180) headingDiff += 360;
-        newHeading = current.heading + headingDiff * 0.08; // Very smooth heading
+        newHeading = current.heading + headingDiff * 0.12;
         if (newHeading < 0) newHeading += 360;
         if (newHeading >= 360) newHeading -= 360;
       }
@@ -1501,9 +1559,18 @@ export default function RiderMap({
     };
   }, [assignedDriverLocation]);
 
-  const onLoad = useCallback((map: google.maps.Map) => {
-    mapRef.current = map;
-  }, []);
+  const onLoad = useCallback(
+    (map: google.maps.Map) => {
+      mapRef.current = map;
+      // Set initial center once — do NOT use center/zoom props on <GoogleMap>
+      // because those re-center the map on every render, overriding user pan/zoom.
+      const initial = currentLocation || defaultCenter;
+      map.setCenter(initial);
+      map.setZoom(14);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [currentLocation],
+  );
 
   const onUnmount = useCallback(() => {
     mapRef.current = null;
@@ -1602,10 +1669,14 @@ export default function RiderMap({
       return;
     }
 
-    const result = await getEstimate(pickup, {
-      lat: selectedDestination.lat,
-      lng: selectedDestination.lng,
-    });
+    const result = await getEstimate(
+      pickup,
+      {
+        lat: selectedDestination.lat,
+        lng: selectedDestination.lng,
+      },
+      isPooled,
+    );
 
     if (result?.polyline) {
       try {
@@ -1642,7 +1713,8 @@ export default function RiderMap({
     setErrorMessage(null);
     clearEstimate(); // Clear estimate UI when searching starts
     setDecodedPolyline([]);
-    autoCompleteTriggeredRef.current = false; // Reset auto-complete flag
+    autoCompleteTriggeredRef.current = false;
+    tripStartTimeRef.current = null; // Reset auto-complete flag
 
     // Store drop-off location for auto-complete distance calculation
     setDropOffLocation({ lat: selectedDestination.lat, lng: selectedDestination.lng });
@@ -1678,6 +1750,7 @@ export default function RiderMap({
           dropName: selectedDestination.name,
           duration: estimate?.details?.duration_s || null,
           fare: estimate?.fare || null,
+          isPooled,
           pickupLat: pickup.lat,
           pickupLng: pickup.lng,
           pickupName: pickupSearchText || "Current Location",
@@ -3048,6 +3121,130 @@ export default function RiderMap({
                   </button>
                 </div>
 
+                {/* ═══════════════════════════════════════════════════════ */}
+                {/* ECO-RIDE POOLING TOGGLE                               */}
+                {/* ═══════════════════════════════════════════════════════ */}
+                <div
+                  style={{
+                    background: isPooled
+                      ? "linear-gradient(135deg, rgba(34, 197, 94, 0.15), rgba(16, 185, 129, 0.15))"
+                      : "rgba(30, 41, 59, 0.6)",
+                    border: isPooled
+                      ? "1px solid rgba(34, 197, 94, 0.4)"
+                      : "1px solid rgba(71, 85, 105, 0.3)",
+                    borderRadius: "16px",
+                    marginBottom: "16px",
+                    padding: "16px",
+                    transition: "all 0.3s ease",
+                  }}
+                >
+                  <div
+                    style={{
+                      alignItems: "center",
+                      cursor: "pointer",
+                      display: "flex",
+                      justifyContent: "space-between",
+                    }}
+                    onClick={() => {
+                      setIsPooled(!isPooled);
+                      // Clear existing estimate when toggling so user re-estimates
+                      if (estimate) {
+                        clearEstimate();
+                        setDecodedPolyline([]);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        setIsPooled(!isPooled);
+                        if (estimate) {
+                          clearEstimate();
+                          setDecodedPolyline([]);
+                        }
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                  >
+                    <div style={{ alignItems: "center", display: "flex", gap: "12px" }}>
+                      <div
+                        style={{
+                          alignItems: "center",
+                          background: isPooled
+                            ? "linear-gradient(135deg, #22c55e, #10b981)"
+                            : "rgba(71, 85, 105, 0.5)",
+                          borderRadius: "12px",
+                          display: "flex",
+                          height: "40px",
+                          justifyContent: "center",
+                          transition: "all 0.3s ease",
+                          width: "40px",
+                        }}
+                      >
+                        <FaUsers style={{ color: "white", fontSize: "18px" }} />
+                      </div>
+                      <div>
+                        <div style={{ color: "#e2e8f0", fontSize: "15px", fontWeight: 600 }}>
+                          Share Ride
+                        </div>
+                        <div style={{ color: "#94a3b8", fontSize: "12px" }}>
+                          Save up to 35% & reduce CO₂
+                        </div>
+                      </div>
+                    </div>
+                    {/* Toggle Switch */}
+                    <div
+                      style={{
+                        background: isPooled
+                          ? "linear-gradient(135deg, #22c55e, #10b981)"
+                          : "rgba(71, 85, 105, 0.5)",
+                        borderRadius: "14px",
+                        height: "28px",
+                        position: "relative",
+                        transition: "all 0.3s ease",
+                        width: "52px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          background: "white",
+                          borderRadius: "50%",
+                          boxShadow: "0 2px 4px rgba(0,0,0,0.3)",
+                          height: "22px",
+                          left: isPooled ? "27px" : "3px",
+                          position: "absolute",
+                          top: "3px",
+                          transition: "all 0.3s ease",
+                          width: "22px",
+                        }}
+                      />
+                    </div>
+                  </div>
+                  {isPooled && (
+                    <div
+                      style={{
+                        borderTop: "1px solid rgba(34, 197, 94, 0.2)",
+                        display: "flex",
+                        gap: "16px",
+                        marginTop: "12px",
+                        paddingTop: "12px",
+                      }}
+                    >
+                      <div style={{ alignItems: "center", display: "flex", flex: 1, gap: "6px" }}>
+                        <FaLeaf style={{ color: "#22c55e", fontSize: "12px" }} />
+                        <span style={{ color: "#86efac", fontSize: "12px" }}>
+                          25% fare discount
+                        </span>
+                      </div>
+                      <div style={{ alignItems: "center", display: "flex", flex: 1, gap: "6px" }}>
+                        <FaLeaf style={{ color: "#22c55e", fontSize: "12px" }} />
+                        <span style={{ color: "#86efac", fontSize: "12px" }}>
+                          1.5x green points
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {/* Error message */}
                 {errorMessage && (
                   <div
@@ -3073,13 +3270,39 @@ export default function RiderMap({
                 {estimate ? (
                   <div
                     style={{
-                      background: "rgba(34, 197, 94, 0.1)",
-                      border: "1px solid rgba(34, 197, 94, 0.3)",
+                      background: isPooled
+                        ? "linear-gradient(135deg, rgba(34, 197, 94, 0.12), rgba(16, 185, 129, 0.12))"
+                        : "rgba(34, 197, 94, 0.1)",
+                      border: isPooled
+                        ? "1px solid rgba(34, 197, 94, 0.4)"
+                        : "1px solid rgba(34, 197, 94, 0.3)",
                       borderRadius: "16px",
                       marginBottom: "10px",
                       padding: "16px",
                     }}
                   >
+                    {/* Pooled ride badge */}
+                    {isPooled && (
+                      <div
+                        style={{
+                          alignItems: "center",
+                          background: "linear-gradient(135deg, #22c55e, #10b981)",
+                          borderRadius: "8px",
+                          color: "white",
+                          display: "inline-flex",
+                          fontSize: "11px",
+                          fontWeight: 700,
+                          gap: "4px",
+                          letterSpacing: "0.5px",
+                          marginBottom: "10px",
+                          padding: "4px 10px",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        <FaUsers size={10} /> SHARED RIDE
+                      </div>
+                    )}
+
                     <div
                       style={{
                         alignItems: "flex-end",
@@ -3089,10 +3312,37 @@ export default function RiderMap({
                       }}
                     >
                       <div>
-                        <div style={{ color: "#94a3b8", fontSize: "12px" }}>Total Fare</div>
-                        <div style={{ color: "#22c55e", fontSize: "24px", fontWeight: "bold" }}>
-                          ₹{estimate.fare}
+                        <div style={{ color: "#94a3b8", fontSize: "12px" }}>
+                          {isPooled ? "Pooled Fare" : "Total Fare"}
                         </div>
+                        <div style={{ alignItems: "baseline", display: "flex", gap: "8px" }}>
+                          <span style={{ color: "#22c55e", fontSize: "24px", fontWeight: "bold" }}>
+                            ₹{estimate.fare}
+                          </span>
+                          {isPooled && estimate.solo_fare && estimate.solo_fare > estimate.fare && (
+                            <span
+                              style={{
+                                color: "#64748b",
+                                fontSize: "14px",
+                                textDecoration: "line-through",
+                              }}
+                            >
+                              ₹{estimate.solo_fare}
+                            </span>
+                          )}
+                        </div>
+                        {isPooled && (estimate.pool_discount_pct ?? 0) > 0 && (
+                          <div
+                            style={{
+                              color: "#4ade80",
+                              fontSize: "12px",
+                              fontWeight: 600,
+                              marginTop: "2px",
+                            }}
+                          >
+                            You save ₹{estimate.pool_savings} ({estimate.pool_discount_pct}% off)
+                          </div>
+                        )}
                       </div>
                       <div style={{ textAlign: "right" }}>
                         <div
@@ -3108,6 +3358,58 @@ export default function RiderMap({
                         </div>
                         <div style={{ color: "#94a3b8", fontSize: "12px" }}>
                           {estimate.distance_km} km
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Eco Impact Row */}
+                    <div
+                      style={{
+                        borderTop: "1px solid rgba(34, 197, 94, 0.2)",
+                        display: "flex",
+                        gap: "12px",
+                        marginBottom: "12px",
+                        paddingTop: "10px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          alignItems: "center",
+                          background: "rgba(34, 197, 94, 0.1)",
+                          borderRadius: "8px",
+                          display: "flex",
+                          flex: 1,
+                          gap: "6px",
+                          padding: "8px 10px",
+                        }}
+                      >
+                        <FaLeaf style={{ color: "#22c55e", fontSize: "14px" }} />
+                        <div>
+                          <div style={{ color: "#94a3b8", fontSize: "10px" }}>CO₂ Saved</div>
+                          <div style={{ color: "#4ade80", fontSize: "13px", fontWeight: 600 }}>
+                            {((estimate.co2_saved_g || 0) / 1000).toFixed(1)} kg
+                          </div>
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          alignItems: "center",
+                          background: "rgba(34, 197, 94, 0.1)",
+                          borderRadius: "8px",
+                          display: "flex",
+                          flex: 1,
+                          gap: "6px",
+                          padding: "8px 10px",
+                        }}
+                      >
+                        <FaStar style={{ color: "#fbbf24", fontSize: "14px" }} />
+                        <div>
+                          <div style={{ color: "#94a3b8", fontSize: "10px" }}>Green Points</div>
+                          <div style={{ color: "#fbbf24", fontSize: "13px", fontWeight: 600 }}>
+                            +
+                            {estimate.green_points ||
+                              Math.round(10 + parseFloat(estimate.distance_km) * 2)}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -3144,15 +3446,15 @@ export default function RiderMap({
                           padding: "12px",
                         }}
                       >
-                        Confirm Ride
+                        {isPooled ? "Confirm Shared Ride" : "Confirm Ride"}
                       </button>
                     </div>
                   </div>
                 ) : (
                   <button
                     type="button"
-                    onClick={handleFindRide}
-                    disabled={!canRequestRide}
+                    onClick={handleGetEstimate}
+                    disabled={!canRequestRide || estimating}
                     style={canRequestRide ? styles.actionButton : styles.actionButtonDisabled}
                     onMouseEnter={(e) => {
                       if (canRequestRide) {
@@ -3167,8 +3469,19 @@ export default function RiderMap({
                       }
                     }}
                   >
-                    <FaCar style={{ fontSize: "20px" }} />
-                    Find a Ride
+                    {estimating ? (
+                      <>
+                        <FaSpinner
+                          style={{ animation: "spin 1s linear infinite", fontSize: "20px" }}
+                        />
+                        Getting Estimate...
+                      </>
+                    ) : (
+                      <>
+                        <FaLeaf style={{ fontSize: "20px" }} />
+                        Get Price Estimate
+                      </>
+                    )}
                   </button>
                 )}
               </div>
@@ -3254,8 +3567,6 @@ export default function RiderMap({
                 )}
                 <GoogleMap
                   mapContainerStyle={mapContainerStyle}
-                  center={currentLocation || defaultCenter}
-                  zoom={14}
                   onLoad={onLoad}
                   onUnmount={onUnmount}
                   onClick={onMapClick}
@@ -3268,7 +3579,7 @@ export default function RiderMap({
                   }}
                 >
                   {/* Route Directions - Driver to Pickup (BLUE) */}
-                  {directionsToPickup && (
+                  {(rideStatus === "matched" || rideStatus === "arrived") && directionsToPickup && (
                     <DirectionsRenderer
                       directions={directionsToPickup}
                       options={{
@@ -3283,31 +3594,34 @@ export default function RiderMap({
                   )}
 
                   {/* Route Directions - Pickup to Destination (GREEN) */}
-                  {directionsToDestination && (
-                    <DirectionsRenderer
-                      directions={directionsToDestination}
-                      options={{
-                        polylineOptions: {
+                  {(rideStatus === "pending_acceptance" || rideStatus === "on_trip") &&
+                    directionsToDestination && (
+                      <DirectionsRenderer
+                        directions={directionsToDestination}
+                        options={{
+                          polylineOptions: {
+                            strokeColor: "#22c55e",
+                            strokeOpacity: 0.9,
+                            strokeWeight: 5,
+                          },
+                          suppressMarkers: true,
+                        }}
+                      />
+                    )}
+
+                  {/* Estimated Route Polyline (Green) - Only show before ride starts */}
+                  {rideStatus === "idle" &&
+                    decodedPolyline.length > 0 &&
+                    !directionsToDestination && (
+                      <Polyline
+                        path={decodedPolyline}
+                        options={{
                           strokeColor: "#22c55e",
                           strokeOpacity: 0.9,
-                          strokeWeight: 5,
-                        },
-                        suppressMarkers: true,
-                      }}
-                    />
-                  )}
-
-                  {/* Estimated Route Polyline (Green) - Only show when no active ride */}
-                  {decodedPolyline.length > 0 && !directionsToDestination && (
-                    <Polyline
-                      path={decodedPolyline}
-                      options={{
-                        strokeColor: "#22c55e",
-                        strokeOpacity: 0.9,
-                        strokeWeight: 6,
-                      }}
-                    />
-                  )}
+                          strokeWeight: 6,
+                        }}
+                      />
+                    )}
 
                   {/* Current Location Marker */}
                   {currentLocation && (
@@ -3315,12 +3629,14 @@ export default function RiderMap({
                       position={currentLocation}
                       icon={{
                         anchor: new google.maps.Point(12, 12),
-                        fillColor: "#22c55e",
-                        fillOpacity: 1,
-                        path: google.maps.SymbolPath.CIRCLE,
-                        scale: 12,
-                        strokeColor: "#ffffff",
-                        strokeWeight: 3,
+                        scaledSize: new google.maps.Size(24, 24),
+                        url:
+                          "data:image/svg+xml;charset=UTF-8," +
+                          encodeURIComponent(`
+                          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r="10" fill="#22c55e" stroke="#ffffff" stroke-width="3"/>
+                          </svg>
+                        `),
                       }}
                       title="Your Location"
                     />
@@ -3712,12 +4028,16 @@ export default function RiderMap({
       `}</style>
 
       {/* Payment Modal */}
-      {showPayment && clientSecret && (
+      {showPayment && clientSecret !== undefined && (
         <PaymentModal
-          clientSecret={clientSecret}
           amount={paymentAmount}
-          onSuccess={handlePaymentSuccess}
+          clientSecret={clientSecret}
+          greenPointsBalance={userStats.greenPoints}
+          isPointsUsed={isGreenPointsUsed}
+          onTogglePoints={handleGreenPointsToggle}
+          discountAmount={discountAmount}
           onClose={() => setShowPayment(false)}
+          onSuccess={handlePaymentSuccess}
         />
       )}
       {/* Rating Modal */}

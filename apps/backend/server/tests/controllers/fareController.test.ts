@@ -234,9 +234,9 @@ describe("Fare Controller", () => {
 
         // Assert
         expect(res._getStatusCode()).toBe(200);
-        // Standard fare would be 115, with 20% discount: 115 * 0.8 = 92
+        // Standard fare would be 115, with 25% discount: 115 * 0.75 ≈ 86
         // @ts-expect-error
-        expect(res._getData().fare).toBe(92);
+        expect(res._getData().fare).toBe(86);
       });
 
       it("should calculate CO2 savings correctly", async () => {

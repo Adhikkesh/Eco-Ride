@@ -1,0 +1,28 @@
+services:
+  # ── Eco-Ride Backend Server (Express API) ───────────────
+  server:
+    build:
+      context: .
+      dockerfile: apps/backend/server/Dockerfile
+    container_name: eco-ride-server
+    env_file:
+      - .env.docker
+    ports:
+      - "${PORT:-3001}:3001"
+    volumes:
+      - ./apps/backend/server/firebase_credential.json:/app/firebase_credential.json:ro
+    restart: unless-stopped
+
+  # ── Eco-Ride Driver Simulator ───────────────────────────
+  simulator:
+    build:
+      context: .
+      dockerfile: apps/backend/simulator/Dockerfile
+    container_name: eco-ride-simulator
+    env_file:
+      - .env.docker
+    volumes:
+      - ./apps/backend/server/firebase_credential.json:/app/firebase_credential.json:ro
+    depends_on:
+      - server
+    restart: unless-stopped

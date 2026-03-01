@@ -10,7 +10,7 @@ import {
 import { onAuthStateChanged } from "firebase/auth";
 import { onDisconnect, onValue, ref, remove, set, update } from "firebase/database";
 import * as geofire from "geofire-common";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FaCar,
   FaCheckCircle,
@@ -20,6 +20,7 @@ import {
   FaMapMarkerAlt,
   FaPowerOff,
   FaRoute,
+  FaUsers,
 } from "react-icons/fa";
 import { backendUrl } from "@/config";
 import { auth, db, rtdb } from "@/lib/firebase";
@@ -51,6 +52,21 @@ interface AssignedRide {
   arrivedAt?: number;
   riderName?: string;
   riderPhone?: string;
+  riders?: Array<{
+    rideId: string;
+    riderId: string;
+    pickup: { lat: number; lng: number };
+    drop: { lat: number; lng: number };
+    riderName?: string;
+    riderPhone?: string;
+    status?: "MATCHED" | "IN_PROGRESS" | "ARRIVED";
+  }>;
+  waypoints?: Array<{
+    lat: number;
+    lng: number;
+    riderId: string;
+    type: "PICKUP" | "DROP";
+  }>;
 }
 
 interface PendingRide {
@@ -248,16 +264,31 @@ export default function DriverLiveMap({
   const [locationMode, setLocationMode] = useState<LocationMode>("select");
   const [selectedStartLocation, setSelectedStartLocation] = useState<Position | null>(null);
   const [isGettingGPS, setIsGettingGPS] = useState(false);
+  const selectedStartLocationRef = useRef<Position | null>(null);
 
   // OTP State
   const [showOtpModal, setShowOtpModal] = useState(false);
   const [otpInput, setOtpInput] = useState("");
   const [submittingOtp, setSubmittingOtp] = useState(false);
+  // Per-rider OTP tracking for pooled rides
+  const [riderOtpInputs, setRiderOtpInputs] = useState<Record<string, string>>({});
+  const [verifiedRiders, setVerifiedRiders] = useState<Set<string>>(new Set());
+  const [verifyingRiderId, setVerifyingRiderId] = useState<string | null>(null);
 
-  // Payment Popup State
-  const [finishedRideId, setFinishedRideId] = useState<string | null>(null);
+  // Payment Popup State - now tracks all rides for per-rider popups
+  const [_finishedRideIds, setFinishedRideIds] = useState<string[]>([]);
+  const [_paidRideIds, setPaidRideIds] = useState<Set<string>>(new Set());
+  const [_paymentQueue, setPaymentQueue] = useState<
+    { rideId: string; amount: number; greenPoints: number }[]
+  >([]);
   const [showPaymentPopup, setShowPaymentPopup] = useState(false);
   const [receivedAmount, setReceivedAmount] = useState(0);
+
+  // Per-rider payment notifications for pooled rides
+  const [completedRideIds, setCompletedRideIds] = useState<string[]>([]);
+  const [paymentNotifications, setPaymentNotifications] = useState<
+    { rideId: string; amount: number; greenPoints: number }[]
+  >([]);
 
   // Pending Ride Acceptance State
   const [pendingRide, setPendingRide] = useState<PendingRide | null>(null);
@@ -278,6 +309,11 @@ export default function DriverLiveMap({
   const [etaToDestination, setEtaToDestination] = useState<string | null>(null);
   const [waitingForPayment, setWaitingForPayment] = useState(false);
   const autoCompleteTriggeredRef = useRef(false);
+  const otpVerifiedRef = useRef(false);
+  // Track riders count to detect new pooled riders added mid-trip
+  const prevRidersCountRef = useRef<number>(0);
+  // Track active rideId via ref to avoid stale-closure issues in the RTDB listener
+  const assignedRideIdRef = useRef<string | null>(null);
   // Persist the current ride ID so the payment listener can still subscribe
   // even after assignedRide is set to null by the RTDB rides-assigned listener.
   // Must be state (not ref) so the useEffect dependency array triggers re-subscription.
@@ -352,6 +388,13 @@ export default function DriverLiveMap({
   }, [userId]);
 
   useEffect(() => {
+    selectedStartLocationRef.current = selectedStartLocation;
+    if (selectedStartLocation) {
+      setError(null);
+    }
+  }, [selectedStartLocation]);
+
+  useEffect(() => {
     const fetchDriverName = async () => {
       if (!userId || !db) return;
       try {
@@ -392,8 +435,8 @@ export default function DriverLiveMap({
   statusRef.current = status;
 
   // Update Firebase ONLY when status changes (position is handled by simulator)
-  // Use update() instead of set() so we only touch the status field
-  // and never overwrite the position the simulator is managing.
+  // IMPORTANT: Use update() NOT set() to preserve server-managed fields
+  // (currentPassengers, destination, pooledRides for ride pooling)
   useEffect(() => {
     if (isOnline && rtdb && userId) {
       const driverRef = ref(rtdb, `drivers-online/${userId}`);
@@ -405,7 +448,7 @@ export default function DriverLiveMap({
 
   // Listen for position updates from RTDB (simulator updates the driver's position)
   useEffect(() => {
-    if (!rtdb || !isOnline || waitingForPayment) {
+    if (!rtdb || !isOnline || !userId || waitingForPayment) {
       return;
     }
 
@@ -415,7 +458,6 @@ export default function DriverLiveMap({
       const data = snapshot.val() as DriverLocation | null;
       if (data?.lat && data?.lng) {
         // Update position from RTDB (simulator moves the driver)
-        // Don't set the local flag - this is from RTDB, not local
         setPosition({
           heading: data.heading ?? 0,
           lat: data.lat,
@@ -429,11 +471,11 @@ export default function DriverLiveMap({
     });
 
     return () => unsubscribe();
-  }, [isOnline, userId, waitingForPayment]); // Removed status from dependencies!
+  }, [isOnline, userId, waitingForPayment]);
 
   // Listen for ride assignments from RTDB
   useEffect(() => {
-    if (!rtdb || !isOnline || waitingForPayment) {
+    if (!rtdb || !isOnline || !userId || waitingForPayment) {
       setAssignedRide(null);
       setDirectionsToPickup(null);
       setDirectionsToDestination(null);
@@ -442,17 +484,62 @@ export default function DriverLiveMap({
       return;
     }
 
+    console.log(`[RideAssignment] Subscribing to rides-assigned/${userId}`);
     const assignedRideRef = ref(rtdb, `rides-assigned/${userId}`);
 
     const unsubscribe = onValue(assignedRideRef, async (snapshot) => {
       const data = snapshot.val() as AssignedRide | null;
       if (data) {
         console.log("Ride assigned:", data);
+
+        // ── Detect new pooled rider added mid-trip ──────────────────────
+        // Count 1 for a single ride (no riders array) so that when the second
+        // ride adds a riders array of length 2, the delta is detected.
+        const newRidersCount = Array.isArray(data.riders) ? data.riders.length : (data.rideId ? 1 : 0);
+        const prevCount = prevRidersCountRef.current;
+        prevRidersCountRef.current = newRidersCount;
+
+        const newRiderAdded = newRidersCount > prevCount && prevCount > 0;
+        // Use assignedRideIdRef (stable ref) instead of stale assignedRide closure
+        const rideIdChanged = data.rideId !== assignedRideIdRef.current && assignedRideIdRef.current !== null;
+
+        if ((newRiderAdded || rideIdChanged) && otpVerifiedRef.current) {
+          console.log(
+            `[Pool] New rider detected mid-trip (riders: ${prevCount}→${newRidersCount}, rideId changed: ${rideIdChanged}) — resetting OTP/arrival state`,
+          );
+          // Pre-populate verifiedRiders with all EXISTING riders (already in vehicle).
+          // Only the new rider (top-level rideId) needs fresh OTP verification.
+          if (Array.isArray(data.riders)) {
+            const alreadyInVehicle = new Set(
+              data.riders
+                .filter((r: { rideId: string }) => r.rideId !== data.rideId)
+                .map((r: { rideId: string }) => r.rideId),
+            );
+            setVerifiedRiders(alreadyInVehicle);
+          }
+          otpVerifiedRef.current = false;
+          setIsArrived(false);
+          autoCompleteTriggeredRef.current = false;
+          // Clear stale location names so they get re-geocoded for new pickup
+          setPickupLocationName(null);
+          setDropLocationName(null);
+          // Clear stale directions so they get recalculated
+          setDirectionsToPickup(null);
+          setDirectionsToDestination(null);
+        }
+
+        // Keep the rideId ref in sync with the latest assignment
+        assignedRideIdRef.current = data.rideId;
+
         setAssignedRide(data);
         // Track ride ID in state so the payment listener effect re-subscribes
         setCurrentRideId(data.rideId);
-        // Reset local ride status to saved status or MATCHED
-        setRideStatus(data.status || "MATCHED");
+        // Only update rideStatus from RTDB when it's a meaningful transition
+        // Don't let RTDB re-set to ARRIVED after OTP was already verified
+        const incomingStatus = data.status || "MATCHED";
+        if (!otpVerifiedRef.current || incomingStatus !== "ARRIVED") {
+          setRideStatus(incomingStatus);
+        }
         // Auto-set status to BUSY when assigned
         setStatus("BUSY");
 
@@ -482,11 +569,11 @@ export default function DriverLiveMap({
 
               setPickupLocationName(
                 getShortName(pickupRes.results) ||
-                  `${data.pickup.lat.toFixed(4)}, ${data.pickup.lng.toFixed(4)}`,
+                  `${data.pickup?.lat?.toFixed(4) ?? "?"}, ${data.pickup?.lng?.toFixed(4) ?? "?"}`,
               );
               setDropLocationName(
                 getShortName(dropRes.results) ||
-                  `${data.drop.lat.toFixed(4)}, ${data.drop.lng.toFixed(4)}`,
+                  `${data.drop?.lat?.toFixed(4) ?? "?"}, ${data.drop?.lng?.toFixed(4) ?? "?"}`,
               );
             }
           } catch (_err) {
@@ -499,6 +586,11 @@ export default function DriverLiveMap({
         setDirectionsToDestination(null);
         setPickupLocationName(null);
         setDropLocationName(null);
+        // Reset OTP guard for next ride
+        otpVerifiedRef.current = false;
+        setIsArrived(false);
+        prevRidersCountRef.current = 0;
+        assignedRideIdRef.current = null;
       }
     });
 
@@ -520,18 +612,15 @@ export default function DriverLiveMap({
       const response = await geocoder.geocode({ location: { lat, lng } });
 
       if (response.results && response.results.length > 0) {
-        // Try to get a short, meaningful name from the address components
         const result = response.results[0];
         const components = result.address_components || [];
 
-        // Try to find a meaningful landmark
         const neighborhood = components.find((c) => c.types.includes("neighborhood"))?.long_name;
         const locality = components.find((c) => c.types.includes("locality"))?.long_name;
         const sublocality = components.find((c) => c.types.includes("sublocality"))?.long_name;
         const route = components.find((c) => c.types.includes("route"))?.short_name;
         const premise = components.find((c) => c.types.includes("premise"))?.long_name;
 
-        // Build a short name prioritizing landmarks
         if (premise) return premise;
         if (route && sublocality) return `${route}, ${sublocality}`;
         if (route && neighborhood) return `${route}, ${neighborhood}`;
@@ -539,20 +628,17 @@ export default function DriverLiveMap({
         if (neighborhood) return neighborhood;
         if (locality) return locality;
 
-        // Fallback to short formatted address
         return result.formatted_address?.split(",").slice(0, 2).join(",") || fallback;
       }
       return fallback;
     } catch (_error) {
-      // Silently fail and return coordinates
-      // This handles cases where Geocoding API is not enabled
       return fallback;
     }
   }, []);
 
   // Listen for PENDING ride requests (driver must accept/decline)
   useEffect(() => {
-    if (!rtdb || !isOnline || waitingForPayment) {
+    if (!rtdb || !isOnline || !userId || waitingForPayment) {
       setPendingRide(null);
       setShowAcceptModal(false);
       setPickupLocationName(null);
@@ -560,6 +646,7 @@ export default function DriverLiveMap({
       return;
     }
 
+    console.log(`[PendingRide] Subscribing to rides-pending/${userId}`);
     const pendingRideRef = ref(rtdb, `rides-pending/${userId}`);
 
     const unsubscribe = onValue(pendingRideRef, async (snapshot) => {
@@ -569,10 +656,9 @@ export default function DriverLiveMap({
         setPendingRide(data);
         setShowAcceptModal(true);
 
-        // Fetch readable location names
         const [pickupName, dropName] = await Promise.all([
-          reverseGeocode(data.pickup.lat, data.pickup.lng),
-          reverseGeocode(data.drop.lat, data.drop.lng),
+          data.pickup ? reverseGeocode(data.pickup.lat, data.pickup.lng) : Promise.resolve(null),
+          data.drop ? reverseGeocode(data.drop.lat, data.drop.lng) : Promise.resolve(null),
         ]);
         setPickupLocationName(pickupName);
         setDropLocationName(dropName);
@@ -587,41 +673,26 @@ export default function DriverLiveMap({
     return () => unsubscribe();
   }, [isOnline, userId, reverseGeocode, waitingForPayment]);
 
-  // Listen for driver location updates from Simulator (via RTDB)
-  useEffect(() => {
-    if (!rtdb || !userId || !isOnline || waitingForPayment) return;
+  // Handle OTP submission for a specific rider (for pooled rides) or single ride
+  const _handleSubmitOtp = async (rideIdToVerify?: string, otpToVerify?: string) => {
+    const targetRideId = rideIdToVerify || assignedRide?.rideId;
+    const targetOtp = otpToVerify || otpInput;
 
-    const driverRef = ref(rtdb, `drivers-online/${userId}`);
-    const unsubscribe = onValue(driverRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        const newPos = { heading: data.heading, lat: data.lat, lng: data.lng };
-        setPosition(newPos);
-        prevPositionRef.current = newPos;
-        // Also update positionRef if it exists/is used
-        // Based on Step 294, positionRef is used. Use explicit assignment.
-        // Assuming positionRef is defined in scope (it was in Step 366 view as positionRef, derived from useRef)
-      }
-    });
-
-    return () => unsubscribe();
-  }, [isOnline, userId, waitingForPayment]);
-
-  // Handle accepting a pending ride
-  const handleAcceptRide = async () => {
-    if (!pendingRide) return;
-
-    // Check backend URL
-    if (!backendUrl) {
-      alert("System Error: Backend URL configuration missing");
+    if (!targetRideId || !targetOtp || targetOtp.length !== 4) {
+      alert("Please enter a valid 4-digit OTP");
       return;
     }
 
-    setAcceptingRide(true);
+    if (rideIdToVerify) {
+      setVerifyingRiderId(rideIdToVerify);
+    } else {
+      setSubmittingOtp(true);
+    }
+
     try {
       const token = await auth.currentUser?.getIdToken();
-      const res = await fetch(`${backendUrl}/ride/accept`, {
-        body: JSON.stringify({ rideId: pendingRide.rideId }),
+      const res = await fetch(`${backendUrl}/ride/start`, {
+        body: JSON.stringify({ otp: targetOtp, rideId: targetRideId }),
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
@@ -629,36 +700,55 @@ export default function DriverLiveMap({
         method: "POST",
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success) {
-          console.log("Ride accepted successfully");
-          setShowAcceptModal(false);
-          setPendingRide(null);
-          // The rides-assigned listener will pick up the ride
-        } else {
-          console.error("Failed to accept ride:", data.message);
-          // If ride is already cancelled, close the modal
-          if (data.message?.includes("CANCELLED")) {
-            setShowAcceptModal(false);
-            setPendingRide(null);
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        if (rideIdToVerify) {
+          // Pooled ride - mark this rider as verified
+          setVerifiedRiders((prev) => new Set(prev).add(rideIdToVerify));
+          const riders = assignedRide?.riders || [];
+          const newVerified = new Set(verifiedRiders).add(rideIdToVerify);
+          if (riders.length > 0 && riders.every((r) => newVerified.has(r.rideId))) {
+            otpVerifiedRef.current = true;
+            setRideStatus("IN_PROGRESS");
+            setShowOtpModal(false);
+            if (rtdb && assignedRide?.drop) {
+              const driverRef = ref(rtdb, `drivers-online/${userId}`);
+              update(driverRef, {
+                currentPassengers: riders.length,
+                destination: assignedRide.drop,
+                maxPassengers: 4,
+                pooledRides: riders.map((r) => r.rideId),
+                status: "ON_TRIP",
+              }).catch((err) => console.error("Failed to update driver status:", err));
+            }
           }
-          alert(data.message || "Failed to accept ride");
+        } else {
+          // Single ride
+          otpVerifiedRef.current = true;
+          setRideStatus("IN_PROGRESS");
+          setShowOtpModal(false);
+          if (rtdb && assignedRide?.drop) {
+            const driverRef = ref(rtdb, `drivers-online/${userId}`);
+            update(driverRef, {
+              currentPassengers: 1,
+              destination: assignedRide.drop,
+              maxPassengers: 4,
+              pooledRides: [assignedRide.rideId],
+              status: "ON_TRIP",
+            }).catch((err) => console.error("Failed to update driver status:", err));
+          }
         }
       } else {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.message || `Server returned ${res.status}`);
+        console.error("Failed to start ride:", data.message);
+        alert(data.message || "Failed to verify OTP. Check the code.");
       }
-    } catch (err: unknown) {
-      console.error("Error accepting ride:", err);
-      alert(
-        getErrorMessage(
-          err,
-          "Network error: Could not connect to server. Please check your connection.",
-        ),
-      );
+    } catch (err) {
+      console.error("Error starting ride:", err);
+      alert("Error verifying OTP. Please try again.");
     } finally {
-      setAcceptingRide(false);
+      setSubmittingOtp(false);
+      setVerifyingRiderId(null);
     }
   };
 
@@ -691,6 +781,51 @@ export default function DriverLiveMap({
       setPendingRide(null);
     } finally {
       setDecliningRide(false);
+    }
+  };
+
+  // Handle accepting a pending ride
+  const handleAcceptRide = async () => {
+    if (!pendingRide) return;
+
+    if (!backendUrl) {
+      alert("System Error: Backend URL configuration missing");
+      return;
+    }
+
+    const effectiveUserId = userId ?? auth.currentUser?.uid ?? null;
+    if (!effectiveUserId) {
+      setError("Please sign in to accept a ride");
+      return;
+    }
+
+    setAcceptingRide(true);
+    try {
+      // Optimistically close modal
+      setShowAcceptModal(false);
+
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch(`${backendUrl}/ride/accept`, {
+        body: JSON.stringify({ driverId: effectiveUserId, rideId: pendingRide.rideId }),
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.message || `Server returned ${res.status}`);
+      }
+
+      setPendingRide(null);
+    } catch (err: unknown) {
+      console.error("Error accepting ride:", err);
+      alert(getErrorMessage(err, "Network error: Could not accept ride."));
+      setShowAcceptModal(true);
+    } finally {
+      setAcceptingRide(false);
     }
   };
   const _handleDeclineRide = async () => {
@@ -756,8 +891,26 @@ export default function DriverLiveMap({
 
     try {
       const token = await auth.currentUser?.getIdToken();
+
+      // Check if there are other pooled riders still remaining.
+      // The backend's completeRide only processes the single rideId and
+      // removes that rider from the riders array. If other riders remain,
+      // the RTDB listener will pick up the updated assignment automatically.
+      const riders = assignedRide.riders || [];
+      const remainingRiders = riders.filter(
+        (r: { rideId: string }) => r.rideId !== assignedRide.rideId,
+      );
+      const hasRemainingRiders = remainingRiders.length > 0;
+
+      console.log("Completing ride:", {
+        primary: assignedRide.rideId,
+        remainingPoolRiders: remainingRiders.length,
+      });
+
       const res = await fetch(`${backendUrl}/ride/complete`, {
-        body: JSON.stringify({ rideId: assignedRide.rideId }),
+        body: JSON.stringify({
+          rideId: assignedRide.rideId,
+        }),
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
@@ -765,18 +918,45 @@ export default function DriverLiveMap({
         method: "POST",
       });
       if (res.ok) {
-        setFinishedRideId(assignedRide.rideId); // Track for payment
-        setRideStatus("COMPLETED");
-        setWaitingForPayment(true);
-        setStatus("BUSY");
-        setManualLocationMode(false);
-        setAssignedRide(null);
-        setDirectionsToPickup(null);
-        setDirectionsToDestination(null);
-        setDistanceToDestination(null);
-        setEtaToDestination(null);
-        autoCompleteTriggeredRef.current = false;
-        // Driver stays BUSY until payment is confirmed
+        const data = await res.json();
+        console.log("Ride completion result:", data);
+
+        if (hasRemainingRiders) {
+          // Other pooled riders still active — don't go to payment mode.
+          // Track this completed ride for per-rider payment notification.
+          console.log(
+            `[Pool] ${remainingRiders.length} riders remaining — continuing trip`,
+          );
+          setCompletedRideIds((prev) => [...prev, assignedRide.rideId]);
+          autoCompleteTriggeredRef.current = false;
+          // Reset OTP state so the next rider's pickup triggers OTP flow
+          otpVerifiedRef.current = false;
+          setIsArrived(false);
+          setDirectionsToPickup(null);
+          setDirectionsToDestination(null);
+          setDistanceToDestination(null);
+          setEtaToDestination(null);
+          setVerifiedRiders(new Set());
+          // rideStatus + assignedRide will be updated by the RTDB listener
+        } else {
+          // Last or only rider — enter payment mode
+          setFinishedRideIds([assignedRide.rideId]);
+          setPaidRideIds(new Set()); // Reset paid tracking
+          setPaymentQueue([]); // Reset payment queue
+          setRideStatus("COMPLETED");
+          setWaitingForPayment(true);
+          setStatus("BUSY");
+          setManualLocationMode(false);
+          setAssignedRide(null);
+          setDirectionsToPickup(null);
+          setDirectionsToDestination(null);
+          setDistanceToDestination(null);
+          setEtaToDestination(null);
+          autoCompleteTriggeredRef.current = false;
+          // Reset verified riders for next pooled ride
+          setVerifiedRiders(new Set());
+          // Driver stays BUSY until payment is confirmed
+        }
       } else {
         const errorData = await res.json().catch(() => ({}));
         console.error("Failed to complete ride:", errorData.message);
@@ -794,7 +974,7 @@ export default function DriverLiveMap({
   // Calculate routes when ride is FIRST assigned (not on every position change)
   useEffect(() => {
     // Only calculate once when a NEW ride is assigned
-    if (!isLoaded || !assignedRide || !position) {
+    if (!isLoaded || !assignedRide || !position || !assignedRide.pickup || !assignedRide.drop) {
       return;
     }
 
@@ -810,7 +990,6 @@ export default function DriverLiveMap({
     }
 
     // Calculate route 1: Driver -> Pickup (BLUE route)
-    // Use position at time of assignment, not continuously updated position
     directionsServiceRef.current.route(
       {
         destination: assignedRide.pickup,
@@ -826,26 +1005,146 @@ export default function DriverLiveMap({
       },
     );
 
-    // Calculate route 2: Pickup -> Destination (GREEN route)
-    directionsServiceRef.current.route(
-      {
-        destination: assignedRide.drop,
-        origin: assignedRide.pickup,
-        travelMode: google.maps.TravelMode.DRIVING,
-      },
-      (result, status) => {
-        if (status === google.maps.DirectionsStatus.OK && result) {
-          setDirectionsToDestination(result);
-        } else {
-          console.error("Directions to destination failed:", status);
+    const waypoints = assignedRide.waypoints;
+
+    if (waypoints && waypoints.length > 0) {
+      // MULTI-STOP ROUTING
+
+      // Find the pivot point: The LAST pickup in the sequence
+      // Blue route: Driver -> Last Pickup (gathering phase)
+      // Green route: Last Pickup -> Final Drop (delivery phase)
+
+      let lastPickupIdx = -1;
+      for (let i = waypoints.length - 1; i >= 0; i--) {
+        const wp = waypoints[i];
+        if (wp && wp.type === "PICKUP") {
+          lastPickupIdx = i;
+          break;
         }
-      },
-    );
+      }
+
+      // If no pickups (all drops), treat current location as start of Green Route
+      if (lastPickupIdx === -1) {
+        setDirectionsToPickup(null);
+
+        // Green Route: Driver -> Final Drop (visiting all intermediate drops)
+        const finalDrop = waypoints[waypoints.length - 1];
+        if (finalDrop) {
+          const intermediateDrops = waypoints.slice(0, waypoints.length - 1).map((wp) => ({
+            location: { lat: wp.lat, lng: wp.lng },
+            stopover: true,
+          }));
+
+          directionsServiceRef.current.route(
+            {
+              destination: { lat: finalDrop.lat, lng: finalDrop.lng },
+              origin: { lat: position.lat, lng: position.lng },
+              travelMode: google.maps.TravelMode.DRIVING,
+              waypoints: intermediateDrops,
+            },
+            (result, status) => {
+              if (status === google.maps.DirectionsStatus.OK && result) {
+                setDirectionsToDestination(result);
+              }
+            },
+          );
+        }
+        return;
+      }
+
+      // BLUE ROUTE: Driver -> Last Pickup
+      const lastPickup = waypoints[lastPickupIdx];
+      if (lastPickup) {
+        const intermediatePickups = waypoints.slice(0, lastPickupIdx).map((wp) => ({
+          location: { lat: wp.lat, lng: wp.lng },
+          stopover: true,
+        }));
+
+        directionsServiceRef.current.route(
+          {
+            destination: { lat: lastPickup.lat, lng: lastPickup.lng },
+            origin: { lat: position.lat, lng: position.lng },
+            travelMode: google.maps.TravelMode.DRIVING,
+            waypoints: intermediatePickups,
+          },
+          (result, status) => {
+            if (status === google.maps.DirectionsStatus.OK && result) {
+              setDirectionsToPickup(result);
+            }
+          },
+        );
+      }
+
+      // GREEN ROUTE: Last Pickup -> Final Drop
+      if (lastPickupIdx < waypoints.length - 1) {
+        const finalDrop = waypoints[waypoints.length - 1];
+
+        if (lastPickup && finalDrop) {
+          const intermediateBetween = waypoints
+            .slice(lastPickupIdx + 1, waypoints.length - 1)
+            .map((wp) => ({
+              location: { lat: wp.lat, lng: wp.lng },
+              stopover: true,
+            }));
+
+          directionsServiceRef.current.route(
+            {
+              destination: { lat: finalDrop.lat, lng: finalDrop.lng },
+              origin: { lat: lastPickup.lat, lng: lastPickup.lng },
+              travelMode: google.maps.TravelMode.DRIVING,
+              waypoints: intermediateBetween,
+            },
+            (result, status) => {
+              if (status === google.maps.DirectionsStatus.OK && result) {
+                setDirectionsToDestination(result);
+              }
+            },
+          );
+        }
+      } else {
+        setDirectionsToDestination(null);
+      }
+    } else {
+      // SINGLE RIDE (Legacy Fallback)
+      // Calculate route 1: Driver -> Pickup (BLUE route)
+      directionsServiceRef.current.route(
+        {
+          destination: assignedRide.pickup,
+          origin: { lat: position.lat, lng: position.lng },
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          if (status === google.maps.DirectionsStatus.OK && result) {
+            setDirectionsToPickup(result);
+          } else {
+            console.error("Directions to pickup failed:", status);
+          }
+        },
+      );
+
+      // Calculate route 2: Pickup -> Destination (GREEN route)
+      directionsServiceRef.current.route(
+        {
+          destination: assignedRide.drop,
+          origin: assignedRide.pickup,
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          if (status === google.maps.DirectionsStatus.OK && result) {
+            setDirectionsToDestination(result);
+          } else {
+            console.error("Directions to destination failed:", status);
+          }
+        },
+      );
+    }
   }, [isLoaded, assignedRide, position]);
 
   // Track distance to pickup and auto-show OTP modal when <100m
   useEffect(() => {
-    if (!assignedRide || !position || rideStatus !== "MATCHED") return;
+    if (!assignedRide || !position || !assignedRide.pickup) return;
+    // Only track distance in MATCHED or ARRIVED states
+    if (rideStatus !== "MATCHED" && rideStatus !== "ARRIVED") return;
 
     const dist = haversineDistance(
       position.lat,
@@ -855,9 +1154,10 @@ export default function DriverLiveMap({
     );
     setDistanceToPickup(Math.round(dist));
 
-    // Auto-show OTP modal when driver is nearby (within 50m)
-    if (dist <= 50 && !showOtpModal && !isArrived) {
-      console.log("Driver within 50m of pickup - Auto-showing OTP modal...");
+    // Auto-show OTP modal when driver is nearby (within 50m) or status is ARRIVED
+    // otpVerifiedRef prevents re-showing after successful OTP verification
+    if ((dist <= 50 || rideStatus === "ARRIVED") && !showOtpModal && !isArrived && !otpVerifiedRef.current) {
+      console.log("Driver near pickup or ARRIVED - Auto-showing OTP modal...");
       setIsArrived(true);
       setShowOtpModal(true);
     }
@@ -882,12 +1182,11 @@ export default function DriverLiveMap({
     return () => clearInterval(interval);
   }, [rideStatus, assignedRide?.arrivedAt]);
 
-  // Sync isArrived state with rideStatus
+  // Sync isArrived state with rideStatus — only set to true, never reset to false
+  // (resetting isArrived caused a race where the OTP modal would re-appear)
   useEffect(() => {
     if (rideStatus === "ARRIVED") {
       setIsArrived(true);
-    } else {
-      setIsArrived(false);
     }
   }, [rideStatus]);
 
@@ -897,6 +1196,7 @@ export default function DriverLiveMap({
     if (
       !assignedRide ||
       !position ||
+      !assignedRide.drop ||
       rideStatus !== "IN_PROGRESS" ||
       autoCompleteTriggeredRef.current
     )
@@ -931,8 +1231,8 @@ export default function DriverLiveMap({
       const pos = positionRef.current;
       if (!directionsServiceRef.current || !assignedRide || !pos) return;
 
-      if (rideStatus === "MATCHED") {
-        // ETA: Driver → Pickup
+      if (rideStatus === "MATCHED" || rideStatus === "ARRIVED") {
+        // ETA: Driver → Pickup (also keep showing during ARRIVED since OTP happening)
         directionsServiceRef.current.route(
           {
             destination: assignedRide.pickup,
@@ -990,8 +1290,9 @@ export default function DriverLiveMap({
 
   const writeLocationToFirebase = useCallback(
     async (pos: Position) => {
-      if (!rtdb || !userId || waitingForPayment) return;
-      const driverRef = ref(rtdb, `drivers-online/${userId}`);
+      const effectiveUserId = userId ?? auth.currentUser?.uid ?? null;
+      if (!rtdb || !effectiveUserId || waitingForPayment) return;
+      const driverRef = ref(rtdb, `drivers-online/${effectiveUserId}`);
       // Calculate geohash for efficient geo-queries
       const hash = geofire.geohashForLocation([pos.lat, pos.lng]);
       const locationData: DriverLocation = {
@@ -1012,6 +1313,8 @@ export default function DriverLiveMap({
     [userId, status, waitingForPayment],
   );
 
+  const [greenPointsRedeemed, setGreenPointsRedeemed] = useState(0);
+
   // Handler: Use GPS location
   const handleUseGPS = useCallback(async () => {
     if (!navigator.geolocation) {
@@ -1019,22 +1322,18 @@ export default function DriverLiveMap({
       return;
     }
 
-    // Clear any existing error
     setError(null);
 
-    // Request location permission
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         const { latitude, longitude, accuracy, heading } = position.coords;
         console.log("GPS Location:", latitude, longitude, "Accuracy:", accuracy);
 
-        // Update local state
         const newPos = { heading: heading ?? 0, lat: latitude, lng: longitude };
         setPosition(newPos);
         setSelectedStartLocation(newPos);
         setLocationMode("ready");
 
-        // Write to Firebase
         if (rtdb && userId) {
           const driverRef = ref(rtdb, `drivers-online/${userId}`);
           const hash = geofire.geohashForLocation([latitude, longitude]);
@@ -1064,11 +1363,7 @@ export default function DriverLiveMap({
     );
   }, [userId]);
 
-  // Listen for ride COMPLETED status from RTDB (fallback for when rider auto-completes first).
-  // When the rider's auto-complete fires before the driver's, the backend removes
-  // rides-assigned/{driverId} which nullifies assignedRide, preventing the driver's
-  // handleCompleteRide from running. This listener catches that case and sets the
-  // waiting-for-payment state from the RTDB ride status update instead.
+  // Listen for ride COMPLETED status from RTDB (last/only rider)
   useEffect(() => {
     if (!currentRideId || !rtdb || !isOnline) return;
 
@@ -1082,7 +1377,9 @@ export default function DriverLiveMap({
       if (data.status === "COMPLETED" || data.status === "PAYMENT_CONFIRMED") {
         if (!showPaymentPopup) {
           console.log("RTDB ride status listener: ride COMPLETED, enabling waiting-for-payment");
-          setFinishedRideId(currentRideId);
+          if (currentRideId) {
+            setFinishedRideIds((prev) => Array.from(new Set([currentRideId, ...prev])));
+          }
           setRideStatus("COMPLETED");
           setWaitingForPayment(true);
           setAssignedRide(null);
@@ -1098,14 +1395,62 @@ export default function DriverLiveMap({
       if (data.paymentStatus === "PAID") {
         console.log("RTDB ride status listener: payment PAID, showing popup");
         setReceivedAmount(data.paidAmount || 0);
+        setGreenPointsRedeemed(data.greenPointsRedeemed || 0);
         setShowPaymentPopup(true);
         setWaitingForPayment(false);
       }
     });
 
     return () => unsubscribe();
-  // currentRideId is the key dep: re-subscribes each time a new ride is assigned
   }, [currentRideId, isOnline, showPaymentPopup]);
+
+  // Listen for per-rider payment confirmations on mid-pool completed rides
+  useEffect(() => {
+    if (!rtdb || completedRideIds.length === 0) return;
+
+    const unsubscribes: (() => void)[] = [];
+
+    for (const rId of completedRideIds) {
+      console.log(`[Pool Payment] Subscribing to rides/${rId} for payment`);
+      const rideRef = ref(rtdb, `rides/${rId}`);
+      const unsub = onValue(rideRef, (snapshot) => {
+        const data = snapshot.val();
+        if (!data) return;
+
+        if (data.paymentStatus === "PAID") {
+          console.log(`[Pool Payment] Rider ${rId} paid ₹${data.paidAmount}`);
+          // Add notification (avoid duplicates)
+          setPaymentNotifications((prev) => {
+            if (prev.some((n) => n.rideId === rId)) return prev;
+            return [
+              ...prev,
+              {
+                amount: data.paidAmount || 0,
+                greenPoints: data.greenPointsRedeemed || 0,
+                rideId: rId,
+              },
+            ];
+          });
+          // Remove from completedRideIds once paid
+          setCompletedRideIds((prev) => prev.filter((id) => id !== rId));
+        }
+      });
+      unsubscribes.push(unsub);
+    }
+
+    return () => unsubscribes.forEach((unsub) => unsub());
+  }, [completedRideIds]);
+
+  // Auto-dismiss per-rider payment notifications after 5 seconds
+  useEffect(() => {
+    if (paymentNotifications.length === 0) return;
+
+    const timer = setTimeout(() => {
+      setPaymentNotifications((prev) => prev.slice(1));
+    }, 5000);
+
+    return () => clearTimeout(timer);
+  }, [paymentNotifications]);
 
   const _goOnline = useCallback(async () => {
     if (!rtdb) {
@@ -1148,26 +1493,33 @@ export default function DriverLiveMap({
       },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 },
     );
-  }, [userId, authReady]);
+  }, [authReady, rtdb, userId]);
 
   // Handler: Pick location on map
   const handlePickOnMap = useCallback(() => {
     setLocationMode("map");
     setError(null);
-  }, []);
+  }, [rtdb, selectedStartLocation, userId, writeLocationToFirebase]);
 
   // Handler: Confirm location and go online
   const handleConfirmAndGoOnline = useCallback(async () => {
-    if (!selectedStartLocation || !rtdb) {
+    const startLocation = selectedStartLocationRef.current;
+    if (!startLocation) {
       setError("Please select a starting location first");
       return;
     }
-    if (!userId) {
+    if (!rtdb) {
+      setError("Realtime Database is not initialized. Check Firebase config.");
+      console.error("RTDB not initialized in DriverLiveMap");
+      return;
+    }
+    const effectiveUserId = userId ?? auth.currentUser?.uid ?? null;
+    if (!effectiveUserId) {
       setError("Please sign in to go online");
       return;
     }
 
-    const driverRef = ref(rtdb, `drivers-online/${userId}`);
+    const driverRef = ref(rtdb, `drivers-online/${effectiveUserId}`);
     try {
       await onDisconnect(driverRef).remove();
     } catch (err) {
@@ -1175,11 +1527,11 @@ export default function DriverLiveMap({
     }
 
     // Set initial position from selected location
-    setPosition(selectedStartLocation);
-    prevPositionRef.current = { lat: selectedStartLocation.lat, lng: selectedStartLocation.lng };
+    setPosition(startLocation);
+    prevPositionRef.current = { lat: startLocation.lat, lng: startLocation.lng };
 
     // Write to Firebase
-    await writeLocationToFirebase(selectedStartLocation);
+    await writeLocationToFirebase(startLocation);
 
     // NOTE: We do NOT start GPS watching here anymore.
     // The simulator will handle driver movement.
@@ -1187,8 +1539,7 @@ export default function DriverLiveMap({
 
     setIsOnline(true);
     setError(null);
-  }, [writeLocationToFirebase, userId, selectedStartLocation]);
-
+  }, []);
   // Handler: Reset location selection
   const handleResetLocation = useCallback(() => {
     setSelectedStartLocation(null);
@@ -1237,7 +1588,6 @@ export default function DriverLiveMap({
     }),
     [manualLocationMode, locationMode],
   );
-
   //  when map mounts
   const onLoad = useCallback((map: google.maps.Map) => {
     mapRef.current = map;
@@ -1274,8 +1624,11 @@ export default function DriverLiveMap({
   };
 
   // Verify OTP and start ride
-  const handleSubmitOtp = async () => {
-    if (!assignedRide || !otpInput || otpInput.length !== 4) {
+  const handleSubmitOtp = async (rideIdOverride?: string, otpOverride?: string) => {
+    const effectiveRideId = rideIdOverride || assignedRide?.rideId;
+    const effectiveOtp = otpOverride || otpInput;
+
+    if (!effectiveRideId || !effectiveOtp || effectiveOtp.length !== 4) {
       alert("Please enter a valid 4-digit OTP");
       return;
     }
@@ -1289,7 +1642,7 @@ export default function DriverLiveMap({
     try {
       const token = await auth.currentUser?.getIdToken();
       const res = await fetch(`${backendUrl}/ride/start`, {
-        body: JSON.stringify({ otp: otpInput, rideId: assignedRide.rideId }),
+        body: JSON.stringify({ otp: effectiveOtp, rideId: effectiveRideId }),
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
@@ -1300,6 +1653,7 @@ export default function DriverLiveMap({
       if (res.ok) {
         const data = await res.json();
         if (data.success) {
+          otpVerifiedRef.current = true;
           setRideStatus("IN_PROGRESS");
           setShowOtpModal(false);
           setOtpInput("");
@@ -1355,15 +1709,14 @@ export default function DriverLiveMap({
       }
     },
     [
-      writeLocationToFirebase,
-      position?.heading,
       isOnline,
-      manualLocationMode,
       locationMode,
+      manualLocationMode,
+      position?.heading,
       waitingForPayment,
+      writeLocationToFirebase,
     ],
   );
-
   if (!isLoaded) {
     return (
       <div
@@ -1551,38 +1904,126 @@ export default function DriverLiveMap({
                   />
                 )}
 
-                {/* Pickup Location Marker */}
-                {assignedRide && (
-                  <Marker
-                    position={assignedRide.pickup}
-                    icon={{
-                      anchor: new google.maps.Point(12, 12),
-                      fillColor: "#3b82f6",
-                      fillOpacity: 1,
-                      path: google.maps.SymbolPath.CIRCLE,
-                      scale: 12,
-                      strokeColor: "#fff",
-                      strokeWeight: 3,
-                    }}
-                    title="Pickup Location"
-                  />
-                )}
+                {/* Waypoint Markers (Multi-Stop Support) */}
+                {assignedRide?.waypoints ? (
+                  assignedRide.waypoints.map((wp, index) => (
+                    <Marker
+                      key={`${wp.riderId}-${wp.type}-${index}`}
+                      position={{ lat: wp.lat, lng: wp.lng }}
+                      label={{
+                        color: "white",
+                        fontWeight: "bold",
+                        text: (index + 1).toString(),
+                      }}
+                      icon={{
+                        anchor: new google.maps.Point(14, 14),
+                        scaledSize: new google.maps.Size(28, 28),
+                        url:
+                          "data:image/svg+xml;charset=UTF-8," +
+                          encodeURIComponent(`
+                          <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
+                            <circle cx="14" cy="14" r="12" fill="${wp.type === "PICKUP" ? "#3b82f6" : "#22c55e"}" stroke="#ffffff" stroke-width="3"/>
+                          </svg>
+                        `),
+                      }}
+                      title={`${wp.type} - Stop ${index + 1}`}
+                    />
+                  ))
+                ) : assignedRide?.riders && assignedRide.riders.length > 0 ? (
+                  /* Per-rider pickup and drop markers for pooled rides */
+                  <>
+                    {assignedRide.riders.map((rider, index) => (
+                      <React.Fragment key={`rider-markers-${rider.rideId}`}>
+                        {/* Pickup marker (blue) — show unless rider is IN_PROGRESS or completed */}
+                        {rider.pickup && rider.status !== "IN_PROGRESS" && (
+                          <Marker
+                            position={rider.pickup}
+                            label={{
+                              color: "white",
+                              fontWeight: "bold",
+                              text: `P${index + 1}`,
+                            }}
+                            icon={{
+                              anchor: new google.maps.Point(16, 16),
+                              scaledSize: new google.maps.Size(32, 32),
+                              url:
+                                "data:image/svg+xml;charset=UTF-8," +
+                                encodeURIComponent(`
+                                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+                                  <circle cx="16" cy="16" r="14" fill="#3b82f6" stroke="#ffffff" stroke-width="3"/>
+                                </svg>
+                              `),
+                            }}
+                            title={`Pickup - Rider ${index + 1}${rider.riderName ? ` (${rider.riderName})` : ""}`}
+                          />
+                        )}
+                        {/* Drop marker (green) — always show for active riders */}
+                        {rider.drop && (
+                          <Marker
+                            position={rider.drop}
+                            label={{
+                              color: "white",
+                              fontWeight: "bold",
+                              text: `D${index + 1}`,
+                            }}
+                            icon={{
+                              anchor: new google.maps.Point(16, 16),
+                              scaledSize: new google.maps.Size(32, 32),
+                              url:
+                                "data:image/svg+xml;charset=UTF-8," +
+                                encodeURIComponent(`
+                                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+                                  <circle cx="16" cy="16" r="14" fill="#22c55e" stroke="#ffffff" stroke-width="3"/>
+                                </svg>
+                              `),
+                            }}
+                            title={`Drop-off - Rider ${index + 1}${rider.riderName ? ` (${rider.riderName})` : ""}`}
+                          />
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </>
+                ) : (
+                  // Legacy/Single Ride Fallback Markers
+                  <>
+                    {/* Pickup Location Marker */}
+                    {assignedRide?.pickup && (
+                      <Marker
+                        position={assignedRide.pickup}
+                        icon={{
+                          anchor: new google.maps.Point(14, 14),
+                          scaledSize: new google.maps.Size(28, 28),
+                          url:
+                            "data:image/svg+xml;charset=UTF-8," +
+                            encodeURIComponent(`
+                            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
+                              <circle cx="14" cy="14" r="12" fill="#3b82f6" stroke="#ffffff" stroke-width="3"/>
+                            </svg>
+                          `),
+                        }}
+                        title="Pickup Location"
+                      />
+                    )}
 
-                {/* Destination Marker */}
-                {assignedRide && (
-                  <Marker
-                    position={assignedRide.drop}
-                    icon={{
-                      anchor: new google.maps.Point(12, 12),
-                      fillColor: "#22c55e",
-                      fillOpacity: 1,
-                      path: google.maps.SymbolPath.CIRCLE,
-                      scale: 12,
-                      strokeColor: "#fff",
-                      strokeWeight: 3,
-                    }}
-                    title="Destination"
-                  />
+                    {/* Destination Marker */}
+                    {assignedRide?.drop && (
+                      <Marker
+                        position={assignedRide.drop}
+                        icon={{
+                          anchor: new google.maps.Point(14, 14),
+                          scaledSize: new google.maps.Size(28, 28),
+                          url:
+                            "data:image/svg+xml;charset=UTF-8," +
+                            encodeURIComponent(`
+                            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
+                              <circle cx="14" cy="14" r="12" fill="#22c55e" stroke="#ffffff" stroke-width="3"/>
+                            </svg>
+                          `),
+                        }}
+                        title="Destination"
+                      />
+                    )}
+                  </>
                 )}
               </GoogleMap>
 
@@ -1709,10 +2150,18 @@ export default function DriverLiveMap({
                   <FaRoute style={{ color: "#3b82f6", fontSize: "24px" }} />
                   <div>
                     <h2 style={{ color: "#fff", fontSize: "18px", fontWeight: 700, margin: 0 }}>
-                      {rideStatus === "IN_PROGRESS" ? "Trip in Progress" : "Ride Assigned!"}
+                      {rideStatus === "IN_PROGRESS"
+                        ? "Trip in Progress"
+                        : rideStatus === "ARRIVED"
+                          ? "Waiting for Rider"
+                          : "Ride Assigned!"}
                     </h2>
                     <p style={{ color: "#94a3b8", fontSize: "12px", margin: "2px 0 0" }}>
-                      {rideStatus === "IN_PROGRESS" ? "Head to destination" : "Navigate to pickup"}
+                      {rideStatus === "IN_PROGRESS"
+                        ? "Head to destination"
+                        : rideStatus === "ARRIVED"
+                          ? "Verify OTP to start trip"
+                          : "Navigate to pickup"}
                     </p>
                   </div>
                 </div>
@@ -1773,6 +2222,53 @@ export default function DriverLiveMap({
                   </div>
                 </div>
 
+                {/* Live Passenger Count & Eco Badge */}
+                {assignedRide?.riders && assignedRide.riders.length > 0 && (
+                  <div
+                    style={{
+                      alignItems: "center",
+                      background: "linear-gradient(135deg, rgba(34, 197, 94, 0.12), rgba(16, 185, 129, 0.12))",
+                      border: "1px solid rgba(34, 197, 94, 0.3)",
+                      borderRadius: "12px",
+                      display: "flex",
+                      gap: "16px",
+                      justifyContent: "space-around",
+                      marginBottom: "16px",
+                      padding: "12px",
+                    }}
+                  >
+                    <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                      <FaUsers style={{ color: "#22c55e", fontSize: "18px" }} />
+                      <div>
+                        <div style={{ color: "#94a3b8", fontSize: "10px", textTransform: "uppercase" }}>
+                          Passengers
+                        </div>
+                        <div style={{ color: "#4ade80", fontSize: "20px", fontWeight: 700 }}>
+                          {assignedRide.riders.length}
+                        </div>
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        background: "rgba(34, 197, 94, 0.3)",
+                        height: "30px",
+                        width: "1px",
+                      }}
+                    />
+                    <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                      <FaLeaf style={{ color: "#22c55e", fontSize: "16px" }} />
+                      <div>
+                        <div style={{ color: "#94a3b8", fontSize: "10px", textTransform: "uppercase" }}>
+                          Eco Impact
+                        </div>
+                        <div style={{ color: "#86efac", fontSize: "13px", fontWeight: 600 }}>
+                          Shared Ride 🌿
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div
                   style={{
                     display: "flex",
@@ -1799,7 +2295,7 @@ export default function DriverLiveMap({
                     >
                       Pickup:{" "}
                       {pickupLocationName ||
-                        `${assignedRide.pickup.lat.toFixed(4)}, ${assignedRide.pickup.lng.toFixed(4)}`}
+                        `${assignedRide.pickup?.lat?.toFixed(4) ?? "?"}, ${assignedRide.pickup?.lng?.toFixed(4) ?? "?"}`}
                     </span>
                   </div>
                   <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
@@ -1814,7 +2310,7 @@ export default function DriverLiveMap({
                     <span style={{ color: "#94a3b8", fontSize: "13px" }}>
                       Drop:{" "}
                       {dropLocationName ||
-                        `${assignedRide.drop.lat.toFixed(4)}, ${assignedRide.drop.lng.toFixed(4)}`}
+                        `${assignedRide.drop?.lat?.toFixed(4) ?? "?"}, ${assignedRide.drop?.lng?.toFixed(4) ?? "?"}`}
                     </span>
                   </div>
                 </div>
@@ -2630,7 +3126,7 @@ export default function DriverLiveMap({
               border: "1px solid rgba(71, 85, 105, 0.5)",
               borderRadius: "24px",
               boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
-              maxWidth: "400px",
+              maxWidth: "450px",
               padding: "32px",
               width: "90%",
             }}
@@ -2644,7 +3140,9 @@ export default function DriverLiveMap({
                 textAlign: "center",
               }}
             >
-              Enter OTP
+              {assignedRide?.riders && assignedRide.riders.length > 1
+                ? `Verify Riders (${verifiedRiders.size}/${assignedRide.riders.length})`
+                : "Enter OTP"}
             </h2>
             <p
               style={{
@@ -2654,29 +3152,137 @@ export default function DriverLiveMap({
                 textAlign: "center",
               }}
             >
-              Ask the rider for the 4-digit OTP to start the trip.
+              {assignedRide?.riders && assignedRide.riders.length > 1
+                ? "Ask each rider for their 4-digit OTP to verify pickup."
+                : "Ask the rider for the 4-digit OTP to start the trip."}
             </p>
 
-            <input
-              type="text"
-              value={otpInput}
-              onChange={(e) => setOtpInput(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))}
-              placeholder="0000"
-              style={{
-                background: "rgba(15, 23, 42, 0.5)",
-                border: "2px solid rgba(59, 130, 246, 0.5)",
-                borderRadius: "12px",
-                color: "white",
-                fontSize: "32px",
-                fontWeight: "bold",
-                letterSpacing: "8px",
-                marginBottom: "24px",
-                outline: "none",
-                padding: "16px",
-                textAlign: "center",
-                width: "100%",
-              }}
-            />
+            {/* Pooled Rides - Show per-rider OTP inputs */}
+            {assignedRide?.riders && assignedRide.riders.length > 1 ? (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "16px",
+                  marginBottom: "24px",
+                }}
+              >
+                {assignedRide.riders.map((rider, index) => {
+                  const isVerified = verifiedRiders.has(rider.rideId);
+                  const isVerifying = verifyingRiderId === rider.rideId;
+                  const riderOtp = riderOtpInputs[rider.rideId] || "";
+
+                  return (
+                    <div
+                      key={rider.rideId}
+                      style={{
+                        background: isVerified ? "rgba(34, 197, 94, 0.1)" : "rgba(15, 23, 42, 0.5)",
+                        border: isVerified
+                          ? "2px solid rgba(34, 197, 94, 0.5)"
+                          : "2px solid rgba(71, 85, 105, 0.5)",
+                        borderRadius: "12px",
+                        padding: "16px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          alignItems: "center",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          marginBottom: isVerified ? "0" : "12px",
+                        }}
+                      >
+                        <span style={{ color: "#e2e8f0", fontSize: "14px", fontWeight: 600 }}>
+                          {rider.riderName || `Rider ${index + 1}`}
+                        </span>
+                        {isVerified && (
+                          <span
+                            style={{
+                              alignItems: "center",
+                              color: "#22c55e",
+                              display: "flex",
+                              fontSize: "14px",
+                              gap: "4px",
+                            }}
+                          >
+                            <FaCheckCircle /> Verified
+                          </span>
+                        )}
+                      </div>
+
+                      {!isVerified && (
+                        <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+                          <input
+                            type="text"
+                            value={riderOtp}
+                            onChange={(e) => {
+                              const value = e.target.value.replace(/[^0-9]/g, "").slice(0, 4);
+                              setRiderOtpInputs((prev) => ({ ...prev, [rider.rideId]: value }));
+                            }}
+                            placeholder="0000"
+                            style={{
+                              background: "rgba(15, 23, 42, 0.8)",
+                              border: "1px solid rgba(59, 130, 246, 0.5)",
+                              borderRadius: "8px",
+                              color: "white",
+                              flex: 1,
+                              fontSize: "18px",
+                              fontWeight: "bold",
+                              letterSpacing: "4px",
+                              outline: "none",
+                              padding: "10px 12px",
+                              textAlign: "center",
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleSubmitOtp(rider.rideId, riderOtp)}
+                            disabled={isVerifying || riderOtp.length !== 4}
+                            style={{
+                              background: "linear-gradient(90deg, #22c55e, #16a34a)",
+                              border: "none",
+                              borderRadius: "8px",
+                              color: "white",
+                              cursor:
+                                isVerifying || riderOtp.length !== 4 ? "not-allowed" : "pointer",
+                              fontSize: "14px",
+                              fontWeight: 600,
+                              opacity: isVerifying || riderOtp.length !== 4 ? 0.7 : 1,
+                              padding: "10px 16px",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {isVerifying ? "..." : "Verify"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              /* Single Ride - Original OTP input */
+              <input
+                type="text"
+                value={otpInput}
+                onChange={(e) => setOtpInput(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))}
+                placeholder="0000"
+                style={{
+                  background: "rgba(15, 23, 42, 0.5)",
+                  border: "2px solid rgba(59, 130, 246, 0.5)",
+                  borderRadius: "12px",
+                  color: "white",
+                  fontSize: "32px",
+                  fontWeight: "bold",
+                  letterSpacing: "8px",
+                  marginBottom: "24px",
+                  outline: "none",
+                  padding: "16px",
+                  textAlign: "center",
+                  width: "100%",
+                }}
+              />
+            )}
 
             <div style={{ display: "flex", gap: "12px" }}>
               <button
@@ -2696,25 +3302,28 @@ export default function DriverLiveMap({
               >
                 Cancel
               </button>
-              <button
-                onClick={handleSubmitOtp}
-                type="button"
-                disabled={submittingOtp || otpInput.length !== 4}
-                style={{
-                  background: "linear-gradient(90deg, #22c55e, #16a34a)",
-                  border: "none",
-                  borderRadius: "12px",
-                  color: "white",
-                  cursor: submittingOtp || otpInput.length !== 4 ? "not-allowed" : "pointer",
-                  flex: 1,
-                  fontSize: "16px",
-                  fontWeight: 600,
-                  opacity: submittingOtp || otpInput.length !== 4 ? 0.7 : 1,
-                  padding: "12px",
-                }}
-              >
-                {submittingOtp ? "Verifying..." : "Start Trip"}
-              </button>
+              {/* Show Start Trip button only for single rides or when all pooled riders are verified */}
+              {(!assignedRide?.riders || assignedRide.riders.length <= 1) && (
+                <button
+                  onClick={() => handleSubmitOtp()}
+                  type="button"
+                  disabled={submittingOtp || otpInput.length !== 4}
+                  style={{
+                    background: "linear-gradient(90deg, #22c55e, #16a34a)",
+                    border: "none",
+                    borderRadius: "12px",
+                    color: "white",
+                    cursor: submittingOtp || otpInput.length !== 4 ? "not-allowed" : "pointer",
+                    flex: 1,
+                    fontSize: "16px",
+                    fontWeight: 600,
+                    opacity: submittingOtp || otpInput.length !== 4 ? 0.7 : 1,
+                    padding: "12px",
+                  }}
+                >
+                  {submittingOtp ? "Verifying..." : "Start Trip"}
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -2807,7 +3416,7 @@ export default function DriverLiveMap({
                 opacity: 0,
               }}
             >
-              Ride completed successfully
+              Ride completed — ₹{receivedAmount + (greenPointsRedeemed || 0)} earned
             </p>
 
             <div
@@ -2853,10 +3462,12 @@ export default function DriverLiveMap({
               type="button"
               onClick={() => {
                 setShowPaymentPopup(false);
-                setFinishedRideId(null);
+                setFinishedRideIds([]);
                 setCurrentRideId(null);
                 setWaitingForPayment(false);
                 setStatus("AVAILABLE");
+                // Remove processed payment from queue
+                setPaymentQueue((prev) => prev.slice(1));
               }}
               style={{
                 animation: "fadeIn 0.5s ease-out 0.7s forwards",
@@ -2877,6 +3488,57 @@ export default function DriverLiveMap({
               Continue Driving
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Per-rider payment notification toasts (pooled rides, non-blocking) */}
+      {paymentNotifications.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "12px",
+            position: "fixed",
+            right: "24px",
+            top: "24px",
+            zIndex: 3000,
+          }}
+        >
+          {paymentNotifications.map((notification) => (
+            <div
+              key={notification.rideId}
+              onClick={() =>
+                setPaymentNotifications((prev) =>
+                  prev.filter((n) => n.rideId !== notification.rideId),
+                )
+              }
+              style={{
+                alignItems: "center",
+                animation: "fadeIn 0.4s ease-out",
+                backdropFilter: "blur(12px)",
+                background: "linear-gradient(135deg, rgba(34, 197, 94, 0.95), rgba(16, 185, 129, 0.95))",
+                border: "1px solid rgba(255,255,255,0.2)",
+                borderRadius: "16px",
+                boxShadow: "0 8px 32px rgba(34, 197, 94, 0.4)",
+                color: "white",
+                cursor: "pointer",
+                display: "flex",
+                gap: "12px",
+                padding: "16px 20px",
+                minWidth: "280px",
+              }}
+            >
+              <FaCheckCircle style={{ fontSize: "24px", flexShrink: 0 }} />
+              <div>
+                <p style={{ fontWeight: 700, fontSize: "15px", margin: "0 0 2px" }}>
+                  Payment Received!
+                </p>
+                <p style={{ fontSize: "13px", margin: 0, opacity: 0.9 }}>
+                  ₹{notification.amount + (notification.greenPoints || 0)} earned from rider
+                </p>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 

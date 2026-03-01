@@ -96,5 +96,31 @@ describe("Payment Integration Tests", () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
     });
+
+    it("should succeed even without amount (amount is optional, defaults to 0)", async () => {
+      setMockDoc(true, { driverId: "driver-1" });
+      const res = await request
+        .post("/api/v1/ride/confirm-payment")
+        .set("Authorization", AUTH_HEADER)
+        .send({ rideId: "ride-123" });
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
+  });
+
+  // ─── Auth guard tests ────────────────────────────────────────────────────
+
+  describe("Authentication guards", () => {
+    it("should return 401 for POST /payment/create-intent without auth", async () => {
+      const res = await request.post("/api/v1/payment/create-intent").send({ rideId: "ride-123" });
+      expect(res.status).toBe(401);
+    });
+
+    it("should return 401 for POST /ride/confirm-payment without auth", async () => {
+      const res = await request
+        .post("/api/v1/ride/confirm-payment")
+        .send({ amount: 250, rideId: "ride-123" });
+      expect(res.status).toBe(401);
+    });
   });
 });

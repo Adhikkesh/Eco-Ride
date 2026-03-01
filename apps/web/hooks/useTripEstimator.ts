@@ -18,6 +18,8 @@ import { auth } from "@/lib/firebase";
 export interface TripEstimate {
   /** Estimated fare in the specified currency. */
   fare: number;
+  /** Solo (non-pooled) fare for comparison. */
+  solo_fare?: number;
   /** ISO 4217 currency code (e.g. `"INR"`). */
   currency: string;
   /** Estimated time of arrival in minutes. */
@@ -26,8 +28,20 @@ export interface TripEstimate {
   distance_km: string;
   /** Estimated CO₂ savings compared to a solo ICE vehicle, in grams. */
   co2_saved_g: number;
+  /** Per-rider share of CO₂ savings (for pooled rides). */
+  co2_saved_per_rider_g?: number;
   /** Encoded polyline string for rendering the route on a map. */
   polyline: string;
+  /** Whether this estimate is for a pooled ride. */
+  is_pooled?: boolean;
+  /** Pool discount percentage (e.g. 25 for 25%). */
+  pool_discount_pct?: number;
+  /** Savings amount from pooling. */
+  pool_savings?: number;
+  /** Number of current passengers. */
+  passenger_count?: number;
+  /** Green points that will be awarded. */
+  green_points?: number;
   /** Optional raw distance/duration values from the routing API. */
   details?: {
     /** Route duration in seconds. */
@@ -61,12 +75,14 @@ export const useTripEstimator = () => {
    *
    * @param pickup - Pickup coordinates.
    * @param drop - Drop-off coordinates.
+   * @param isPooled - Whether to calculate pooled ride fare.
    * @returns The estimate data, or `undefined` on failure.
    * @throws Sets `error` state with a human-readable message on failure.
    */
   const getEstimate = async (
     pickup: { lat: number; lng: number },
     drop: { lat: number; lng: number },
+    isPooled: boolean = false,
   ) => {
     setLoading(true);
     setError(null);
@@ -77,7 +93,7 @@ export const useTripEstimator = () => {
       }
 
       const response = await fetch(`${backendUrl}/ride/estimate`, {
-        body: JSON.stringify({ drop, isPooled: false, pickup }), // Default to not pooled for estimation base
+        body: JSON.stringify({ drop, isPooled, pickup }),
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
