@@ -1,33 +1,64 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Users collection - users can read/write their own data
+
+    // ================================================================
+    // Users — users can read/write only their own document
+    // ================================================================
     match /users/{userId} {
-      allow read: if request.auth != null;
+      allow read: if request.auth != null && request.auth.uid == userId;
       allow write: if request.auth != null && request.auth.uid == userId;
     }
 
-    // Rides collection - riders and assigned drivers can access their rides
+    // ================================================================
+    // Rides — only the rider and assigned driver can access a ride
+    // Location data (pickup/drop coords) is isolated to participants
+    // ================================================================
     match /rides/{rideId} {
-      // Allow authenticated users to read rides they're involved in
       allow read: if request.auth != null && (
         resource.data.riderId == request.auth.uid ||
         resource.data.driverId == request.auth.uid
       );
-
-      // Allow create for authenticated users
       allow create: if request.auth != null;
-
-      // Allow update for riders and drivers involved in the ride
       allow update: if request.auth != null && (
         resource.data.riderId == request.auth.uid ||
         resource.data.driverId == request.auth.uid
       );
     }
 
-    // Allow reading public data
-    match /{document=**} {
-      allow read: if request.auth != null;
+    // ================================================================
+    // Driver Profiles — only the driver themselves can read/write
+    // Admins access via Admin SDK (bypasses rules)
+    // ================================================================
+    match /driver_profile/{driverId} {
+      allow read: if request.auth != null && request.auth.uid == driverId;
+      allow write: if request.auth != null && request.auth.uid == driverId;
     }
+
+    // ================================================================
+    // Vehicles — only the owning driver can read/write
+    // ================================================================
+    match /vehicle/{vehicleId} {
+      allow read: if request.auth != null &&
+        resource.data.driver_uid == request.auth.uid;
+      allow write: if request.auth != null &&
+        resource.data.driver_uid == request.auth.uid;
+    }
+
+    // ================================================================
+    // Ratings — riders can create; only involved parties can read
+    // ================================================================
+    match /ratings/{ratingId} {
+      allow read: if request.auth != null && (
+        resource.data.riderId == request.auth.uid ||
+        resource.data.driverId == request.auth.uid
+      );
+      allow create: if request.auth != null;
+    }
+
+    // ================================================================
+    // DEFAULT DENY — no catch-all wildcard
+    // Any collection not listed above is blocked
+    // ================================================================
   }
 }
