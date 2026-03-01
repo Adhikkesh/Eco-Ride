@@ -4,6 +4,7 @@
  *              driver simulation engine. Shares the same Firebase project as
  *              the main server but runs as a separate Node.js process.
  *              Provides Firestore and Realtime Database access.
+ *              Credential path and database URL are configurable via environment variables.
  * @module simulator/config/firebase
  */
 
@@ -17,10 +18,22 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /**
- * Absolute path to the shared Firebase service account credentials.
- * Points to the server package's credential file to avoid duplication.
+ * Path to the shared Firebase service account credentials.
+ * Reads from FIREBASE_CREDENTIAL_PATH env var (used in Docker),
+ * falls back to the server package's credential file for local dev.
  */
-const serviceAccount = path.resolve(__dirname, "../../../server/firebase_credential.json");
+const serviceAccount =
+  process.env.FIREBASE_CREDENTIAL_PATH ||
+  path.resolve(__dirname, "../../../server/firebase_credential.json");
+
+/**
+ * Firebase Realtime Database URL.
+ * Reads from FIREBASE_DATABASE_URL env var (used in Docker),
+ * falls back to the hardcoded default.
+ */
+const databaseURL =
+  process.env.FIREBASE_DATABASE_URL ||
+  "https://eco-ride-07-default-rtdb.asia-southeast1.firebasedatabase.app/";
 
 let app: App;
 
@@ -31,7 +44,7 @@ let app: App;
 if (!getApps().length) {
   app = initializeApp({
     credential: cert(serviceAccount),
-    databaseURL: "https://eco-ride-07-default-rtdb.asia-southeast1.firebasedatabase.app/",
+    databaseURL,
   });
 } else {
   app = getApps()[0];

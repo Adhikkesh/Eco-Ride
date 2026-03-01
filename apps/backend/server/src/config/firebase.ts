@@ -3,6 +3,7 @@
  * @description Initializes and exports Firebase Admin SDK services.
  *              Provides access to Firestore, Realtime Database, Authentication, and Storage.
  *              Uses service account credentials for server-side Firebase access.
+ *              Credential path and database URL are configurable via environment variables.
  * @module config/firebase
  */
 
@@ -20,9 +21,21 @@ const __dirname = path.dirname(__filename);
 
 /**
  * Path to Firebase service account credentials JSON file.
- * Located in the server root directory.
+ * Reads from FIREBASE_CREDENTIAL_PATH env var (used in Docker),
+ * falls back to the local file in the server root directory.
  */
-const serviceAccount = path.resolve(__dirname, "../../firebase_credential.json");
+const serviceAccount =
+  process.env.FIREBASE_CREDENTIAL_PATH ||
+  path.resolve(__dirname, "../../firebase_credential.json");
+
+/**
+ * Firebase Realtime Database URL.
+ * Reads from FIREBASE_DATABASE_URL env var (used in Docker),
+ * falls back to the hardcoded default.
+ */
+const databaseURL =
+  process.env.FIREBASE_DATABASE_URL ||
+  "https://eco-ride-07-default-rtdb.asia-southeast1.firebasedatabase.app/";
 
 /**
  * Initialize Firebase Admin SDK if not already initialized.
@@ -31,7 +44,7 @@ const serviceAccount = path.resolve(__dirname, "../../firebase_credential.json")
 if (!getApps().length) {
   initializeApp({
     credential: cert(serviceAccount),
-    databaseURL: "https://eco-ride-07-default-rtdb.asia-southeast1.firebasedatabase.app/",
+    databaseURL,
   });
 }
 

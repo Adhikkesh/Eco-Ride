@@ -398,6 +398,7 @@ export default function RiderMap({
   // Auto-complete trip state
   const [dropOffLocation, setDropOffLocation] = useState<{ lat: number; lng: number } | null>(null);
   const autoCompleteTriggeredRef = useRef(false);
+  const tripStartTimeRef = useRef<number | null>(null);
 
   // Estimation State
   const { getEstimate, estimate, loading: estimating, clearEstimate } = useTripEstimator();
@@ -468,15 +469,24 @@ export default function RiderMap({
     }
   }, []);
 
-  // Get current location
+  // Get current location — pan map to GPS only on the first fix
+  const hasInitialGpsPanRef = useRef(false);
+
   useEffect(() => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          setCurrentLocation({
+          const loc = {
             lat: position.coords.latitude,
             lng: position.coords.longitude,
-          });
+          };
+          setCurrentLocation(loc);
+          // Pan map to GPS location only once (initial load)
+          if (!hasInitialGpsPanRef.current && mapRef.current) {
+            mapRef.current.panTo(loc);
+            mapRef.current.setZoom(14);
+            hasInitialGpsPanRef.current = true;
+          }
         },
         (error) => {
           console.error("Error getting location:", error);
@@ -484,13 +494,20 @@ export default function RiderMap({
         { enableHighAccuracy: true },
       );
 
-      // Watch for location changes
+      // Watch for location changes (updates state only, does NOT move the map)
       const watchId = navigator.geolocation.watchPosition(
         (position) => {
-          setCurrentLocation({
+          const loc = {
             lat: position.coords.latitude,
             lng: position.coords.longitude,
-          });
+          };
+          setCurrentLocation(loc);
+          // One-time fallback in case getCurrentPosition was slow
+          if (!hasInitialGpsPanRef.current && mapRef.current) {
+            mapRef.current.panTo(loc);
+            mapRef.current.setZoom(14);
+            hasInitialGpsPanRef.current = true;
+          }
         },
         (error) => {
           console.error("Error watching location:", error);
@@ -799,6 +816,7 @@ export default function RiderMap({
     setDropOffLocation(null);
     setDecodedPolyline([]);
     autoCompleteTriggeredRef.current = false;
+    tripStartTimeRef.current = null;
   }, [rideId, paymentAmount, pointsUsed, assignedDriverId, assignedDriverName]);
 
   // Listen for ride status changes (Start/Complete) via RTDB (Bypasses Firestore permissions)
@@ -813,6 +831,7 @@ export default function RiderMap({
         console.log("DEBUG: RTDB Ride Update:", data);
 
         if (data.status === "IN_PROGRESS") {
+          tripStartTimeRef.current = tripStartTimeRef.current || Date.now();
           setRideStatus("on_trip");
         } else if (data.status === "COMPLETED" && data.paymentStatus !== "PAID") {
           // Trip Completed Logic - Trigger Payment
@@ -969,9 +988,6 @@ export default function RiderMap({
   }, []);
 
   // Listen to assigned driver location updates with route-snapping to eliminate zigzag
-  const assignedDriverBufferRef = useRef<{ lat: number; lng: number; time: number } | null>(null);
-  const lastAssignedUpdateRef = useRef<number>(0);
-  const assignedDriverDebounceRef = useRef<NodeJS.Timeout | null>(null);
   const currentRouteRef = useRef<google.maps.DirectionsResult | null>(null);
 
   // Store the current active route for snapping
@@ -999,77 +1015,23 @@ export default function RiderMap({
       if (!data) return;
 
       let newLocation = { lat: data.lat, lng: data.lng };
-      const now = Date.now();
 
       // ROUTE SNAPPING: Snap driver position to the route to eliminate GPS jitter & zigzag
       if (currentRouteRef.current) {
         const snapped = findClosestPointOnRoute(newLocation, currentRouteRef.current);
         if (snapped) {
-          console.log(
-            `🧲 Snapped driver from (${newLocation.lat.toFixed(5)}, ${newLocation.lng.toFixed(5)}) to route`,
-          );
           newLocation = { lat: snapped.lat, lng: snapped.lng };
-          // Also update heading from route direction (more accurate than GPS heading)
           data.heading = snapped.heading;
         }
       }
 
-      // Constants for filtering (now even more lenient since we're route-snapping)
-      const MIN_DISTANCE_METERS = 5; // Reduced from 12 since snapping reduces noise
-      const MIN_UPDATE_INTERVAL = 1500; // Reduced from 2500
-      const MAX_UPDATE_INTERVAL = 4000; // Reduced from 5000
-      const DEBOUNCE_DELAY = 500; // Reduced from 800
-
-      // Clear any pending debounced update
-      if (assignedDriverDebounceRef.current) {
-        clearTimeout(assignedDriverDebounceRef.current);
-      }
-
-      // Debounce the update to prevent rapid-fire changes
-      assignedDriverDebounceRef.current = setTimeout(() => {
-        const timeSinceLastUpdate = now - lastAssignedUpdateRef.current;
-        let shouldUpdate = false;
-
-        if (!assignedDriverBufferRef.current) {
-          // First update, always accept
-          shouldUpdate = true;
-        } else {
-          const distance = haversineDistance(
-            assignedDriverBufferRef.current.lat,
-            assignedDriverBufferRef.current.lng,
-            newLocation.lat,
-            newLocation.lng,
-          );
-
-          // Update only if significant distance AND enough time passed
-          if (distance >= MIN_DISTANCE_METERS && timeSinceLastUpdate >= MIN_UPDATE_INTERVAL) {
-            shouldUpdate = true;
-          } else if (timeSinceLastUpdate >= MAX_UPDATE_INTERVAL) {
-            // Force update after max interval to catch slow movements
-            shouldUpdate = true;
-          }
-        }
-
-        if (shouldUpdate) {
-          assignedDriverBufferRef.current = { ...newLocation, time: now };
-          lastAssignedUpdateRef.current = now;
-          setAssignedDriverLocation(newLocation);
-          console.log(
-            `✅ Driver location updated: ${newLocation.lat.toFixed(4)}, ${newLocation.lng.toFixed(4)}`,
-          );
-        } else {
-          console.log(
-            `⏭️  Driver update filtered (distance: ${assignedDriverBufferRef.current ? haversineDistance(assignedDriverBufferRef.current.lat, assignedDriverBufferRef.current.lng, newLocation.lat, newLocation.lng).toFixed(1) : "N/A"}m)`,
-          );
-        }
-      }, DEBOUNCE_DELAY);
+      // Pass every update directly — the requestAnimationFrame lerp loop
+      // handles smooth visual interpolation, so no throttling needed here.
+      setAssignedDriverLocation(newLocation);
     });
 
     return () => {
       unsubscribe();
-      if (assignedDriverDebounceRef.current) {
-        clearTimeout(assignedDriverDebounceRef.current);
-      }
     };
   }, [assignedDriverId, rideStatus]);
 
@@ -1098,6 +1060,7 @@ export default function RiderMap({
     setSearchDestination("");
     setDropOffLocation(null);
     autoCompleteTriggeredRef.current = false;
+    tripStartTimeRef.current = null;
   }, []);
 
   // Listen for ride status updates from RTDB (e.g., driver accepts, trip starts)
@@ -1129,6 +1092,7 @@ export default function RiderMap({
         (rideStatus === "matched" || rideStatus === "arrived")
       ) {
         console.log("Trip started!");
+        tripStartTimeRef.current = Date.now();
         setRideStatus("on_trip");
       } else if (data.status === "SEARCHING" && rideStatus === "pending_acceptance") {
         // Driver declined, system is re-matching
@@ -1198,6 +1162,8 @@ export default function RiderMap({
   }, [rideStatus, rideId]);
 
   // Auto-complete trip when driver reaches within 100m of destination
+  // Guards: require minimum 30s trip duration AND driver must have traveled
+  // away from pickup to prevent premature completion when pickup ≈ drop-off.
   useEffect(() => {
     if (
       rideStatus !== "on_trip" ||
@@ -1209,6 +1175,26 @@ export default function RiderMap({
       return;
     }
 
+    // Guard 1: Minimum trip duration (30 seconds) to let driver travel
+    const MIN_TRIP_DURATION_MS = 30_000;
+    const tripElapsed = tripStartTimeRef.current ? Date.now() - tripStartTimeRef.current : 0;
+    if (tripElapsed < MIN_TRIP_DURATION_MS) {
+      return;
+    }
+
+    // Guard 2: Driver must have moved at least 100m from pickup
+    if (ridePickup) {
+      const distFromPickup = haversineDistance(
+        assignedDriverLocation.lat,
+        assignedDriverLocation.lng,
+        ridePickup.lat,
+        ridePickup.lng,
+      );
+      if (distFromPickup < 100) {
+        return; // Driver is still near the pickup — don't auto-complete yet
+      }
+    }
+
     const distance = haversineDistance(
       assignedDriverLocation.lat,
       assignedDriverLocation.lng,
@@ -1216,7 +1202,9 @@ export default function RiderMap({
       dropOffLocation.lng,
     );
 
-    console.log(`Distance to destination: ${distance.toFixed(0)}m`);
+    console.log(
+      `Distance to destination: ${distance.toFixed(0)}m (trip elapsed: ${(tripElapsed / 1000).toFixed(0)}s)`,
+    );
 
     if (distance <= 100) {
       console.log("Driver within 100m of destination - Auto-completing trip...");
@@ -1244,17 +1232,19 @@ export default function RiderMap({
             // The RTDB listener will handle showing the payment modal
           } else {
             console.error("Failed to auto-complete trip:", data.message);
-            autoCompleteTriggeredRef.current = false; // Allow retry
+            autoCompleteTriggeredRef.current = false;
+            tripStartTimeRef.current = null; // Allow retry
           }
         } catch (error) {
           console.error("Error auto-completing trip:", error);
-          autoCompleteTriggeredRef.current = false; // Allow retry
+          autoCompleteTriggeredRef.current = false;
+          tripStartTimeRef.current = null; // Allow retry
         }
       };
 
       autoCompleteRide();
     }
-  }, [assignedDriverLocation, dropOffLocation, rideStatus, rideId]);
+  }, [assignedDriverLocation, dropOffLocation, rideStatus, rideId, ridePickup]);
 
   // Calculate and update route when driver location or destination changes
   useEffect(() => {
@@ -1519,8 +1509,8 @@ export default function RiderMap({
       // Ultra-smooth interpolation for assigned driver (user's primary focus)
       const distance = haversineDistance(current.lat, current.lng, target.lat, target.lng);
 
-      // Very slow interpolation for buttery-smooth movement
-      const posLerp = distance < 10 ? 0.03 : distance < 30 ? 0.05 : 0.07;
+      // Adaptive interpolation — faster convergence with frequent updates
+      const posLerp = distance < 5 ? 0.05 : distance < 20 ? 0.08 : 0.12;
 
       const newLat = current.lat + (target.lat - current.lat) * posLerp;
       const newLng = current.lng + (target.lng - current.lng) * posLerp;
@@ -1543,7 +1533,7 @@ export default function RiderMap({
         let headingDiff = targetHeading - current.heading;
         if (headingDiff > 180) headingDiff -= 360;
         if (headingDiff < -180) headingDiff += 360;
-        newHeading = current.heading + headingDiff * 0.08; // Very smooth heading
+        newHeading = current.heading + headingDiff * 0.12;
         if (newHeading < 0) newHeading += 360;
         if (newHeading >= 360) newHeading -= 360;
       }
@@ -1569,9 +1559,18 @@ export default function RiderMap({
     };
   }, [assignedDriverLocation]);
 
-  const onLoad = useCallback((map: google.maps.Map) => {
-    mapRef.current = map;
-  }, []);
+  const onLoad = useCallback(
+    (map: google.maps.Map) => {
+      mapRef.current = map;
+      // Set initial center once — do NOT use center/zoom props on <GoogleMap>
+      // because those re-center the map on every render, overriding user pan/zoom.
+      const initial = currentLocation || defaultCenter;
+      map.setCenter(initial);
+      map.setZoom(14);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [currentLocation],
+  );
 
   const onUnmount = useCallback(() => {
     mapRef.current = null;
@@ -1714,7 +1713,8 @@ export default function RiderMap({
     setErrorMessage(null);
     clearEstimate(); // Clear estimate UI when searching starts
     setDecodedPolyline([]);
-    autoCompleteTriggeredRef.current = false; // Reset auto-complete flag
+    autoCompleteTriggeredRef.current = false;
+    tripStartTimeRef.current = null; // Reset auto-complete flag
 
     // Store drop-off location for auto-complete distance calculation
     setDropOffLocation({ lat: selectedDestination.lat, lng: selectedDestination.lng });
@@ -3567,8 +3567,6 @@ export default function RiderMap({
                 )}
                 <GoogleMap
                   mapContainerStyle={mapContainerStyle}
-                  center={currentLocation || defaultCenter}
-                  zoom={14}
                   onLoad={onLoad}
                   onUnmount={onUnmount}
                   onClick={onMapClick}
