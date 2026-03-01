@@ -31,7 +31,6 @@ firebase_credential.json
 
 # Apps not being dockerized
 apps/mobile
-apps/web
 
 # Reports & logs
 *.log
