@@ -8,6 +8,7 @@ node_modules
 # Local env files
 .env
 .env.local
+.env.docker
 .env.development.local
 .env.test.local
 .env.production.local
@@ -48,5 +49,4 @@ driver_lint_clean.json
 full_lint_report.txt
 check_head.txt
 
-
-
+.env.github
