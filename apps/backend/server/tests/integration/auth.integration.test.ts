@@ -73,5 +73,21 @@ describe("Auth Integration Tests", () => {
       expect(res.body.valid).toBe(true);
       expect(res.body.user.uid).toBe("partial-uid");
     });
+
+    it("should return 401 when no Authorization header is sent", async () => {
+      const res = await request.get("/api/v1/auth/verify");
+      expect(res.status).toBe(401);
+    });
+
+    it("should return user email in response body when verified", async () => {
+      const res = await request.get("/api/v1/auth/verify").set("Authorization", AUTH_HEADER);
+      expect(res.status).toBe(200);
+      expect(res.body.user.email).toBe("test@ecoride.com");
+    });
+
+    it("should respond with JSON content type", async () => {
+      const res = await request.get("/api/v1/auth/verify").set("Authorization", AUTH_HEADER);
+      expect(res.headers["content-type"]).toMatch(/json/);
+    });
   });
 });
