@@ -13,6 +13,14 @@ export const MATCHING_CONFIG = {
   DEFAULT_MAX_PASSENGERS: 4, // Default vehicle capacity
 
   // ═══════════════════════════════════════════════════════════════
+  // EV PRIORITY — Sustainability-Aware Matching (2.9 + 2.10)
+  // ═══════════════════════════════════════════════════════════════
+  /** Cost bonus (subtracted from cost) for ELECTRIC vehicles. Higher = stronger preference. */
+  EV_BONUS: 0.15,
+  /** Cost bonus for HYBRID vehicles. Less than EV but still preferred over petrol. */
+  HYBRID_BONUS: 0.07,
+
+  // ═══════════════════════════════════════════════════════════════
   // POOLING CONFIGURATION — Eco-Friendly Ride Sharing Rules
   // ═══════════════════════════════════════════════════════════════
   ENABLE_POOLING: true,
