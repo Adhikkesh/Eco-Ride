@@ -57,6 +57,17 @@ service cloud.firestore {
     }
 
     // ================================================================
+    // Rider Ratings — drivers can create; only involved parties can read
+    // ================================================================
+    match /rider_ratings/{ratingId} {
+      allow read: if request.auth != null && (
+        resource.data.riderId == request.auth.uid ||
+        resource.data.driverId == request.auth.uid
+      );
+      allow create: if request.auth != null;
+    }
+
+    // ================================================================
     // DEFAULT DENY — no catch-all wildcard
     // Any collection not listed above is blocked
     // ================================================================
