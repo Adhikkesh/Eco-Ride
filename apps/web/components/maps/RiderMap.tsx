@@ -3367,6 +3367,7 @@ export default function RiderMap({
                       style={{
                         borderTop: "1px solid rgba(34, 197, 94, 0.2)",
                         display: "flex",
+                        flexWrap: "wrap",
                         gap: "12px",
                         marginBottom: "12px",
                         paddingTop: "10px",
@@ -3380,6 +3381,7 @@ export default function RiderMap({
                           display: "flex",
                           flex: 1,
                           gap: "6px",
+                          minWidth: "120px",
                           padding: "8px 10px",
                         }}
                       >
@@ -3399,6 +3401,7 @@ export default function RiderMap({
                           display: "flex",
                           flex: 1,
                           gap: "6px",
+                          minWidth: "120px",
                           padding: "8px 10px",
                         }}
                       >
@@ -3412,6 +3415,29 @@ export default function RiderMap({
                           </div>
                         </div>
                       </div>
+                      {(estimate as any).green_discount > 0 && (
+                        <div
+                          style={{
+                            alignItems: "center",
+                            background: "rgba(34, 197, 94, 0.15)",
+                            border: "1px solid rgba(34, 197, 94, 0.3)",
+                            borderRadius: "8px",
+                            display: "flex",
+                            flex: 1,
+                            gap: "6px",
+                            minWidth: "120px",
+                            padding: "8px 10px",
+                          }}
+                        >
+                          <FaLeaf style={{ color: "#10b981", fontSize: "14px" }} />
+                          <div>
+                            <div style={{ color: "#94a3b8", fontSize: "10px" }}>Green Discount</div>
+                            <div style={{ color: "#34d399", fontSize: "13px", fontWeight: 600 }}>
+                              -₹{(estimate as any).green_discount} ({(estimate as any).green_discount_pct}% off)
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     <div style={{ display: "flex", gap: "12px" }}>
