@@ -109,6 +109,9 @@ importers:
       dotenv:
         specifier: ^16.4.7
         version: 16.4.7
+      express:
+        specifier: ^5.1.0
+        version: 5.2.1
       firebase-admin:
         specifier: ^13.6.0
         version: 13.6.0
@@ -119,6 +122,9 @@ importers:
       '@types/axios':
         specifier: ^0.14.4
         version: 0.14.4
+      '@types/express':
+        specifier: ^5.0.6
+        version: 5.0.6
       '@types/node':
         specifier: ^22.19.5
         version: 22.19.5

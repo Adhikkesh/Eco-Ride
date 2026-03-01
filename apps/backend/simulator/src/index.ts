@@ -6,11 +6,24 @@
  * drivers who manually go online via the Driver App.
  */
 
+import express from "express";
 import "dotenv/config";
 import { simulationEngine } from "./services/SimulationEngine.js";
 
+const app = express();
+const PORT = process.env.PORT || 8080;
+
+app.get("/", (_req, res) => {
+  res.status(200).send("Simulator is running");
+});
+
 async function main(): Promise<void> {
   try {
+    // Start the health check server
+    const _server = app.listen(PORT, () => {
+      console.log(`🤖 Simulator Health Check Server listening on port ${PORT}`);
+    });
+
     // Start the simulation engine
     await simulationEngine.start();
 
