@@ -45,7 +45,7 @@ const getStripe = () => {
 
 export const createPaymentIntent = async (req: Request, res: Response) => {
   try {
-    const { rideId, useGreenPoints } = req.body;
+    const { rideId, useGreenPoints, carbonOffset } = req.body;
 
     console.log(
       `[PaymentDebug] createPaymentIntent called. rideId: ${rideId}, useGreenPoints: ${useGreenPoints}`,
@@ -77,6 +77,7 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
     let discountAmount = 0;
     let pointsUsed = 0;
     let availablePoints = 0;
+    const carbonOffsetAmount = carbonOffset ? 5 : 0;
 
     console.log(`[PaymentDebug] Initial Fare: ${fare}, finalFare: ${finalFare}`);
 
@@ -136,6 +137,9 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
       finalFare = 50;
     }
 
+    // Add carbon offset fee if opted-in
+    finalFare += carbonOffsetAmount;
+
     const amountInPaise = Math.round(finalFare * 100);
 
     // 4. Create Payment Intent
@@ -160,6 +164,8 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
       },
       currency: "inr",
       metadata: {
+        carbonOffset: carbonOffset ? "true" : "false",
+        carbonOffsetAmount: carbonOffsetAmount.toString(),
         pointsUsed: pointsUsed.toString(),
         rideId,
         riderId: riderId || "unknown",
@@ -170,10 +176,12 @@ export const createPaymentIntent = async (req: Request, res: Response) => {
 
     return res.status(200).json({
       amount: finalFare,
+      carbonOffsetAmount,
       clientSecret: paymentIntent.client_secret,
       debug: {
         availablePoints,
         calculatedDiscount: discountAmount,
+        carbonOffset: carbonOffsetAmount,
         finalCalculatedFare: finalFare,
         originalFareFromDB: fare,
       },
