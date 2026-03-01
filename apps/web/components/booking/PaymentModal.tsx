@@ -15,6 +15,9 @@ interface PaymentModalProps {
   isPointsUsed: boolean;
   onTogglePoints: (usePoints: boolean) => void;
   discountAmount: number;
+  isCarbonOffset: boolean;
+  onToggleCarbonOffset: (enabled: boolean) => void;
+  carbonOffsetAmount: number;
   onSuccess: () => void;
   onClose: () => void;
 }
@@ -331,6 +334,9 @@ export default function PaymentModal({
   isPointsUsed,
   onTogglePoints,
   discountAmount,
+  isCarbonOffset,
+  onToggleCarbonOffset,
+  carbonOffsetAmount,
   onSuccess,
 }: PaymentModalProps): JSX.Element | null {
   // If amount is 0, we don't need clientSecret
@@ -472,6 +478,59 @@ export default function PaymentModal({
             )}
           </div>
         )}
+
+        {/* Carbon Offset Donation Toggle */}
+        <div
+          style={{
+            background: isCarbonOffset ? "rgba(16, 185, 129, 0.15)" : "rgba(71, 85, 105, 0.2)",
+            border: `1px solid ${isCarbonOffset ? "rgba(16, 185, 129, 0.4)" : "rgba(71, 85, 105, 0.4)"}`,
+            borderRadius: "16px",
+            marginBottom: "24px",
+            padding: "16px",
+            transition: "all 0.3s ease",
+          }}
+        >
+          <label
+            style={{ alignItems: "center", cursor: "pointer", display: "flex", gap: "12px" }}
+          >
+            <input
+              type="checkbox"
+              checked={isCarbonOffset}
+              onChange={(e) => onToggleCarbonOffset(e.target.checked)}
+              style={{ height: "18px", width: "18px" }}
+            />
+            <div style={{ flex: 1 }}>
+              <div style={{ alignItems: "center", display: "flex", gap: "6px" }}>
+                <span style={{ fontSize: "16px" }}>🌳</span>
+                <span style={{ color: "white", fontWeight: 600 }}>Carbon Offset Donation</span>
+              </div>
+              <span style={{ color: "#94a3b8", fontSize: "12px" }}>
+                Add ₹5 to fund carbon offset projects
+              </span>
+            </div>
+            <span style={{ color: isCarbonOffset ? "#34d399" : "#64748b", fontWeight: 700 }}>
+              +₹5
+            </span>
+          </label>
+          {isCarbonOffset && (
+            <div
+              style={{
+                alignItems: "center",
+                background: "rgba(16, 185, 129, 0.1)",
+                borderRadius: "8px",
+                display: "flex",
+                gap: "6px",
+                marginTop: "10px",
+                padding: "8px 12px",
+              }}
+            >
+              <FaLeaf style={{ color: "#34d399", fontSize: "12px" }} />
+              <span style={{ color: "#34d399", fontSize: "12px" }}>
+                Your ₹5 helps plant trees and fund renewable energy
+              </span>
+            </div>
+          )}
+        </div>
 
         {isFullRedemption ? (
           <div style={{ textAlign: "center" }}>
