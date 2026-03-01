@@ -20,6 +20,7 @@ import {
   FaMapMarkerAlt,
   FaPowerOff,
   FaRoute,
+  FaStar,
   FaUsers,
 } from "react-icons/fa";
 import { backendUrl } from "@/config";
@@ -284,6 +285,13 @@ export default function DriverLiveMap({
   const [showPaymentPopup, setShowPaymentPopup] = useState(false);
   const [receivedAmount, setReceivedAmount] = useState(0);
 
+  // Rider Rating State
+  const [showRiderRatingModal, setShowRiderRatingModal] = useState(false);
+  const [riderRating, setRiderRating] = useState(0);
+  const [riderRatingComment, setRiderRatingComment] = useState("");
+  const [submittingRiderRating, setSubmittingRiderRating] = useState(false);
+  const [lastRideRiderId, setLastRideRiderId] = useState<string | null>(null);
+
   // Per-rider payment notifications for pooled rides
   const [completedRideIds, setCompletedRideIds] = useState<string[]>([]);
   const [paymentNotifications, setPaymentNotifications] = useState<
@@ -534,6 +542,7 @@ export default function DriverLiveMap({
         setAssignedRide(data);
         // Track ride ID in state so the payment listener effect re-subscribes
         setCurrentRideId(data.rideId);
+        setLastRideRiderId(data.riderId || null);
         // Only update rideStatus from RTDB when it's a meaningful transition
         // Don't let RTDB re-set to ARRIVED after OTP was already verified
         const incomingStatus = data.status || "MATCHED";
@@ -3462,12 +3471,10 @@ export default function DriverLiveMap({
               type="button"
               onClick={() => {
                 setShowPaymentPopup(false);
-                setFinishedRideIds([]);
-                setCurrentRideId(null);
-                setWaitingForPayment(false);
-                setStatus("AVAILABLE");
-                // Remove processed payment from queue
-                setPaymentQueue((prev) => prev.slice(1));
+                // Show rider rating modal instead of immediately resetting
+                setShowRiderRatingModal(true);
+                setRiderRating(0);
+                setRiderRatingComment("");
               }}
               style={{
                 animation: "fadeIn 0.5s ease-out 0.7s forwards",
@@ -3487,6 +3494,189 @@ export default function DriverLiveMap({
             >
               Continue Driving
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Rider Rating Modal — shown after payment received popup */}
+      {showRiderRatingModal && (
+        <div
+          style={{
+            alignItems: "center",
+            background: "rgba(0, 0, 0, 0.7)",
+            backdropFilter: "blur(8px)",
+            display: "flex",
+            inset: 0,
+            justifyContent: "center",
+            position: "fixed",
+            zIndex: 2500,
+          }}
+        >
+          <div
+            style={{
+              animation: "popIn 0.4s ease-out",
+              background: "linear-gradient(135deg, #1e293b, #0f172a)",
+              border: "2px solid rgba(34, 197, 94, 0.4)",
+              borderRadius: "24px",
+              boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
+              maxWidth: "400px",
+              padding: "32px",
+              textAlign: "center",
+              width: "90%",
+            }}
+          >
+            <div
+              style={{
+                alignItems: "center",
+                background: "rgba(59, 130, 246, 0.2)",
+                borderRadius: "50%",
+                display: "flex",
+                height: "64px",
+                justifyContent: "center",
+                margin: "0 auto 16px",
+                width: "64px",
+              }}
+            >
+              <FaStar style={{ color: "#fbbf24", fontSize: "28px" }} />
+            </div>
+
+            <h2 style={{ color: "white", fontSize: "22px", fontWeight: 700, margin: "0 0 8px" }}>
+              Rate Your Rider
+            </h2>
+            <p style={{ color: "#94a3b8", fontSize: "14px", margin: "0 0 24px" }}>
+              How was your experience with this rider?
+            </p>
+
+            {/* Star Rating */}
+            <div style={{ display: "flex", gap: "8px", justifyContent: "center", marginBottom: "20px" }}>
+              {[1, 2, 3, 4, 5].map((star) => (
+                <button
+                  key={star}
+                  type="button"
+                  onClick={() => setRiderRating(star)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    fontSize: "36px",
+                    padding: "4px",
+                    transition: "transform 0.2s, color 0.2s",
+                    transform: riderRating >= star ? "scale(1.2)" : "scale(1)",
+                  }}
+                >
+                  <FaStar
+                    style={{
+                      color: riderRating >= star ? "#fbbf24" : "#475569",
+                      transition: "color 0.2s",
+                    }}
+                  />
+                </button>
+              ))}
+            </div>
+
+            {/* Comment Input */}
+            <textarea
+              placeholder="Add a comment (optional)"
+              value={riderRatingComment}
+              onChange={(e) => setRiderRatingComment(e.target.value)}
+              rows={3}
+              style={{
+                background: "rgba(15, 23, 42, 0.5)",
+                border: "1px solid rgba(71, 85, 105, 0.5)",
+                borderRadius: "12px",
+                color: "white",
+                fontSize: "14px",
+                marginBottom: "20px",
+                outline: "none",
+                padding: "12px",
+                resize: "none",
+                width: "100%",
+              }}
+            />
+
+            {/* Submit & Skip Buttons */}
+            <div style={{ display: "flex", gap: "12px" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  // Skip rating — reset everything
+                  setShowRiderRatingModal(false);
+                  setFinishedRideIds([]);
+                  setCurrentRideId(null);
+                  setWaitingForPayment(false);
+                  setLastRideRiderId(null);
+                  setStatus("AVAILABLE");
+                  setPaymentQueue((prev) => prev.slice(1));
+                }}
+                style={{
+                  background: "rgba(71, 85, 105, 0.5)",
+                  border: "1px solid rgba(71, 85, 105, 0.5)",
+                  borderRadius: "12px",
+                  color: "#94a3b8",
+                  cursor: "pointer",
+                  flex: 1,
+                  fontWeight: 600,
+                  padding: "14px",
+                }}
+              >
+                Skip
+              </button>
+              <button
+                type="button"
+                disabled={riderRating === 0 || submittingRiderRating}
+                onClick={async () => {
+                  if (riderRating === 0 || !currentRideId || !lastRideRiderId) return;
+                  setSubmittingRiderRating(true);
+                  try {
+                    const token = await auth.currentUser?.getIdToken();
+                    const res = await fetch(`${backendUrl}/ride/rate-rider`, {
+                      body: JSON.stringify({
+                        comment: riderRatingComment,
+                        rating: riderRating,
+                        rideId: currentRideId,
+                        riderId: lastRideRiderId,
+                      }),
+                      headers: {
+                        Authorization: `Bearer ${token}`,
+                        "Content-Type": "application/json",
+                      },
+                      method: "POST",
+                    });
+                    if (!res.ok) {
+                      console.error("Failed to submit rider rating");
+                    }
+                  } catch (err) {
+                    console.error("Error submitting rider rating:", err);
+                  } finally {
+                    setSubmittingRiderRating(false);
+                    setShowRiderRatingModal(false);
+                    setFinishedRideIds([]);
+                    setCurrentRideId(null);
+                    setWaitingForPayment(false);
+                    setLastRideRiderId(null);
+                    setStatus("AVAILABLE");
+                    setPaymentQueue((prev) => prev.slice(1));
+                  }
+                }}
+                style={{
+                  background:
+                    riderRating === 0
+                      ? "rgba(71, 85, 105, 0.5)"
+                      : "linear-gradient(135deg, #22c55e, #10b981)",
+                  border: "none",
+                  borderRadius: "12px",
+                  boxShadow:
+                    riderRating === 0 ? "none" : "0 10px 25px -5px rgba(34, 197, 94, 0.4)",
+                  color: riderRating === 0 ? "#64748b" : "white",
+                  cursor: riderRating === 0 || submittingRiderRating ? "not-allowed" : "pointer",
+                  flex: 2,
+                  fontWeight: 600,
+                  padding: "14px",
+                }}
+              >
+                {submittingRiderRating ? "Submitting..." : "Submit Rating"}
+              </button>
+            </div>
           </div>
         </div>
       )}
