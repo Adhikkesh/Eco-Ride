@@ -106,7 +106,8 @@ export const calculateFare = async (req: Request, res: Response) => {
         computeAlternativeRoutes: false,
         destination: { location: { latLng: { latitude: drop.lat, longitude: drop.lng } } },
         origin: { location: { latLng: { latitude: pickup.lat, longitude: pickup.lng } } },
-        routingPreference: "TRAFFIC_AWARE",
+        requestedReferenceRoutes: ["FUEL_EFFICIENT"],
+        routingPreference: "TRAFFIC_AWARE_OPTIMAL",
         travelMode: "DRIVE",
       }),
       headers: {
