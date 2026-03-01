@@ -160,7 +160,6 @@ jobs:
           image: ${{ env.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/server:${{ needs.build-push.outputs.sha }}
           region: ${{ env.GCP_REGION }}
           env_vars: |
-            PORT=3001
             GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }}
             STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}
             NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY }}
