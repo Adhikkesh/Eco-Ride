@@ -15,7 +15,7 @@ import { VerifyTokenController } from "../controllers/authController.js";
 import { calculateFare } from "../controllers/fareController.js";
 import { GetMeController, HealthCheckController } from "../controllers/index.js";
 import { confirmPayment, createPaymentIntent } from "../controllers/paymentController.js";
-import { SubmitRatingController } from "../controllers/ratingController.js";
+import { SubmitRatingController, SubmitRiderRatingController } from "../controllers/ratingController.js";
 import {
   acceptRide,
   arriveAtPickup,
@@ -107,6 +107,9 @@ router.post("/ride/estimate", verifyToken, calculateFare);
 
 /** Submit driver rating and feedback */
 router.post("/ride/rate", verifyToken, SubmitRatingController);
+
+/** Submit rider rating by driver */
+router.post("/ride/rate-rider", verifyToken, SubmitRiderRatingController);
 
 // ============================================================================
 // Payment Routes
