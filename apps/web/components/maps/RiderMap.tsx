@@ -499,10 +499,10 @@ export default function RiderMap({
 
           if (rideDoc.exists()) {
             const rideData = rideDoc.data();
-            // Only restore if it's still active
-            if (rideData && rideData.status === "MATCHED") {
-              console.log("Restoring ride from cache");
-              setRideStatus("matched");
+            // Only restore if it's still active (MATCHED or IN_PROGRESS)
+            if (rideData && (rideData.status === "MATCHED" || rideData.status === "IN_PROGRESS")) {
+              console.log("Restoring ride from cache, status:", rideData.status);
+              setRideStatus(rideData.status === "IN_PROGRESS" ? "on_trip" : "matched");
               setRideId(cachedRideId);
               setAssignedDriverId(rideData.driverId);
 
@@ -536,9 +536,13 @@ export default function RiderMap({
               }
               return; // Exit early if successful
             } else {
-              // Ride is no longer valid, clear cache
+              // Ride is completed/cancelled/invalid, clear cache
+              console.log("DEBUG: Cached ride is no longer active, status:", rideData?.status);
               localStorage.removeItem("currentRideId");
             }
+          } else {
+            // Ride doc doesn't exist, clear cache
+            localStorage.removeItem("currentRideId");
           }
         } catch (error) {
           console.error("Error checking cached ride:", error);
@@ -559,15 +563,21 @@ export default function RiderMap({
         if (response.ok) {
           const data = await response.json();
           if (data.success && data.rideId) {
-            console.log("DEBUG: Active ride found via API:", data);
-            setRideStatus("matched");
-            setRideId(data.rideId);
-            localStorage.setItem("currentRideId", data.rideId);
-            setAssignedDriverId(data.driverId);
-            setAssignedDriverName(data.driverName || "Unknown Driver");
-
-            // ETA logic
-            // We can re-calculate ETA in the effect that watches driver location
+            // Only restore truly active rides (MATCHED or IN_PROGRESS)
+            if (data.status === "MATCHED" || data.status === "IN_PROGRESS") {
+              console.log("DEBUG: Active ride found via API:", data);
+              setRideStatus(data.status === "IN_PROGRESS" ? "on_trip" : "matched");
+              setRideId(data.rideId);
+              localStorage.setItem("currentRideId", data.rideId);
+              setAssignedDriverId(data.driverId);
+              setAssignedDriverName(data.driverName || "Unknown Driver");
+            } else {
+              console.log(
+                "DEBUG: API returned ride with non-active status:",
+                data.status,
+                "— ignoring",
+              );
+            }
           }
         } else {
           if (response.status !== 404) {

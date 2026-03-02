@@ -229,10 +229,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               }
             }
           } else {
-            // Ride removed/cancelled
+            // Ride assignment removed from RTDB
+            // Only reset if we're in early stages (pending/matched)
+            // During active phases (arrived, in_progress, waiting_payment),
+            // the backend simulator may clean up RTDB but the driver app
+            // should keep its state until the driver explicitly completes the ride.
             if (_currentRide != null && mounted) {
-              debugPrint('DriverHome: Ride assignment removed.');
-              _resetRideState();
+              final activePhases = ['arrived', 'in_progress', 'waiting_payment'];
+              if (activePhases.contains(_rideStatus)) {
+                debugPrint('DriverHome: RTDB assignment removed but ride is in $_rideStatus phase — keeping state');
+              } else {
+                debugPrint('DriverHome: Ride assignment removed (status=$_rideStatus). Resetting.');
+                _resetRideState();
+              }
             }
           }
         });
