@@ -1,0 +1,32 @@
+{
+  "dependencies": {
+    "firebase": "^12.7.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.3.11",
+    "@types/node": "^25.1.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
+    "turbo": "^2.7.3",
+    "typescript": "5.9.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "name": "temp-turbo",
+  "packageManager": "pnpm@9.0.0",
+  "private": true,
+  "scripts": {
+    "build": "biome check . && turbo run build",
+    "check": "biome check .",
+    "check-types": "turbo run check-types",
+    "check:fix": "biome check --write .",
+    "dev": "turbo run dev",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "lint:fix": "biome lint --write .",
+    "prepare": "husky",
+    "test": "turbo run test"
+  }
+}
