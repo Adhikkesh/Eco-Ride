@@ -11,37 +11,127 @@ import 'package:flutter/material.dart';
 class AppColors {
   AppColors._();
 
-  // Primary - Forest Green
-  static const Color primary = Color(0xFF2E7D32);
-  static const Color primaryLight = Color(0xFF4CAF50);
-  static const Color primaryDark = Color(0xFF1B5E20);
+  // Primary - Deep Emerald
+  static const Color primary = Color(0xFF0D6B3B);
+  static const Color primaryLight = Color(0xFF10B981);
+  static const Color primaryDark = Color(0xFF14532D);
 
-  // Secondary
-  static const Color secondary = Color(0xFF81C784);
-  static const Color accent = Color(0xFF00E676);
+  // Secondary - Mint & Teal
+  static const Color secondary = Color(0xFF6EE7B7);
+  static const Color accent = Color(0xFFA3E635);
+  static const Color teal = Color(0xFF5EEAD4);
+  static const Color mint = Color(0xFFA7F3D0);
 
   // Neutrals
   static const Color white = Color(0xFFFFFFFF);
-  static const Color offWhite = Color(0xFFF5F5F5);
-  static const Color lightGrey = Color(0xFFE0E0E0);
-  static const Color grey = Color(0xFF9E9E9E);
-  static const Color darkGrey = Color(0xFF424242);
+  static const Color offWhite = Color(0xFFF8FAFC);
+  static const Color lightGrey = Color(0xFFE2E8F0);
+  static const Color grey = Color(0xFF94A3B8);
+  static const Color darkGrey = Color(0xFF475569);
 
   // Text
-  static const Color textPrimary = Color(0xFF212121);
-  static const Color textSecondary = Color(0xFF757575);
+  static const Color textPrimary = Color(0xFF1E293B);
+  static const Color textSecondary = Color(0xFF64748B);
   static const Color textLight = Color(0xFFFFFFFF);
 
   // Status
-  static const Color success = Color(0xFF4CAF50);
-  static const Color error = Color(0xFFE53935);
-  static const Color warning = Color(0xFFFFC107);
-  static const Color info = Color(0xFF2196F3);
+  static const Color success = Color(0xFF10B981);
+  static const Color error = Color(0xFFEF4444);
+  static const Color warning = Color(0xFFF59E0B);
+  static const Color info = Color(0xFF3B82F6);
 
   // Background
-  static const Color background = Color(0xFFFAFAFA);
+  static const Color background = Color(0xFFF8FAFC);
   static const Color surface = Color(0xFFFFFFFF);
   static const Color cardBackground = Color(0xFFFFFFFF);
+
+  // Glass
+  static const Color glassBg = Color(0xCCFFFFFF); // 80% white
+  static const Color glassBorder = Color(0x33FFFFFF); // 20% white
+}
+
+// =============================================================================
+// GRADIENTS
+// =============================================================================
+
+class AppGradients {
+  AppGradients._();
+
+  static const LinearGradient primaryButton = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF10B981), Color(0xFF0D6B3B)],
+  );
+
+  static const LinearGradient emeraldGlow = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [Color(0xFF0D6B3B), Color(0xFF14532D)],
+  );
+
+  static const LinearGradient mintFade = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFFA7F3D0), Color(0xFF6EE7B7)],
+  );
+
+  static const LinearGradient glassFrost = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xBBFFFFFF), Color(0x88FFFFFF)],
+  );
+
+  static const LinearGradient darkOverlay = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [Color(0x00000000), Color(0x66000000)],
+  );
+
+  static const LinearGradient accentPop = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFFA3E635), Color(0xFF10B981)],
+  );
+}
+
+// =============================================================================
+// SHADOWS
+// =============================================================================
+
+class AppShadows {
+  AppShadows._();
+
+  static List<BoxShadow> get soft => [
+    BoxShadow(
+      color: const Color(0xFF0D6B3B).withValues(alpha: 0.08),
+      blurRadius: 12,
+      offset: const Offset(0, 4),
+    ),
+  ];
+
+  static List<BoxShadow> get medium => [
+    BoxShadow(
+      color: const Color(0xFF0D6B3B).withValues(alpha: 0.12),
+      blurRadius: 20,
+      offset: const Offset(0, 8),
+    ),
+  ];
+
+  static List<BoxShadow> get glow => [
+    BoxShadow(
+      color: const Color(0xFF10B981).withValues(alpha: 0.3),
+      blurRadius: 24,
+      offset: const Offset(0, 8),
+    ),
+  ];
+
+  static List<BoxShadow> get card => [
+    BoxShadow(
+      color: Colors.black.withValues(alpha: 0.06),
+      blurRadius: 16,
+      offset: const Offset(0, 4),
+    ),
+  ];
 }
 
 // =============================================================================
@@ -111,17 +201,33 @@ class AppStrings {
 class ApiConfig {
   ApiConfig._();
 
-  // Backend URL - Update this for production
-  static const String baseUrl = 'http://localhost:3001';
+  // Backend URL - Use your machine's LAN IP for physical device testing
+  // Change to 'http://localhost:3001' for simulator, or your deployed URL for production
+  static const String baseUrl = 'http://10.12.227.19:3001';
 
   // Endpoints
   static const String verifyToken = '/api/auth/verify';
   static const String createUser = '/api/v1/user';
   static const String estimateRide = '/api/v1/ride/estimate';
   static const String requestRide = '/api/v1/ride/request';
+  static const String acceptRide = '/api/v1/ride/accept';
+  static const String declineRide = '/api/v1/ride/decline';
+  static const String arriveAtPickup = '/api/v1/ride/arrive';
+  static const String startRide = '/api/v1/ride/start';
+  static const String completeRide = '/api/v1/ride/complete';
+  static const String cancelRide = '/api/v1/ride/cancel';
+  static const String activeRide = '/api/v1/ride/active';
+  static const String getOtp = '/api/v1/ride/otp';
+
+  // Payment
+  static const String createPaymentIntent = '/api/v1/payment/create-intent';
+  static const String confirmPayment = '/api/v1/ride/confirm-payment';
   
   // Google Maps API
   static const String googleMapsApiKey = 'AIzaSyD5ucfXDiTYX9T7Nirz_de1vz2qgwbNJXo';
+
+  // Stripe
+  static const String stripePublishableKey = 'pk_test_51SvYXY48on6RPqrGxOElRVwHiZLMQcSQo8UAWKYw3au5cFzc0xn929H2DJO9eie73pLzGpRrxaEFT1CcKZ6ZNrEA00q1Pb35Ps';
 }
 
 // =============================================================================

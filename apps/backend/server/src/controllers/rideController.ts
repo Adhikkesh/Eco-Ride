@@ -869,16 +869,18 @@ export const getActiveRide = async (req: Request, res: Response) => {
       }
     }
 
-    // If driverName is missing in Firestore, we can fetch it here safely (Admin SDK)
+    // If driverName or driverPhone is missing in Firestore, we can fetch it here safely (Admin SDK)
     let driverName = rideData.driverName;
-    if (!driverName && rideData.driverId) {
+    let driverPhone = rideData.driverPhone;
+    if ((!driverName || !driverPhone) && rideData.driverId) {
       try {
         const userDoc = await db.collection("users").doc(rideData.driverId).get();
         if (userDoc.exists) {
-          driverName = userDoc.data()?.name || "Unknown Driver";
+          driverName = driverName || userDoc.data()?.name || "Unknown Driver";
+          driverPhone = driverPhone || userDoc.data()?.phone_number || "";
         }
       } catch (err) {
-        console.error("Error fetching driver name in active ride check:", err);
+        console.error("Error fetching driver details in active ride check:", err);
       }
     }
 
@@ -1394,16 +1396,16 @@ export const getOtp = async (req: Request, res: Response) => {
     const driverSnapshot = await rtdb.ref(`drivers-online/${rideData.driverId}`).once("value");
     const driverData = driverSnapshot.val() as DriverLocation | null;
 
-    if (!driverData) {
-      return res.status(404).json({ message: "Driver location not found", success: false });
+    let distanceInMeters = 0;
+    if (driverData) {
+      // Calculate distance between driver and pickup
+      const pickup = rideData.pickup;
+      const driverPos: [number, number] = [driverData.lat, driverData.lng];
+      const pickupPos: [number, number] = [pickup.lat, pickup.lng];
+      const distanceInKm = geofire.distanceBetween(driverPos, pickupPos);
+      distanceInMeters = Math.round(distanceInKm * 1000);
+      console.log(`Driver distance to pickup: ${distanceInMeters}m`);
     }
-
-    // Calculate distance between driver and pickup
-    const pickup = rideData.pickup;
-    const driverPos: [number, number] = [driverData.lat, driverData.lng];
-    const pickupPos: [number, number] = [pickup.lat, pickup.lng];
-    const distanceInKm = geofire.distanceBetween(driverPos, pickupPos);
-    const distanceInMeters = Math.round(distanceInKm * 1000);
 
     // OTP is only shown to rider when driver has reached the pickup (≤100m)
     if (rideData.riderId === userId) {
@@ -1441,7 +1443,7 @@ export const getOtp = async (req: Request, res: Response) => {
 
     return res.status(200).json({
       distanceToPickup: distanceInMeters,
-      message: "Driver is nearby. Share this OTP with the driver.",
+      message: "Driver is matched. Share this OTP with the driver.",
       otp: rideData.otp,
       otpAvailable: true,
       success: true,

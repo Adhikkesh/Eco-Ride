@@ -50,3 +50,6 @@ full_lint_report.txt
 check_head.txt
 
 .env.github
+
+
+apps/backend/server/*.log
