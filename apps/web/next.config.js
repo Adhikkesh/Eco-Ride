@@ -17,7 +17,7 @@ const nextConfig = {
       },
     ],
   },
-  // output: "standalone", // Disabled: requires symlink permissions on Windows. Enable in Docker/CI.
+  output: "standalone",
   typescript: {
     ignoreBuildErrors: true,
   },
