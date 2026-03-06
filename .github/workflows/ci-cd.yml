@@ -1,0 +1,224 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
+env:
+  GCP_REGION: asia-south1
+  REGISTRY: asia-south1-docker.pkg.dev
+  REPOSITORY: eco-ride
+
+# ═══════════════════════════════════════════════════════════════
+# JOBS
+# ═══════════════════════════════════════════════════════════════
+
+jobs:
+  # ─── Stage 1: CI (every push & PR) ──────────────────────────
+  ci:
+    name: CI – Type Check & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm run check-types
+
+      - name: Run tests
+        run: pnpm run test
+
+  # ─── Stage 2: Build & Push Docker Images (main only) ────────
+  build-push:
+    name: Build & Push Docker Images
+    runs-on: ubuntu-latest
+    needs: ci
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Set image tags
+        id: tags
+        run: |
+          SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+          echo "server=${{ env.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/server" >> $GITHUB_OUTPUT
+          echo "simulator=${{ env.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/simulator" >> $GITHUB_OUTPUT
+          echo "web=${{ env.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/web" >> $GITHUB_OUTPUT
+
+      # ── Build Server ──
+      - name: Build & Push Server
+        run: |
+          docker build \
+            -f apps/backend/server/Dockerfile \
+            -t ${{ steps.tags.outputs.server }}:${{ steps.tags.outputs.sha }} \
+            -t ${{ steps.tags.outputs.server }}:latest \
+            .
+          docker push ${{ steps.tags.outputs.server }}:${{ steps.tags.outputs.sha }}
+          docker push ${{ steps.tags.outputs.server }}:latest
+
+      # ── Build Simulator ──
+      - name: Build & Push Simulator
+        run: |
+          docker build \
+            -f apps/backend/simulator/Dockerfile \
+            -t ${{ steps.tags.outputs.simulator }}:${{ steps.tags.outputs.sha }} \
+            -t ${{ steps.tags.outputs.simulator }}:latest \
+            .
+          docker push ${{ steps.tags.outputs.simulator }}:${{ steps.tags.outputs.sha }}
+          docker push ${{ steps.tags.outputs.simulator }}:latest
+
+      # ── Build Web (NEXT_PUBLIC_* baked at build time) ──
+      - name: Build & Push Web
+        run: |
+          docker build \
+            -f apps/web/Dockerfile \
+            --build-arg NEXT_PUBLIC_FIREBASE_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }} \
+            --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }} \
+            --build-arg NEXT_PUBLIC_FIREBASE_PROJECT_ID=${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }} \
+            --build-arg NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=${{ secrets.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET }} \
+            --build-arg NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=${{ secrets.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID }} \
+            --build-arg NEXT_PUBLIC_FIREBASE_APP_ID=${{ secrets.NEXT_PUBLIC_FIREBASE_APP_ID }} \
+            --build-arg NEXT_PUBLIC_DATABASE_URL=${{ secrets.NEXT_PUBLIC_DATABASE_URL }} \
+            --build-arg NEXT_MEASUREMENT_ID=${{ secrets.NEXT_MEASUREMENT_ID }} \
+            --build-arg NEXT_PUBLIC_BACKEND_URL=${{ secrets.NEXT_PUBLIC_BACKEND_URL }} \
+            --build-arg NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=${{ secrets.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY }} \
+            --build-arg NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY }} \
+            -t ${{ steps.tags.outputs.web }}:${{ steps.tags.outputs.sha }} \
+            -t ${{ steps.tags.outputs.web }}:latest \
+            .
+          docker push ${{ steps.tags.outputs.web }}:${{ steps.tags.outputs.sha }}
+          docker push ${{ steps.tags.outputs.web }}:latest
+
+    outputs:
+      sha: ${{ steps.tags.outputs.sha }}
+
+  # ─── Stage 3: Deploy to Cloud Run (main only) ──────────────
+  deploy:
+    name: Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    needs: build-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      # ── Deploy Server ──
+      - name: Deploy Server to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: eco-ride-server
+          image: ${{ env.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/server:${{ needs.build-push.outputs.sha }}
+          region: ${{ env.GCP_REGION }}
+          env_vars: |
+            GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }}
+            STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}
+            NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY }}
+            FIREBASE_DATABASE_URL=${{ secrets.FIREBASE_DATABASE_URL }}
+            FIREBASE_CREDENTIAL_PATH=/secrets/firebase_credential.json
+          secrets: |
+            /secrets/firebase_credential.json=firebase-credential-json:latest
+          flags: |
+            --port=3001
+            --allow-unauthenticated
+            --min-instances=0
+            --max-instances=5
+            --memory=512Mi
+            --cpu=1
+            --cpu-boost
+
+      # ── Deploy Simulator ──
+      - name: Deploy Simulator to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: eco-ride-simulator
+          image: ${{ env.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/simulator:${{ needs.build-push.outputs.sha }}
+          region: ${{ env.GCP_REGION }}
+          env_vars: |
+            GOOGLE_MAPS_API_KEY=${{ secrets.GOOGLE_MAPS_API_KEY }}
+            FIREBASE_DATABASE_URL=${{ secrets.FIREBASE_DATABASE_URL }}
+            FIREBASE_CREDENTIAL_PATH=/secrets/firebase_credential.json
+          secrets: |
+            /secrets/firebase_credential.json=firebase-credential-json:latest
+          flags: |
+            --allow-unauthenticated
+            --min-instances=1
+            --max-instances=1
+            --memory=512Mi
+            --cpu=1
+            --no-cpu-throttling
+
+      # ── Deploy Web ──
+      - name: Deploy Web to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: eco-ride-web
+          image: ${{ env.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/web:${{ needs.build-push.outputs.sha }}
+          region: ${{ env.GCP_REGION }}
+          flags: |
+            --port=3000
+            --allow-unauthenticated
+            --min-instances=0
+            --max-instances=5
+            --memory=512Mi
+            --cpu=1
+
+      # ── Print deployed URLs ──
+      - name: Print service URLs
+        run: |
+          echo "═══════════════════════════════════════════════"
+          echo "🚀 Deployment Complete!"
+          echo "═══════════════════════════════════════════════"
+          gcloud run services list \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --region=${{ env.GCP_REGION }} \
+            --format="table(metadata.name,status.url)"
