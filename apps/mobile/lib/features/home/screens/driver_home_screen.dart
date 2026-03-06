@@ -61,6 +61,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   bool _isArriving = false;
   final TextEditingController _otpController = TextEditingController();
 
+  // Pooled ride state
+  List<Map<dynamic, dynamic>>? _pooledRiders;
+  int _previousRidersCount = 0;
+  bool get _isPooledRide => _pooledRiders != null && _pooledRiders!.length > 1;
+
   String? _userName;
   String? _userPhoto;
   StreamSubscription<DatabaseEvent>? _paymentSubscription;
@@ -216,15 +221,52 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           if (data != null) {
             debugPrint('DriverHome: RIDE ASSIGNED! $data');
             if (mounted) {
+              // Parse pooled riders array
+              List<Map<dynamic, dynamic>>? riders;
+              if (data['riders'] != null) {
+                try {
+                  final ridersList = data['riders'] as List<dynamic>;
+                  riders = ridersList.map((r) => r as Map<dynamic, dynamic>).toList();
+                } catch (e) {
+                  debugPrint('DriverHome: Error parsing riders: $e');
+                }
+              }
+
+              final newRidersCount = riders?.length ?? 0;
+              final hadPreviousRiders = _previousRidersCount > 0;
+              final isNewPooledRider = hadPreviousRiders && newRidersCount > _previousRidersCount;
+
               setState(() {
                 _currentRide = data;
                 _rideId = data['rideId'] as String? ?? _rideId;
                 _rideStatus = (data['status'] as String? ?? 'MATCHED').toLowerCase();
                 _riderName = data['riderName'] as String? ?? _riderName ?? 'Rider';
                 _riderPhone = data['riderPhone'] as String? ?? _riderPhone ?? '';
+                _pooledRiders = riders;
+                _previousRidersCount = newRidersCount;
               });
-              // Auto-navigate to pickup on first assignment
-              if (!_isNavigating) {
+
+              // Mid-trip: new pooled rider added
+              if (isNewPooledRider && mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Row(
+                      children: [
+                        const Icon(Icons.group_add, color: Colors.white, size: 20),
+                        const SizedBox(width: 8),
+                        Text('New rider added to your pool! 🌿',
+                            style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                    backgroundColor: const Color(0xFF2E7D32),
+                    behavior: SnackBarBehavior.floating,
+                    margin: const EdgeInsets.only(top: 10, left: 16, right: 16, bottom: 600),
+                  ),
+                );
+                // Re-navigate to new pickup
+                _navigateToRide();
+              } else if (!_isNavigating) {
+                // Auto-navigate to pickup on first assignment
                 _navigateToRide();
               }
             }
@@ -716,6 +758,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       _riderName = null;
       _riderPhone = null;
       _paidFare = null;
+      _pooledRiders = null;
+      _previousRidersCount = 0;
       _polylines.clear();
       _markers.clear();
     });
@@ -1456,7 +1500,31 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: GoogleFonts.inter(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(title, style: GoogleFonts.inter(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                    ),
+                    if (_isPooledRide) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.25),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.group, color: Colors.white, size: 12),
+                            const SizedBox(width: 3),
+                            Text('Shared', style: GoogleFonts.inter(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
                 if (subtitle.isNotEmpty)
                   Text(subtitle, style: GoogleFonts.inter(color: Colors.white.withValues(alpha: 0.85), fontSize: 12)),
               ],
@@ -1494,7 +1562,25 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(_riderName ?? 'Rider', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 15)),
+                Row(
+                  children: [
+                    Text(_riderName ?? 'Rider', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 15)),
+                    if (_isPooledRide) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE8F5E9),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          '${_pooledRiders!.length} riders',
+                          style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w600, color: const Color(0xFF2E7D32)),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
                 if (_riderPhone != null && _riderPhone!.isNotEmpty)
                   Row(
                     children: [

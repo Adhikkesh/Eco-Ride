@@ -1129,10 +1129,25 @@ export const acceptRide = async (req: Request, res: Response) => {
       await driverRef.update({ status: "BUSY" });
     }
 
-    // 4. Update rides node for rider tracking
+    // 4. Update rides node for rider tracking (including driver rating)
+    let driverRating = 0;
+    let driverRatingCount = 0;
+    try {
+      const profileDoc = await db.collection("driver_profile").doc(driverId).get();
+      if (profileDoc.exists) {
+        const profileData = profileDoc.data();
+        driverRating = profileData?.rating || 0;
+        driverRatingCount = profileData?.rating_count || 0;
+      }
+    } catch (err) {
+      console.error("Error fetching driver rating in acceptRide:", err);
+    }
+
     await rtdb.ref(`rides/${rideId}`).update({
       driverName: rideData?.driverName || "Driver",
       driverPhone,
+      driverRating,
+      driverRatingCount,
       status: "MATCHED",
     });
 
