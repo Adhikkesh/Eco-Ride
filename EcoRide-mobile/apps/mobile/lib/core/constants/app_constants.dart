@@ -203,7 +203,7 @@ class ApiConfig {
 
   // Backend URL - Use your machine's LAN IP for physical device testing
   // Change to 'http://localhost:3001' for simulator, or your deployed URL for production
-  static const String baseUrl = 'http://10.12.227.19:3001';
+  static const String baseUrl = 'http://10.12.226.39:3001';
 
   // Endpoints
   static const String verifyToken = '/api/auth/verify';
