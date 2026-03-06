@@ -7,10 +7,12 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:location/location.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/services/map_service.dart';
 import '../../auth/screens/login_screen.dart';
+import 'driver_profile_screen.dart';
 
 class DriverHomeScreen extends StatefulWidget {
   const DriverHomeScreen({super.key});
@@ -63,8 +65,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   String? _userName;
   String? _userPhoto;
+  String? _userEmail;
   StreamSubscription<DatabaseEvent>? _paymentSubscription;
   double? _paidFare;
+
+  // Theme state
+  bool _isDarkMode = true;
+  String? _darkMapStyle;
+
+  // Dynamic today's stats
+  double _todayEarnings = 0;
+  int _todayRides = 0;
 
   @override
   void initState() {
@@ -72,6 +83,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     _loadUserData();
     _checkInitialLocation();
     _createCarIcon();
+    _loadDarkMapStyle();
+    _loadTodayStats();
   }
 
   @override
@@ -92,10 +105,122 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   Future<void> _loadUserData() async {
     final user = AuthService.instance.currentUser;
     if (user != null) {
-      setState(() {
-        _userName = user.displayName ?? 'Driver';
-        _userPhoto = user.photoURL;
-      });
+      _userEmail = user.email;
+      // Try to get displayName from Firestore first
+      try {
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+        if (userDoc.exists) {
+          final data = userDoc.data()!;
+          final firestoreName = data['displayName']?.toString();
+          final fallbackName = data['name']?.toString();
+          setState(() {
+            _userName = (firestoreName != null && firestoreName.isNotEmpty)
+                ? firestoreName
+                : (fallbackName != null && fallbackName.isNotEmpty)
+                    ? fallbackName
+                    : user.displayName ?? 'Driver';
+            _userPhoto = data['photoURL']?.toString() ?? user.photoURL;
+            _userEmail = data['email']?.toString() ?? user.email;
+          });
+        } else {
+          setState(() {
+            _userName = user.displayName ?? 'Driver';
+            _userPhoto = user.photoURL;
+          });
+        }
+      } catch (e) {
+        setState(() {
+          _userName = user.displayName ?? 'Driver';
+          _userPhoto = user.photoURL;
+        });
+      }
+    }
+  }
+
+  /// Load dark map style JSON
+  Future<void> _loadDarkMapStyle() async {
+    _darkMapStyle = '''[
+      {"elementType": "geometry", "stylers": [{"color": "#242f3e"}]},
+      {"elementType": "labels.text.stroke", "stylers": [{"color": "#242f3e"}]},
+      {"elementType": "labels.text.fill", "stylers": [{"color": "#746855"}]},
+      {"featureType": "administrative.locality", "elementType": "labels.text.fill", "stylers": [{"color": "#d59563"}]},
+      {"featureType": "poi", "elementType": "labels.text.fill", "stylers": [{"color": "#d59563"}]},
+      {"featureType": "poi.park", "elementType": "geometry", "stylers": [{"color": "#263c3f"}]},
+      {"featureType": "poi.park", "elementType": "labels.text.fill", "stylers": [{"color": "#6b9a76"}]},
+      {"featureType": "road", "elementType": "geometry", "stylers": [{"color": "#38414e"}]},
+      {"featureType": "road", "elementType": "geometry.stroke", "stylers": [{"color": "#212a37"}]},
+      {"featureType": "road", "elementType": "labels.text.fill", "stylers": [{"color": "#9ca5b3"}]},
+      {"featureType": "road.highway", "elementType": "geometry", "stylers": [{"color": "#746855"}]},
+      {"featureType": "road.highway", "elementType": "geometry.stroke", "stylers": [{"color": "#1f2835"}]},
+      {"featureType": "road.highway", "elementType": "labels.text.fill", "stylers": [{"color": "#f3d19c"}]},
+      {"featureType": "transit", "elementType": "geometry", "stylers": [{"color": "#2f3948"}]},
+      {"featureType": "transit.station", "elementType": "labels.text.fill", "stylers": [{"color": "#d59563"}]},
+      {"featureType": "water", "elementType": "geometry", "stylers": [{"color": "#17263c"}]},
+      {"featureType": "water", "elementType": "labels.text.fill", "stylers": [{"color": "#515c6d"}]},
+      {"featureType": "water", "elementType": "labels.text.stroke", "stylers": [{"color": "#17263c"}]}
+    ]''';
+  }
+
+  /// Toggle dark/light theme
+  Future<void> _toggleTheme() async {
+    setState(() => _isDarkMode = !_isDarkMode);
+    try {
+      final controller = await _controller.future;
+      if (_isDarkMode && _darkMapStyle != null) {
+        await controller.setMapStyle(_darkMapStyle);
+      } else {
+        await controller.setMapStyle(null);
+      }
+    } catch (e) {
+      debugPrint('DriverHome: Error toggling theme: $e');
+    }
+  }
+
+  /// Load today's earnings and rides from Firestore
+  Future<void> _loadTodayStats() async {
+    final user = _auth.currentUser;
+    if (user == null) return;
+
+    try {
+      final now = DateTime.now();
+      final startOfDay = DateTime(now.year, now.month, now.day);
+      final endOfDay = startOfDay.add(const Duration(days: 1));
+
+      final ridesSnapshot = await FirebaseFirestore.instance
+          .collection('rides')
+          .where('driverId', isEqualTo: user.uid)
+          .where('status', isEqualTo: 'COMPLETED')
+          .get();
+
+      double earnings = 0;
+      int rides = 0;
+
+      for (final doc in ridesSnapshot.docs) {
+        final data = doc.data();
+        // Check timestamp for today
+        final timestamp = data['timestamp'] as Timestamp?;
+        final createdAt = data['createdAt'] as Timestamp?;
+        final ts = timestamp ?? createdAt;
+        if (ts != null) {
+          final rideDate = ts.toDate();
+          if (rideDate.isAfter(startOfDay) && rideDate.isBefore(endOfDay)) {
+            earnings += (data['fare'] as num?)?.toDouble() ?? 0;
+            rides++;
+          }
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _todayEarnings = earnings;
+          _todayRides = rides;
+        });
+      }
+    } catch (e) {
+      debugPrint('DriverHome: Error loading today stats: $e');
     }
   }
 
@@ -193,10 +318,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             if (mounted) {
               setState(() {
                 _pendingRide = data;
-                _rideId = data['rideId'] as String?;
+                _rideId = data['rideId']?.toString();
                 _rideStatus = 'pending';
-                _riderName = data['riderName'] as String? ?? 'Rider';
-                _riderPhone = data['riderPhone'] as String? ?? '';
+                _riderName = data['riderName']?.toString() ?? 'Rider';
+                _riderPhone = data['riderPhone']?.toString() ?? '';
               });
             }
           } else {
@@ -218,10 +343,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             if (mounted) {
               setState(() {
                 _currentRide = data;
-                _rideId = data['rideId'] as String? ?? _rideId;
-                _rideStatus = (data['status'] as String? ?? 'MATCHED').toLowerCase();
-                _riderName = data['riderName'] as String? ?? _riderName ?? 'Rider';
-                _riderPhone = data['riderPhone'] as String? ?? _riderPhone ?? '';
+                _rideId = data['rideId']?.toString() ?? _rideId;
+                _rideStatus = (data['status']?.toString() ?? 'MATCHED').toLowerCase();
+                _riderName = data['riderName']?.toString() ?? _riderName ?? 'Rider';
+                _riderPhone = data['riderPhone']?.toString() ?? _riderPhone ?? '';
               });
               // Auto-navigate to pickup on first assignment
               if (!_isNavigating) {
@@ -426,7 +551,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
         infoWindow: InfoWindow(
           title: 'Pickup',
-          snippet: _currentRide!['pickupName'] as String? ?? 'Pickup Location',
+          snippet: _currentRide!['pickupName']?.toString() ?? 'Pickup Location',
         ),
       ));
       newMarkers.add(Marker(
@@ -435,7 +560,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
         infoWindow: InfoWindow(
           title: 'Destination',
-          snippet: _currentRide!['dropName'] as String? ?? 'Drop Location',
+          snippet: _currentRide!['dropName']?.toString() ?? 'Drop Location',
         ),
       ));
 
@@ -668,6 +793,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       });
       // Start listening for payment on this ride
       _startPaymentListener(_rideId!);
+      // Refresh today's stats
+      _loadTodayStats();
     } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Error completing ride')),
@@ -683,8 +810,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       final data = event.snapshot.value as Map<dynamic, dynamic>?;
       if (data == null) return;
 
-      final status = data['status'] as String?;
-      final paymentStatus = data['paymentStatus'] as String?;
+      final status = data['status']?.toString();
+      final paymentStatus = data['paymentStatus']?.toString();
       final paidAmount = data['paidAmount'];
       final fare = data['fare'];
 
@@ -1012,7 +1139,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: _isDarkMode ? const Color(0xFF0F172A) : AppColors.background,
       body: Stack(
         children: [
           // 1. Google Map
@@ -1024,6 +1151,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             zoomControlsEnabled: false,
             onMapCreated: (GoogleMapController controller) {
               _controller.complete(controller);
+              // Apply dark map style on startup
+              if (_isDarkMode && _darkMapStyle != null) {
+                controller.setMapStyle(_darkMapStyle);
+              }
             },
             markers: _markers,
             polylines: _polylines,
@@ -1059,82 +1190,124 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   Widget _buildHeader() {
+    final cardBg = _isDarkMode ? const Color(0xFF1E293B) : AppColors.white;
+    final textColor = _isDarkMode ? Colors.white : AppColors.textPrimary;
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        // Driver Info
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: AppColors.white,
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: AppShadows.soft,
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: const BoxDecoration(
-                  gradient: AppGradients.primaryButton,
-                  shape: BoxShape.circle,
+        // Driver Info — tappable to open profile
+        GestureDetector(
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => DriverProfileScreen(isDarkMode: _isDarkMode),
+              ),
+            );
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: cardBg,
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: _isDarkMode ? [] : AppShadows.soft,
+              border: _isDarkMode ? Border.all(color: Colors.white12) : null,
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: const BoxDecoration(
+                    gradient: AppGradients.primaryButton,
+                    shape: BoxShape.circle,
+                  ),
+                  child: _userPhoto != null
+                      ? ClipOval(child: Image.network(_userPhoto!, fit: BoxFit.cover))
+                      : const Icon(Icons.person, size: 18, color: AppColors.white),
                 ),
-                child: _userPhoto != null
-                    ? ClipOval(child: Image.network(_userPhoto!, fit: BoxFit.cover))
-                    : const Icon(Icons.person, size: 18, color: AppColors.white),
-              ),
-              const SizedBox(width: 10),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    _userName ?? 'Driver',
-                    style: GoogleFonts.inter(
-                      color: AppColors.textPrimary,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 14,
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _userName ?? 'Driver',
+                      style: GoogleFonts.inter(
+                        color: textColor,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
                     ),
-                  ),
-                  Text(
-                    'Elite Driver',
-                    style: GoogleFonts.inter(
-                      color: AppColors.primaryLight,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 11,
+                    Text(
+                      'Elite Driver',
+                      style: GoogleFonts.inter(
+                        color: AppColors.primaryLight,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 11,
+                      ),
                     ),
-                  ),
-                ],
-              ),
-            ],
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
 
-        // Logout
-        GestureDetector(
-          onTap: _handleLogout,
-          child: Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppColors.white,
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: AppShadows.soft,
+        // Theme toggle + Logout
+        Row(
+          children: [
+            GestureDetector(
+              onTap: _toggleTheme,
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: cardBg,
+                  borderRadius: BorderRadius.circular(14),
+                  boxShadow: _isDarkMode ? [] : AppShadows.soft,
+                  border: _isDarkMode ? Border.all(color: Colors.white12) : null,
+                ),
+                child: Icon(
+                  _isDarkMode ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+                  color: _isDarkMode ? Colors.amber : Colors.blueGrey,
+                  size: 20,
+                ),
+              ),
             ),
-            child: Icon(Icons.logout_rounded, color: AppColors.error.withValues(alpha: 0.8), size: 20),
-          ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: _handleLogout,
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: cardBg,
+                  borderRadius: BorderRadius.circular(14),
+                  boxShadow: _isDarkMode ? [] : AppShadows.soft,
+                  border: _isDarkMode ? Border.all(color: Colors.white12) : null,
+                ),
+                child: Icon(Icons.logout_rounded, color: AppColors.error.withValues(alpha: 0.8), size: 20),
+              ),
+            ),
+          ],
         ),
       ],
     );
   }
 
   Widget _buildStatusCard() {
+    final cardBg = _isDarkMode ? const Color(0xFF1E293B) : AppColors.white;
+    final titleColor = _isDarkMode ? Colors.white : AppColors.textPrimary;
+    final subtitleColor = _isDarkMode ? Colors.white70 : AppColors.textSecondary;
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: AppColors.white,
+        color: cardBg,
         borderRadius: BorderRadius.circular(24),
-        boxShadow: AppShadows.medium,
+        boxShadow: _isDarkMode ? [] : AppShadows.medium,
+        border: _isDarkMode ? Border.all(color: Colors.white12) : null,
       ),
       child: Column(
         children: [
@@ -1147,7 +1320,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   Text(
                     _isOnline ? 'You are Online' : 'You are Offline',
                     style: GoogleFonts.inter(
-                      color: AppColors.textPrimary,
+                      color: titleColor,
                       fontSize: 20,
                       fontWeight: FontWeight.w800,
                     ),
@@ -1156,7 +1329,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   Text(
                     _isOnline ? 'Accepting rides now' : 'Go online to start earning',
                     style: GoogleFonts.inter(
-                      color: AppColors.textSecondary,
+                      color: subtitleColor,
                       fontSize: 13,
                     ),
                   ),
@@ -1172,7 +1345,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   padding: const EdgeInsets.all(3),
                   decoration: BoxDecoration(
                     gradient: _isOnline ? AppGradients.primaryButton : null,
-                    color: _isOnline ? null : AppColors.lightGrey,
+                    color: _isOnline ? null : (_isDarkMode ? Colors.grey[700] : AppColors.lightGrey),
                     borderRadius: BorderRadius.circular(16),
                     boxShadow: _isOnline ? AppShadows.soft : [],
                   ),
@@ -1207,20 +1380,25 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   Widget _buildStatsRow() {
      return Row(
        children: [
-         Expanded(child: _buildStatItem('₹0.00', 'Today\'s Earnings', Icons.account_balance_wallet_outlined, AppColors.primaryLight)),
+         Expanded(child: _buildStatItem('₹${_todayEarnings.toStringAsFixed(0)}', 'Today\'s Earnings', Icons.account_balance_wallet_outlined, AppColors.primaryLight)),
          const SizedBox(width: 12),
-         Expanded(child: _buildStatItem('0', 'Today\'s Rides', Icons.directions_car_outlined, AppColors.info)),
+         Expanded(child: _buildStatItem('$_todayRides', 'Today\'s Rides', Icons.directions_car_outlined, AppColors.info)),
        ],
      );
   }
 
   Widget _buildStatItem(String value, String label, IconData icon, Color color) {
+    final cardBg = _isDarkMode ? const Color(0xFF1E293B) : AppColors.white;
+    final titleColor = _isDarkMode ? Colors.white : AppColors.textPrimary;
+    final subtitleColor = _isDarkMode ? Colors.white70 : AppColors.textSecondary;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.white,
+        color: cardBg,
         borderRadius: BorderRadius.circular(20),
-        boxShadow: AppShadows.soft,
+        boxShadow: _isDarkMode ? [] : AppShadows.soft,
+        border: _isDarkMode ? Border.all(color: Colors.white12) : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1228,7 +1406,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.1),
+              color: color.withValues(alpha: _isDarkMode ? 0.2 : 0.1),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(icon, color: color, size: 22),
@@ -1237,7 +1415,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           Text(
             value,
             style: GoogleFonts.inter(
-              color: AppColors.textPrimary,
+              color: titleColor,
               fontSize: 22,
               fontWeight: FontWeight.w800,
             ),
@@ -1246,7 +1424,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           Text(
             label,
             style: GoogleFonts.inter(
-              color: AppColors.textSecondary,
+              color: subtitleColor,
               fontSize: 12,
               fontWeight: FontWeight.w500,
             ),
@@ -1258,6 +1436,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   /// Waiting for payment bottom sheet
   Widget _buildWaitingPaymentSheet() {
+    final sheetBg = _isDarkMode ? const Color(0xFF1E293B) : Colors.white;
+    final textColor = _isDarkMode ? Colors.white : Colors.black87;
+    final subtextColor = _isDarkMode ? Colors.white60 : Colors.grey[600];
+
     return Align(
       alignment: Alignment.bottomCenter,
       child: Container(
@@ -1265,8 +1447,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         margin: const EdgeInsets.fromLTRB(16, 16, 16, 32),
         padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: sheetBg,
           borderRadius: BorderRadius.circular(24),
+          border: _isDarkMode ? Border.all(color: Colors.white12) : null,
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.15),
@@ -1284,12 +1467,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               const SizedBox(height: 16),
               Text(
                 'Waiting for Payment',
-                style: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.w700),
+                style: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.w700, color: textColor),
               ),
               const SizedBox(height: 8),
               Text(
                 'The rider is completing payment...',
-                style: GoogleFonts.inter(color: Colors.grey[600], fontSize: 14),
+                style: GoogleFonts.inter(color: subtextColor, fontSize: 14),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 20),
@@ -1351,12 +1534,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final ride = _currentRide ?? _pendingRide;
     if (ride == null) return const SizedBox.shrink();
 
+    final sheetBg = _isDarkMode ? const Color(0xFF1E293B) : AppColors.white;
+    final handleColor = _isDarkMode ? Colors.grey[600] : AppColors.lightGrey;
+
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        color: AppColors.white,
+        color: sheetBg,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-        boxShadow: AppShadows.medium,
+        boxShadow: _isDarkMode ? [] : AppShadows.medium,
+        border: _isDarkMode ? const Border(top: BorderSide(color: Colors.white12)) : null,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1365,7 +1552,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           Container(
             margin: const EdgeInsets.only(top: 12),
             width: 36, height: 4,
-            decoration: BoxDecoration(color: AppColors.lightGrey, borderRadius: BorderRadius.circular(2)),
+            decoration: BoxDecoration(color: handleColor, borderRadius: BorderRadius.circular(2)),
           ),
           // Status header
           _buildStatusHeader(),
@@ -1468,12 +1655,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   Widget _buildRiderCard() {
+    final cardBg = _isDarkMode ? const Color(0xFF0F172A) : Colors.grey[50];
+    final borderCol = _isDarkMode ? Colors.white12 : Colors.grey[200]!;
+    final nameColor = _isDarkMode ? Colors.white : Colors.black87;
+    final phoneColor = _isDarkMode ? Colors.white60 : Colors.grey[600];
+
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.grey[50],
+        color: cardBg,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.grey[200]!),
+        border: Border.all(color: borderCol),
       ),
       child: Row(
         children: [
@@ -1494,13 +1686,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(_riderName ?? 'Rider', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 15)),
+                Text(_riderName ?? 'Rider', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 15, color: nameColor)),
                 if (_riderPhone != null && _riderPhone!.isNotEmpty)
                   Row(
                     children: [
-                      Icon(Icons.phone_rounded, color: Colors.grey[500], size: 14),
+                      Icon(Icons.phone_rounded, color: phoneColor, size: 14),
                       const SizedBox(width: 4),
-                      Text(_riderPhone!, style: GoogleFonts.inter(color: Colors.grey[600], fontSize: 12)),
+                      Text(_riderPhone!, style: GoogleFonts.inter(color: phoneColor, fontSize: 12)),
                     ],
                   ),
               ],
@@ -1512,15 +1704,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   Widget _buildRouteDetails(Map<dynamic, dynamic> ride) {
-    final pickupName = ride['pickupName'] as String? ?? 'Pickup Location';
-    final dropName = ride['dropName'] as String? ?? 'Drop Location';
+    final pickupName = ride['pickupName']?.toString() ?? 'Pickup Location';
+    final dropName = ride['dropName']?.toString() ?? 'Drop Location';
+    final cardBg = _isDarkMode ? const Color(0xFF0F172A) : Colors.grey[50];
+    final borderCol = _isDarkMode ? Colors.white12 : Colors.grey[200]!;
+    final textColor = _isDarkMode ? Colors.white.withValues(alpha: 0.9) : Colors.black87;
+    final dividerCol = _isDarkMode ? Colors.white12 : Colors.grey[200];
 
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.grey[50],
+        color: cardBg,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.grey[200]!),
+        border: Border.all(color: borderCol),
       ),
       child: Row(
         children: [
@@ -1535,7 +1731,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   boxShadow: [BoxShadow(color: const Color(0xFF4CAF50).withValues(alpha: 0.3), blurRadius: 4)],
                 ),
               ),
-              Container(width: 2, height: 30, color: Colors.grey[300]),
+              Container(width: 2, height: 30, color: _isDarkMode ? Colors.grey[700] : Colors.grey[300]),
               Container(
                 width: 12, height: 12,
                 decoration: BoxDecoration(
@@ -1552,9 +1748,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(pickupName, style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
-                Container(margin: const EdgeInsets.symmetric(vertical: 8), height: 1, color: Colors.grey[200]),
-                Text(dropName, style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500), maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(pickupName, style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500, color: textColor), maxLines: 1, overflow: TextOverflow.ellipsis),
+                Container(margin: const EdgeInsets.symmetric(vertical: 8), height: 1, color: dividerCol),
+                Text(dropName, style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500, color: textColor), maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
             ),
           ),
