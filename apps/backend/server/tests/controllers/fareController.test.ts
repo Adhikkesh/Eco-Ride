@@ -200,9 +200,10 @@ describe("Fare Controller", () => {
         // @ts-expect-error
         expect(res._getData().eta_min).toBe(10);
 
-        // Calculate expected fare: 40 (base) + 5*12 (distance) + 10*1.5 (time) = 40 + 60 + 15 = 115
+        // Calculate expected fare: 40 (base) + 5*12 (distance) + 10*1.5 (time) = 115
+        // Green discount: round(5 * 0.5) = 3, so final = 115 - 3 = 112
         // @ts-expect-error
-        expect(res._getData().fare).toBe(115);
+        expect(res._getData().fare).toBe(112);
       });
 
       it("should apply 20% discount for pooled rides", async () => {
@@ -234,9 +235,10 @@ describe("Fare Controller", () => {
 
         // Assert
         expect(res._getStatusCode()).toBe(200);
-        // Standard fare would be 115, with 25% discount: 115 * 0.75 ≈ 86
+        // Standard fare 115, pool savings = round(115*0.25) = 29 → 86
+        // Green discount: round(5 * 0.5) = 3, so final = 86 - 3 = 83
         // @ts-expect-error
-        expect(res._getData().fare).toBe(86);
+        expect(res._getData().fare).toBe(83);
       });
 
       it("should calculate CO2 savings correctly", async () => {
@@ -433,9 +435,10 @@ describe("Fare Controller", () => {
 
         // Assert
         expect(res._getStatusCode()).toBe(200);
-        // Long fare: 40 + 100*12 + 120*1.5 = 40 + 1200 + 180 = 1420
+        // Long fare: 40 + 100*12 + 120*1.5 = 1420
+        // Green discount: min(100*0.5, 1420*0.1) = min(50, 142) = 50, final = 1370
         // @ts-expect-error
-        expect(res._getData().fare).toBe(1420);
+        expect(res._getData().fare).toBe(1370);
       });
       it("should return 200 with base fare when pickup and drop are identical", async () => {
         // Arrange
