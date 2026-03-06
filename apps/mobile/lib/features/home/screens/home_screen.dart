@@ -10,6 +10,8 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:location/location.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:file_picker/file_picker.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/services/map_service.dart';
@@ -80,6 +82,41 @@ class _HomeScreenState extends State<HomeScreen> {
   BitmapDescriptor? _carIcon; // Custom car icon for driver marker
   String _cameraFittedForPhase = ''; // Track which ride phase camera was fitted for
 
+  // --- Profile Drawer State ---
+  int _greenPoints = 0;
+  String? _phoneNumber;
+  Map<String, dynamic> _savedLocations = {}; // {home: {name, lat, lng}, work: {...}, favourite: {...}}
+  List<Map<String, dynamic>> _pastRides = [];
+  bool _loadingHistory = false;
+  bool _showPersonalInfo = false;
+  bool _showEcoPoints = false;
+  bool _showSavedPlaces = false;
+  bool _showRideHistory = false;
+  bool _isEditingProfile = false;
+  bool _savingProfile = false;
+  final TextEditingController _nameEditController = TextEditingController();
+  final TextEditingController _phoneEditController = TextEditingController();
+  final TextEditingController _homeAddrController = TextEditingController();
+  final TextEditingController _workAddrController = TextEditingController();
+  final TextEditingController _favAddrController = TextEditingController();
+
+  // --- Impact Stats State ---
+  int _ridesTaken = 0;
+  double _trustScore = 0.0;
+  double _totalMoneySaved = 0.0;
+
+  // --- Nearby Drivers State ---
+  int _availableDrivers = 0;
+  int _busyDrivers = 0;
+  StreamSubscription<DatabaseEvent>? _driverCountSubscription;
+
+  // --- Theme State ---
+  bool _isDarkMode = true;
+  String? _darkMapStyle;
+
+  // --- Map Interaction State (Web) ---
+  bool _isMouseOverMap = true; // Default true for mobile; toggled on web
+
     @override
   void initState() {
     super.initState();
@@ -87,6 +124,8 @@ class _HomeScreenState extends State<HomeScreen> {
     _getCurrentLocation();
     _checkActiveRide();
     _createCarIcon();
+    _loadDarkMapStyle();
+    _loadNearbyDriverCounts();
     _pickupController.addListener(() => _onSearchChanged(isPickup: true));
     _searchController.addListener(() => _onSearchChanged(isPickup: false));
   }
@@ -95,10 +134,16 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     _rideStatusSubscription?.cancel();
     _driverLocationSubscription?.cancel();
+    _driverCountSubscription?.cancel();
     _otpPollTimer?.cancel();
     _debounce?.cancel();
     _pickupController.dispose();
     _searchController.dispose();
+    _nameEditController.dispose();
+    _phoneEditController.dispose();
+    _homeAddrController.dispose();
+    _workAddrController.dispose();
+    _favAddrController.dispose();
     super.dispose();
   }
 
@@ -476,6 +521,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _driverHeading = 0;
       _lastDriverWrittenPosition = null;
       _cameraFittedForPhase = '';
+      _isPooled = false;
       // Clear ALL markers and polylines
       _markers.clear();
       _polylines.clear();
@@ -484,7 +530,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _destinationPosition = null;
       _pickupController.clear();
       _searchController.clear();
-      _isPooled = false;
     });
   }
 
@@ -1016,7 +1061,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final controller = isPickup ? _pickupController : _searchController;
     
     if (_debounce?.isActive ?? false) _debounce!.cancel();
-    _debounce = Timer(const Duration(milliseconds: 300), () {
+    _debounce = Timer(const Duration(milliseconds: 150), () {
       if (controller.text.isNotEmpty) {
         _fetchSuggestions(controller.text, isPickup: isPickup);
       } else {
@@ -1279,14 +1324,26 @@ class _HomeScreenState extends State<HomeScreen> {
       final userModel = await AuthService.instance.getCurrentUserData();
       if (userModel != null && mounted) {
         setState(() {
-          // Priority: 1. Full Name, 2. Email Prefix, 3. 'User'
           _userName = userModel.name ?? userModel.email.split('@')[0];
           _userEmail = userModel.email;
-          _userPhoto = null; // We can add storage photo support later
+          _greenPoints = userModel.greenPoints;
+          _phoneNumber = userModel.phoneNumber ?? userModel.toString();
         });
+
+        // Override name with displayName from raw Firestore doc if available (matches web)
+        final uid = AuthService.instance.currentUser?.uid;
+        if (uid != null) {
+          final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+          if (userDoc.exists && mounted) {
+            final data = userDoc.data()!;
+            final displayName = data['displayName'] as String?;
+            if (displayName != null && displayName.isNotEmpty) {
+              setState(() => _userName = displayName);
+            }
+          }
+        }
         debugPrint('HomeScreen: Loaded profile for $_userName');
       } else {
-        // Fallback for basic info if Firestore is slow/blocked
         final user = AuthService.instance.currentUser;
         if (user != null && mounted) {
           setState(() {
@@ -1295,8 +1352,349 @@ class _HomeScreenState extends State<HomeScreen> {
           });
         }
       }
+
+      // Fetch full user doc for photoURL and saved_locations
+      final uid = AuthService.instance.currentUser?.uid;
+      if (uid != null) {
+        final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+        if (userDoc.exists && mounted) {
+          final data = userDoc.data()!;
+          setState(() {
+            _userPhoto = data['photoURL'] as String?;
+            _phoneNumber = (data['phoneNumber'] ?? data['phone_number']) as String?;
+            _trustScore = (data['trust_score'] as num?)?.toDouble() ?? 0.0;
+            _greenPoints = (data['green_points'] as num?)?.toInt() ?? _greenPoints;
+            final savedLocs = data['saved_locations'];
+            if (savedLocs is Map) {
+              _savedLocations = Map<String, dynamic>.from(savedLocs);
+            }
+          });
+        }
+
+        // Fetch completed rides count and money saved
+        final ridesSnap = await FirebaseFirestore.instance
+            .collection('rides')
+            .where('riderId', isEqualTo: uid)
+            .get();
+        if (mounted) {
+          double moneySaved = 0.0;
+          int completedCount = 0;
+          for (final doc in ridesSnap.docs) {
+            final d = doc.data();
+            final status = (d['status'] as String?)?.toUpperCase() ?? '';
+            if (status == 'COMPLETED') {
+              completedCount++;
+              final co2 = (d['co2_saved_g'] as num?)?.toDouble() ?? 0.0;
+              moneySaved += co2 * 0.5; // ~₹0.5 per gram CO₂ saved
+            }
+          }
+          setState(() {
+            _ridesTaken = completedCount;
+            _totalMoneySaved = moneySaved;
+          });
+          debugPrint('HomeScreen: Found ${ridesSnap.docs.length} total rides, $completedCount COMPLETED, moneySaved=₹${moneySaved.toStringAsFixed(0)}');
+        }
+      }
     } catch (e) {
       debugPrint('HomeScreen: Error loading user data: $e');
+    }
+  }
+
+  /// Load nearby driver counts from Firestore active rides
+  Future<void> _loadNearbyDriverCounts() async {
+    try {
+      // Query Firestore rides collection for rides with active statuses
+      final activeRidesSnap = await FirebaseFirestore.instance
+          .collection('rides')
+          .where('status', whereIn: ['MATCHED', 'IN_PROGRESS', 'ARRIVED', 'SEARCHING'])
+          .get();
+
+      // Filter out stale rides (older than 24 hours are likely abandoned)
+      final now = DateTime.now();
+      int busy = 0;
+      final driverIds = <String>{};
+      for (final doc in activeRidesSnap.docs) {
+        final data = doc.data();
+        // Check if ride was created within the last 24 hours
+        final createdAt = data['createdAt'] as Timestamp?;
+        final timestamp = data['timestamp'] as Timestamp?;
+        final rideTime = createdAt ?? timestamp;
+        if (rideTime != null) {
+          final rideDate = rideTime.toDate();
+          if (now.difference(rideDate).inHours > 24) continue; // Skip stale rides
+        }
+        final driverId = data['driverId'] as String?;
+        if (driverId != null && driverId.isNotEmpty) {
+          driverIds.add(driverId);
+        }
+        busy++;
+      }
+
+      if (mounted) {
+        setState(() {
+          _busyDrivers = driverIds.length; // Count unique busy drivers
+          _availableDrivers = 0;
+        });
+        debugPrint('HomeScreen: Firestore active rides check -> total active=${activeRidesSnap.docs.length}, recent busy=$busy, unique drivers=${driverIds.length}');
+      }
+    } catch (e) {
+      debugPrint('HomeScreen: Error loading driver counts: $e');
+    }
+  }
+
+  /// Load dark map style JSON
+  Future<void> _loadDarkMapStyle() async {
+    _darkMapStyle = '''[
+      {"elementType": "geometry", "stylers": [{"color": "#242f3e"}]},
+      {"elementType": "labels.text.stroke", "stylers": [{"color": "#242f3e"}]},
+      {"elementType": "labels.text.fill", "stylers": [{"color": "#746855"}]},
+      {"featureType": "administrative.locality", "elementType": "labels.text.fill", "stylers": [{"color": "#d59563"}]},
+      {"featureType": "poi", "elementType": "labels.text.fill", "stylers": [{"color": "#d59563"}]},
+      {"featureType": "poi.park", "elementType": "geometry", "stylers": [{"color": "#263c3f"}]},
+      {"featureType": "poi.park", "elementType": "labels.text.fill", "stylers": [{"color": "#6b9a76"}]},
+      {"featureType": "road", "elementType": "geometry", "stylers": [{"color": "#38414e"}]},
+      {"featureType": "road", "elementType": "geometry.stroke", "stylers": [{"color": "#212a37"}]},
+      {"featureType": "road", "elementType": "labels.text.fill", "stylers": [{"color": "#9ca5b3"}]},
+      {"featureType": "road.highway", "elementType": "geometry", "stylers": [{"color": "#746855"}]},
+      {"featureType": "road.highway", "elementType": "geometry.stroke", "stylers": [{"color": "#1f2835"}]},
+      {"featureType": "road.highway", "elementType": "labels.text.fill", "stylers": [{"color": "#f3d19c"}]},
+      {"featureType": "transit", "elementType": "geometry", "stylers": [{"color": "#2f3948"}]},
+      {"featureType": "transit.station", "elementType": "labels.text.fill", "stylers": [{"color": "#d59563"}]},
+      {"featureType": "water", "elementType": "geometry", "stylers": [{"color": "#17263c"}]},
+      {"featureType": "water", "elementType": "labels.text.fill", "stylers": [{"color": "#515c6d"}]},
+      {"featureType": "water", "elementType": "labels.text.stroke", "stylers": [{"color": "#17263c"}]}
+    ]''';
+  }
+
+  /// Toggle dark/light theme
+  Future<void> _toggleTheme() async {
+    setState(() => _isDarkMode = !_isDarkMode);
+    try {
+      final controller = await _controller.future;
+      if (_isDarkMode && _darkMapStyle != null) {
+        await controller.setMapStyle(_darkMapStyle);
+      } else {
+        await controller.setMapStyle(null);
+      }
+    } catch (e) {
+      debugPrint('HomeScreen: Error setting map style: $e');
+    }
+  }
+
+  /// Show Green Rewards bottom sheet
+  void _showGreenRewardsSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: BoxDecoration(
+          color: _isDarkMode ? const Color(0xFF1E293B) : AppColors.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 36, height: 4,
+              decoration: BoxDecoration(color: AppColors.lightGrey, borderRadius: BorderRadius.circular(2)),
+            ),
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [Color(0xFF059669), Color(0xFF10B981)]),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.eco, color: Colors.white, size: 40),
+                  const SizedBox(width: 16),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Your Green Points', style: GoogleFonts.inter(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500)),
+                      const SizedBox(height: 4),
+                      Text('$_greenPoints', style: GoogleFonts.inter(color: Colors.white, fontSize: 36, fontWeight: FontWeight.w800)),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text('How to Earn Points', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w700, color: _isDarkMode ? Colors.white : AppColors.textPrimary)),
+            const SizedBox(height: 12),
+            _buildRewardRow(Icons.directions_car, 'Complete a ride', '+10 pts'),
+            _buildRewardRow(Icons.people, 'Pool with others', '+15 pts'),
+            _buildRewardRow(Icons.electric_car, 'Use an EV', '+20 pts'),
+            _buildRewardRow(Icons.star, 'Rate your driver', '+5 pts'),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRewardRow(IconData icon, String action, String points) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: AppColors.primary, size: 18),
+          ),
+          const SizedBox(width: 12),
+          Expanded(child: Text(action, style: GoogleFonts.inter(fontSize: 14, color: _isDarkMode ? Colors.white.withOpacity(0.9) : AppColors.textPrimary))),
+          Text(points, style: GoogleFonts.inter(fontWeight: FontWeight.w700, color: AppColors.primary, fontSize: 14)),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _fetchRideHistory() async {
+    if (_loadingHistory) return;
+    setState(() => _loadingHistory = true);
+    try {
+      final uid = AuthService.instance.currentUser?.uid;
+      if (uid == null) return;
+      final snapshot = await FirebaseFirestore.instance
+          .collection('rides')
+          .where('riderId', isEqualTo: uid)
+          .get();
+      if (mounted) {
+        final rides = snapshot.docs.where((doc) {
+          final status = (doc.data()['status'] as String?)?.toUpperCase() ?? '';
+          return status == 'COMPLETED';
+        }).map((doc) {
+          final d = doc.data();
+          return {
+            'id': doc.id,
+            'pickupName': d['pickupName'] ?? 'Trip',
+            'dropName': d['dropName'] ?? 'Destination',
+            'fare': d['fare'],
+            'timestamp': d['timestamp'],
+            'createdAt': d['createdAt'],
+            'duration': d['duration'],
+            'greenPointsAwarded': d['greenPointsAwarded'],
+          };
+        }).toList();
+        rides.sort((a, b) {
+          final tA = (a['timestamp'] as Timestamp?)?.seconds ?? (a['createdAt'] as Timestamp?)?.seconds ?? 0;
+          final tB = (b['timestamp'] as Timestamp?)?.seconds ?? (b['createdAt'] as Timestamp?)?.seconds ?? 0;
+          return tB.compareTo(tA);
+        });
+        setState(() {
+          _pastRides = rides;
+        });
+      }
+    } catch (e) {
+      debugPrint('HomeScreen: Error fetching ride history: $e');
+    } finally {
+      if (mounted) setState(() => _loadingHistory = false);
+    }
+  }
+
+  Future<void> _saveProfile() async {
+    final uid = AuthService.instance.currentUser?.uid;
+    if (uid == null) return;
+    setState(() => _savingProfile = true);
+    try {
+      final updates = <String, dynamic>{
+        'name': _nameEditController.text.trim(),
+        'displayName': _nameEditController.text.trim(),
+        'phoneNumber': _phoneEditController.text.trim(),
+        'phone_number': _phoneEditController.text.trim(),
+      };
+      // Update saved_locations names
+      if (_homeAddrController.text.isNotEmpty) {
+        updates['saved_locations.home.name'] = _homeAddrController.text.trim();
+      }
+      if (_workAddrController.text.isNotEmpty) {
+        updates['saved_locations.work.name'] = _workAddrController.text.trim();
+      }
+      if (_favAddrController.text.isNotEmpty) {
+        updates['saved_locations.favourite.name'] = _favAddrController.text.trim();
+      }
+      await FirebaseFirestore.instance.collection('users').doc(uid).update(updates);
+      // Also update Firebase Auth displayName
+      await AuthService.instance.currentUser?.updateDisplayName(_nameEditController.text.trim());
+      if (mounted) {
+        setState(() {
+          _userName = _nameEditController.text.trim();
+          _phoneNumber = _phoneEditController.text.trim();
+          _isEditingProfile = false;
+        });
+        // Refresh saved locations
+        _loadUserData();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Profile updated!'), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      debugPrint('HomeScreen: Error saving profile: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error saving: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _savingProfile = false);
+    }
+  }
+
+  Future<void> _uploadProfilePicture() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+        withData: true,
+      );
+
+      if (result != null && result.files.first.bytes != null) {
+        final uid = AuthService.instance.currentUser?.uid;
+        if (uid == null) return;
+
+        setState(() => _savingProfile = true);
+        
+        // Upload to Firebase Storage - MATCH WEB (dash)
+        final fileName = 'profile-pictures/$uid';
+        final photoURL = await AuthService.instance.uploadBytes(
+          result.files.first.bytes!,
+          fileName,
+        );
+
+        // Update Firestore
+        await FirebaseFirestore.instance.collection('users').doc(uid).update({
+          'photoURL': photoURL,
+          'updated_at': FieldValue.serverTimestamp(),
+        });
+
+        // Update Firebase Auth
+        await AuthService.instance.currentUser?.updatePhotoURL(photoURL);
+
+        if (mounted) {
+          setState(() {
+            _userPhoto = photoURL;
+            _savingProfile = false;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Profile picture updated!'), backgroundColor: Colors.green),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('HomeScreen: Error uploading DP: $e');
+      if (mounted) {
+        setState(() => _savingProfile = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error uploading: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -1382,17 +1780,35 @@ class _HomeScreenState extends State<HomeScreen> {
       body: Stack(
         children: [
           // 1. Google Map Background
-          GoogleMap(
-            mapType: MapType.normal,
-            initialCameraPosition: _kDefaultLocation,
-            myLocationEnabled: true,
-            myLocationButtonEnabled: false,
-            zoomControlsEnabled: false,
-            markers: _markers,
-            polylines: _polylines,
-            onMapCreated: (GoogleMapController controller) {
-              _controller.complete(controller);
+          MouseRegion(
+            onEnter: (_) {
+              if (kIsWeb && !_isMouseOverMap) {
+                setState(() => _isMouseOverMap = true);
+              }
             },
+            onExit: (_) {
+              if (kIsWeb && _isMouseOverMap) {
+                setState(() => _isMouseOverMap = false);
+              }
+            },
+            child: GoogleMap(
+              mapType: MapType.normal,
+              initialCameraPosition: _kDefaultLocation,
+              myLocationEnabled: true,
+              myLocationButtonEnabled: false,
+              zoomControlsEnabled: false,
+              scrollGesturesEnabled: _isMouseOverMap,
+              zoomGesturesEnabled: _isMouseOverMap,
+              markers: _markers,
+              polylines: _polylines,
+              onMapCreated: (GoogleMapController controller) {
+                _controller.complete(controller);
+                // Apply dark map style on startup if dark mode is active
+                if (_isDarkMode && _darkMapStyle != null) {
+                  controller.setMapStyle(_darkMapStyle);
+                }
+              },
+            ),
           ),
 
           // 2. Overlay Content (Header + Search)
@@ -1401,7 +1817,14 @@ class _HomeScreenState extends State<HomeScreen> {
             top: 0,
             left: 0,
             right: 0,
-            child: SafeArea(
+            child: MouseRegion(
+              onEnter: (_) {
+                if (kIsWeb && _isMouseOverMap) setState(() => _isMouseOverMap = false);
+              },
+              onExit: (_) {
+                if (kIsWeb && !_isMouseOverMap) setState(() => _isMouseOverMap = true);
+              },
+              child: SafeArea(
               bottom: false,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
@@ -1413,14 +1836,11 @@ class _HomeScreenState extends State<HomeScreen> {
                      if (!_isSearchingForDriver) ...[
                        const SizedBox(height: 12),
                        _buildRouteCard(),
-                       if (_pickupPosition != null && _destinationPosition != null) ...[
-                         const SizedBox(height: 10),
-                         _buildPoolingToggle(),
-                       ],
                      ],
                   ],
                 ),
               ),
+            ),
             ),
           ),
 
@@ -1437,15 +1857,21 @@ class _HomeScreenState extends State<HomeScreen> {
             minChildSize: 0.12,
             maxChildSize: 0.85,
             builder: (context, scrollController) {
-              return Listener(
-                onPointerSignal: (event) {
-                  if (event is PointerScrollEvent) {
-                    // Consume the event to prevent map zoom on web
-                  }
+              return MouseRegion(
+                onEnter: (_) {
+                  if (kIsWeb && _isMouseOverMap) setState(() => _isMouseOverMap = false);
                 },
+                onExit: (_) {
+                  if (kIsWeb && !_isMouseOverMap) setState(() => _isMouseOverMap = true);
+                },
+                child: Listener(
+                  onPointerSignal: (event) {
+                    // Block scroll events from propagating to the map on web
+                  },
+                  behavior: HitTestBehavior.opaque,
                 child: Container(
                   decoration: BoxDecoration(
-                    color: AppColors.surface,
+                    color: _isDarkMode ? const Color(0xFF0F172A) : AppColors.surface,
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
                     boxShadow: [
                       BoxShadow(
@@ -1478,7 +1904,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         Text(
                           'Quick Actions',
                           style: GoogleFonts.inter(
-                            color: AppColors.textPrimary,
+                            color: _isDarkMode ? Colors.white : AppColors.textPrimary,
                             fontSize: 16,
                             fontWeight: FontWeight.w700,
                           ),
@@ -1500,7 +1926,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         Text(
                           'Nearby Drivers',
                           style: GoogleFonts.inter(
-                             color: AppColors.textPrimary,
+                             color: _isDarkMode ? Colors.white : AppColors.textPrimary,
                              fontSize: 16,
                              fontWeight: FontWeight.w700,
                           ),
@@ -1510,6 +1936,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ],
                     ),
                   ),
+                ),
                 ),
               );
             },
@@ -1527,16 +1954,34 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Container(
             padding: const EdgeInsets.all(11),
             decoration: BoxDecoration(
-              color: AppColors.white,
+              color: _isDarkMode ? const Color(0xFF1E293B) : AppColors.white,
               borderRadius: BorderRadius.circular(14),
               boxShadow: AppShadows.soft,
             ),
-            child: const Icon(Icons.menu_rounded, color: AppColors.textPrimary, size: 22),
+            child: Icon(Icons.menu_rounded, color: _isDarkMode ? Colors.white : AppColors.textPrimary, size: 22),
           ),
         ),
         const Spacer(),
         _buildRoleSwitch(),
-        const SizedBox(width: 10),
+        const SizedBox(width: 8),
+        // Theme Toggle
+        GestureDetector(
+          onTap: _toggleTheme,
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: _isDarkMode ? const Color(0xFF1E293B) : AppColors.white,
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: AppShadows.soft,
+            ),
+            child: Icon(
+              _isDarkMode ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+              color: _isDarkMode ? Colors.amber : AppColors.textSecondary,
+              size: 20,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
         _buildUserAvatar(),
       ],
     );
@@ -1573,15 +2018,24 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Row(
         children: [
           Container(
-            width: 30,
-            height: 30,
+            width: 32,
+            height: 32,
             decoration: BoxDecoration(
               gradient: AppGradients.primaryButton,
               shape: BoxShape.circle,
+              border: Border.all(color: AppColors.white, width: 1.5),
             ),
-            child: _userPhoto != null
-              ? ClipOval(child: Image.network(_userPhoto!, fit: BoxFit.cover))
-              : const Icon(Icons.person, size: 16, color: AppColors.white),
+            child: ClipOval(
+              child: _userPhoto != null && _userPhoto!.isNotEmpty
+                ? Image.network(
+                    _userPhoto!,
+                    fit: BoxFit.cover,
+                    width: 32,
+                    height: 32,
+                    errorBuilder: (context, error, stackTrace) => _buildInitialsAvatar(fontSize: 14),
+                  )
+                : _buildInitialsAvatar(fontSize: 14),
+            ),
           ),
           const SizedBox(width: 8),
           Text(
@@ -1598,179 +2052,135 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildRouteCard() {
+    // Theme-aware colors
+    final cardBg = _isDarkMode ? const Color(0xFF1A2332) : Colors.white;
+    final borderColor = _isDarkMode ? AppColors.primary.withOpacity(0.3) : Colors.grey.withOpacity(0.2);
+    final shadowColor = _isDarkMode ? Colors.black.withOpacity(0.25) : Colors.black.withOpacity(0.08);
+    final dotBorderColor = _isDarkMode ? Colors.white.withOpacity(0.4) : Colors.white.withOpacity(0.9);
+    final dashColor = _isDarkMode ? Colors.grey.withOpacity(0.4) : Colors.grey.withOpacity(0.35);
+    final dividerColor = _isDarkMode ? Colors.grey.withOpacity(0.3) : Colors.grey.withOpacity(0.2);
+
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.white,
+        color: cardBg,
         borderRadius: BorderRadius.circular(20),
-        boxShadow: AppShadows.medium,
+        border: Border.all(color: borderColor, width: 1.5),
+        boxShadow: [
+          BoxShadow(color: shadowColor, blurRadius: 20, offset: const Offset(0, 8)),
+          if (_isDarkMode) BoxShadow(
+            color: AppColors.primary.withOpacity(0.08),
+            blurRadius: 30,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Pickup Field
-          _buildSearchField(
-            controller: _pickupController,
-            hint: 'Pickup location',
-            icon: Icons.circle,
-            iconColor: AppColors.primaryLight,
-            isPickup: true,
-          ),
-
+          // Pickup + Destination with connected line
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 52),
-            child: Container(height: 1, color: AppColors.lightGrey.withValues(alpha: 0.5)),
-          ),
-
-          // Destination Field
-          _buildSearchField(
-            controller: _searchController,
-            hint: 'Where to?',
-            icon: Icons.circle,
-            iconColor: AppColors.error,
-            isPickup: false,
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Route indicator dots + line
+                Padding(
+                  padding: const EdgeInsets.only(top: 14),
+                  child: Column(
+                    children: [
+                      // Green pickup dot with glow
+                      Container(
+                        width: 14,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF4CAF50),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: dotBorderColor, width: 1.5),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF4CAF50).withOpacity(0.5),
+                              blurRadius: 8,
+                              spreadRadius: 1,
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Dashed vertical line
+                      ...List.generate(3, (_) => Column(
+                        children: [
+                          const SizedBox(height: 3),
+                          Container(
+                            width: 2,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: dashColor,
+                              borderRadius: BorderRadius.circular(1),
+                            ),
+                          ),
+                        ],
+                      )),
+                      const SizedBox(height: 3),
+                      // Red destination dot with glow
+                      Container(
+                        width: 14,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEF5350),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: dotBorderColor, width: 1.5),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFFEF5350).withOpacity(0.5),
+                              blurRadius: 8,
+                              spreadRadius: 1,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Text fields
+                Expanded(
+                  child: Column(
+                    children: [
+                      _buildSearchField(
+                        controller: _pickupController,
+                        hint: 'Pickup location',
+                        icon: Icons.circle,
+                        iconColor: const Color(0xFF4CAF50),
+                        isPickup: true,
+                      ),
+                      Container(
+                        height: 1,
+                        margin: const EdgeInsets.symmetric(horizontal: 4),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              Colors.transparent,
+                              dividerColor,
+                              Colors.transparent,
+                            ],
+                          ),
+                        ),
+                      ),
+                      _buildSearchField(
+                        controller: _searchController,
+                        hint: 'Where to?',
+                        icon: Icons.circle,
+                        iconColor: const Color(0xFFEF5350),
+                        isPickup: false,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
 
           if (_pickupSuggestions.isNotEmpty) _buildSuggestionsList(isPickup: true),
           if (_suggestions.isNotEmpty) _buildSuggestionsList(isPickup: false),
-        ],
-      ),
-    );
-  }
-
-  /// Share Ride (pooling) toggle — mirrors web app's ECO-RIDE POOLING TOGGLE
-  Widget _buildPoolingToggle() {
-    return Container(
-      decoration: BoxDecoration(
-        color: _isPooled ? const Color(0xFFECFDF5) : AppColors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: _isPooled
-              ? AppColors.primaryLight.withValues(alpha: 0.5)
-              : AppColors.lightGrey,
-        ),
-        boxShadow: AppShadows.soft,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Toggle row
-          InkWell(
-            borderRadius: BorderRadius.circular(16),
-            onTap: () {
-              setState(() {
-                _isPooled = !_isPooled;
-                // Clear estimate when toggling so user re-estimates
-                if (_estimateData != null) {
-                  _estimateData = null;
-                  _polylines.clear();
-                }
-              });
-            },
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Row(
-                children: [
-                  // Icon
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      gradient: _isPooled
-                          ? AppGradients.primaryButton
-                          : const LinearGradient(colors: [Color(0xFFE2E8F0), Color(0xFFCBD5E1)]),
-                      borderRadius: BorderRadius.circular(11),
-                    ),
-                    child: const Icon(Icons.group, color: Colors.white, size: 20),
-                  ),
-                  const SizedBox(width: 12),
-                  // Labels
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Share Ride',
-                          style: GoogleFonts.inter(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                        Text(
-                          'Save up to 35% & reduce CO₂',
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            color: AppColors.textSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  // Toggle switch
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 250),
-                    width: 48,
-                    height: 28,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(14),
-                      gradient: _isPooled ? AppGradients.primaryButton : null,
-                      color: _isPooled ? null : const Color(0xFFCBD5E1),
-                    ),
-                    child: AnimatedAlign(
-                      duration: const Duration(milliseconds: 250),
-                      alignment: _isPooled ? Alignment.centerRight : Alignment.centerLeft,
-                      child: Container(
-                        width: 22,
-                        height: 22,
-                        margin: const EdgeInsets.symmetric(horizontal: 3),
-                        decoration: const BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(color: Colors.black26, blurRadius: 3, offset: Offset(0, 1)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Info chips (visible when enabled)
-          if (_isPooled)
-            Container(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Row(
-                      children: [
-                        const Icon(Icons.eco, color: AppColors.primary, size: 14),
-                        const SizedBox(width: 4),
-                        Text(
-                          '25% fare discount',
-                          style: GoogleFonts.inter(fontSize: 11, color: AppColors.primary, fontWeight: FontWeight.w500),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: Row(
-                      children: [
-                        const Icon(Icons.eco, color: AppColors.primary, size: 14),
-                        const SizedBox(width: 4),
-                        Text(
-                          '1.5x green points',
-                          style: GoogleFonts.inter(fontSize: 11, color: AppColors.primary, fontWeight: FontWeight.w500),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
         ],
       ),
     );
@@ -1783,57 +2193,86 @@ class _HomeScreenState extends State<HomeScreen> {
     required Color iconColor,
     required bool isPickup,
   }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        children: [
-          Icon(icon, color: iconColor, size: 20),
-          const SizedBox(width: 12),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              style: GoogleFonts.inter(color: Colors.black, fontSize: 14, fontWeight: FontWeight.w500),
-              decoration: InputDecoration(
-                hintText: hint,
-                hintStyle: GoogleFonts.inter(color: Colors.black45, fontSize: 14),
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 12),
-              ),
-              onTap: () {
-                // Clear the other suggestions when switching fields
-                setState(() {
-                  if (isPickup) _suggestions = [];
-                  else _pickupSuggestions = [];
-                });
-              },
-            ),
-          ),
-        ],
+    // Theme-aware text colors
+    final textColor = _isDarkMode ? Colors.white : Colors.black87;
+    final hintColor = _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade500;
+    final clearColor = _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600;
+
+    return TextField(
+      controller: controller,
+      style: GoogleFonts.inter(
+        color: textColor,
+        fontSize: 15,
+        fontWeight: FontWeight.w500,
       ),
+      cursorColor: textColor,
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: GoogleFonts.inter(
+          color: hintColor,
+          fontSize: 15,
+          fontWeight: FontWeight.w400,
+        ),
+        border: InputBorder.none,
+        enabledBorder: InputBorder.none,
+        focusedBorder: InputBorder.none,
+        filled: true,
+        fillColor: Colors.transparent,
+        hoverColor: Colors.transparent,
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+        suffixIcon: controller.text.isNotEmpty
+            ? GestureDetector(
+                onTap: () {
+                  setState(() {
+                    controller.clear();
+                    if (isPickup) _pickupSuggestions = [];
+                    else _suggestions = [];
+                  });
+                },
+                child: Icon(Icons.close, color: clearColor, size: 18),
+              )
+            : null,
+      ),
+      onTap: () {
+        setState(() {
+          if (isPickup) _suggestions = [];
+          else _pickupSuggestions = [];
+        });
+      },
     );
   }
 
   Widget _buildSuggestionsList({required bool isPickup}) {
     final suggestions = isPickup ? _pickupSuggestions : _suggestions;
+    // Theme-aware colors
+    final listBg = _isDarkMode ? const Color(0xFF1A2332) : Colors.white;
+    final separatorColor = _isDarkMode ? Colors.grey.withOpacity(0.15) : Colors.grey.withOpacity(0.12);
+    final textColor = _isDarkMode ? Colors.white.withOpacity(0.85) : Colors.black87;
+    final locationLabelColor = const Color(0xFF26C6DA);
+
     return Column(
       children: [
-        const Divider(color: Colors.grey, height: 1, thickness: 0.1),
+        Divider(color: _isDarkMode ? Colors.grey.withOpacity(0.2) : Colors.grey.withOpacity(0.15), height: 1, thickness: 0.5),
         Container(
           constraints: const BoxConstraints(maxHeight: 250),
+          decoration: BoxDecoration(
+            color: listBg,
+            borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
+          ),
           child: ListView.separated(
             shrinkWrap: true,
             padding: EdgeInsets.zero,
             itemCount: suggestions.length + (isPickup ? 1 : 0),
-            separatorBuilder: (context, index) => Divider(color: Colors.grey.withOpacity(0.1), height: 1),
+            separatorBuilder: (context, index) => Divider(color: separatorColor, height: 1),
             itemBuilder: (context, index) {
               // Show "Use Current Location" as first item for Pickup
               if (isPickup && index == 0) {
                  return ListTile(
-                  leading: const Icon(Icons.my_location, color: Colors.blue, size: 20),
+                  leading: Icon(Icons.my_location, color: locationLabelColor, size: 20),
                   title: Text(
                     'Use Current Location',
-                    style: GoogleFonts.inter(color: Colors.blue, fontSize: 13, fontWeight: FontWeight.w600),
+                    style: GoogleFonts.inter(color: locationLabelColor, fontSize: 13, fontWeight: FontWeight.w600),
                   ),
                   dense: true,
                   onTap: _useCurrentLocationForPickup,
@@ -1842,11 +2281,15 @@ class _HomeScreenState extends State<HomeScreen> {
               
               final suggestion = isPickup ? suggestions[index - 1] : suggestions[index];
               return ListTile(
-                leading: const Icon(Icons.location_on, color: Colors.grey, size: 18),
+                leading: Icon(
+                  Icons.location_on,
+                  color: isPickup ? const Color(0xFF4CAF50).withOpacity(0.8) : const Color(0xFFEF5350).withOpacity(0.8),
+                  size: 18,
+                ),
                 title: Text(
                   suggestion['description'],
-                  style: GoogleFonts.inter(color: Colors.black87, fontSize: 13),
-                  maxLines: 1,
+                  style: GoogleFonts.inter(color: textColor, fontSize: 13),
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
                 dense: true,
@@ -1923,24 +2366,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
-                        gradient: AppGradients.primaryButton,
+                        gradient: const LinearGradient(colors: [Color(0xFF22C55E), Color(0xFF10B981)]),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.group, color: Colors.white, size: 12),
-                          const SizedBox(width: 4),
-                          Text(
-                            'SHARED RIDE',
-                            style: GoogleFonts.inter(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                        ],
+                      child: Text(
+                        'SHARED RIDE',
+                        style: GoogleFonts.inter(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700),
                       ),
                     ),
                   ],
@@ -1974,41 +2405,14 @@ class _HomeScreenState extends State<HomeScreen> {
                                fontWeight: FontWeight.w500,
                              ),
                            ),
-                           Row(
-                             crossAxisAlignment: CrossAxisAlignment.baseline,
-                             textBaseline: TextBaseline.alphabetic,
-                             children: [
-                               Text(
-                                 '₹${_estimateData!['fare']}',
-                                 style: GoogleFonts.inter(
-                                   color: AppColors.textPrimary,
-                                   fontSize: 26,
-                                   fontWeight: FontWeight.w800,
-                                 ),
-                               ),
-                               if (_isPooled && _estimateData!['solo_fare'] != null &&
-                                   (_estimateData!['solo_fare'] as num) > (_estimateData!['fare'] as num)) ...[
-                                 const SizedBox(width: 8),
-                                 Text(
-                                   '₹${_estimateData!['solo_fare']}',
-                                   style: GoogleFonts.inter(
-                                     color: AppColors.grey,
-                                     fontSize: 14,
-                                     decoration: TextDecoration.lineThrough,
-                                   ),
-                                 ),
-                               ],
-                             ],
-                           ),
-                           if (_isPooled && (_estimateData!['pool_discount_pct'] as num? ?? 0) > 0)
-                             Text(
-                               'You save ₹${_estimateData!['pool_savings']} (${_estimateData!['pool_discount_pct']}% off)',
-                               style: GoogleFonts.inter(
-                                 color: AppColors.primary,
-                                 fontSize: 11,
-                                 fontWeight: FontWeight.w600,
-                               ),
+                           Text(
+                             '₹${_estimateData!['fare']}',
+                             style: GoogleFonts.inter(
+                               color: AppColors.textPrimary,
+                               fontSize: 26,
+                               fontWeight: FontWeight.w800,
                              ),
+                           ),
                          ],
                        ),
                      ],
@@ -2183,20 +2587,26 @@ class _HomeScreenState extends State<HomeScreen> {
     return Row(
       children: [
         Expanded(
-          child: _buildActionCard(
-            'Get Price Estimate',
-            'Check fare & ETA',
-            Icons.attach_money,
-            Colors.green.shade800,
+          child: GestureDetector(
+            onTap: _handleFindRide,
+            child: _buildActionCard(
+              'Get Price Estimate',
+              'Check fare & ETA',
+              Icons.attach_money,
+              Colors.green.shade800,
+            ),
           ),
         ),
         const SizedBox(width: 12),
         Expanded(
-          child: _buildActionCard(
-            'Green Rewards',
-            'Your eco-points',
-            Icons.card_giftcard,
-            Colors.teal.shade800,
+          child: GestureDetector(
+            onTap: _showGreenRewardsSheet,
+            child: _buildActionCard(
+              'Green Rewards',
+              '$_greenPoints pts',
+              Icons.card_giftcard,
+              Colors.teal.shade800,
+            ),
           ),
         ),
       ],
@@ -2207,9 +2617,9 @@ class _HomeScreenState extends State<HomeScreen> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: _isDarkMode ? const Color(0xFF1E293B) : AppColors.surface,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.lightGrey.withOpacity(0.1)),
+        border: Border.all(color: _isDarkMode ? Colors.white12 : AppColors.lightGrey.withOpacity(0.1)),
       ),
       child: Row(
         children: [
@@ -2229,7 +2639,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Text(
                   title,
                   style: GoogleFonts.inter(
-                    color: AppColors.textPrimary,
+                    color: _isDarkMode ? Colors.white : AppColors.textPrimary,
                     fontWeight: FontWeight.w600,
                     fontSize: 13,
                   ),
@@ -2237,8 +2647,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 Text(
                   subtitle,
                   style: GoogleFonts.inter(
-                    color: AppColors.textSecondary,
-                    fontSize: 10,
+                    color: _isDarkMode ? Colors.white.withValues(alpha: 0.8) : AppColors.textSecondary,
+                    fontSize: 11,
                   ),
                 ),
               ],
@@ -2253,17 +2663,17 @@ class _HomeScreenState extends State<HomeScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: _isDarkMode ? const Color(0xFF1E293B) : AppColors.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.lightGrey.withOpacity(0.1)),
+        border: Border.all(color: _isDarkMode ? Colors.white12 : AppColors.lightGrey.withOpacity(0.1)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _buildStatItem('0', 'Rides Taken'),
-          _buildStatItem('0%', 'Trust Score'),
-          _buildStatItem('0', 'Green Points'),
-          _buildStatItem('₹0', 'Money Saved'),
+          _buildStatItem('$_ridesTaken', 'Rides Taken'),
+          _buildStatItem('${(_trustScore * 100).toStringAsFixed(0)}%', 'Trust Score'),
+          _buildStatItem('$_greenPoints', 'Green Points'),
+          _buildStatItem('₹${_totalMoneySaved.toStringAsFixed(0)}', 'Money Saved'),
         ],
       ),
     );
@@ -2284,7 +2694,7 @@ class _HomeScreenState extends State<HomeScreen> {
         Text(
           label,
           style: GoogleFonts.inter(
-            color: AppColors.textSecondary,
+            color: _isDarkMode ? Colors.white70 : AppColors.textSecondary,
             fontSize: 10,
           ),
         ),
@@ -2296,9 +2706,9 @@ class _HomeScreenState extends State<HomeScreen> {
     return Container(
        padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: _isDarkMode ? const Color(0xFF1E293B) : AppColors.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.lightGrey.withOpacity(0.1)),
+        border: Border.all(color: _isDarkMode ? Colors.white12 : AppColors.lightGrey.withOpacity(0.1)),
       ),
       child: Row(
         children: [
@@ -2306,13 +2716,13 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.green.withOpacity(0.1),
+                color: Colors.green.withOpacity(_isDarkMode ? 0.2 : 0.1),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Column(
                 children: [
-                  Text('0', style: GoogleFonts.inter(color: AppColors.primary, fontSize: 24, fontWeight: FontWeight.bold)),
-                  Text('Available', style: GoogleFonts.inter(color: AppColors.textSecondary, fontSize: 12)),
+                  Text('$_availableDrivers', style: GoogleFonts.inter(color: AppColors.primary, fontSize: 24, fontWeight: FontWeight.bold)),
+                  Text('Available', style: GoogleFonts.inter(color: _isDarkMode ? Colors.white70 : AppColors.textSecondary, fontSize: 12)),
                 ],
               ),
             ),
@@ -2322,13 +2732,13 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Container(
                padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.orange.withOpacity(0.1),
+                color: Colors.orange.withOpacity(_isDarkMode ? 0.2 : 0.1),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Column(
                 children: [
-                   Text('0', style: GoogleFonts.inter(color: Colors.orange, fontSize: 24, fontWeight: FontWeight.bold)),
-                  Text('Busy', style: GoogleFonts.inter(color: AppColors.textSecondary, fontSize: 12)),
+                   Text('$_busyDrivers', style: GoogleFonts.inter(color: Colors.orange, fontSize: 24, fontWeight: FontWeight.bold)),
+                  Text('Busy', style: GoogleFonts.inter(color: _isDarkMode ? Colors.white70 : AppColors.textSecondary, fontSize: 12)),
                 ],
               ),
             ),
@@ -2338,51 +2748,625 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildDrawer() {
-    return Drawer(
-      backgroundColor: AppColors.surface,
-      child: Column(
-        children: [
-          UserAccountsDrawerHeader(
-            decoration: const BoxDecoration(color: AppColors.primary),
-            currentAccountPicture: CircleAvatar(
-              backgroundColor: Colors.white,
-              backgroundImage: _userPhoto != null ? NetworkImage(_userPhoto!) : null,
-              child: _userPhoto == null ? const Icon(Icons.person, color: AppColors.primary) : null,
+  Widget _buildDrawerSectionHeader({
+    required IconData icon,
+    required String title,
+    required bool isExpanded,
+    required VoidCallback onTap,
+    Color iconColor = AppColors.primary,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: isExpanded ? AppColors.primary.withOpacity(0.06) : Colors.transparent,
+          border: Border(
+            bottom: BorderSide(color: Colors.grey.withOpacity(0.1), width: 0.5),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: iconColor, size: 18),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                title,
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.w500,
+                  fontSize: 13,
+                  color: AppColors.textPrimary,
+                ),
+              ),
             ),
-            accountName: Text(_userName ?? 'User', style: GoogleFonts.inter(fontWeight: FontWeight.bold)),
-            accountEmail: Text(_userEmail ?? '', style: GoogleFonts.inter()),
+            Icon(
+              isExpanded ? Icons.expand_less : Icons.expand_more,
+              color: Colors.grey[400],
+              size: 18,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInitialsAvatar({double fontSize = 22}) {
+    String initials = '';
+    if (_userName != null && _userName!.isNotEmpty) {
+      final parts = _userName!.trim().split(' ');
+      if (parts.length >= 2) {
+        initials = (parts[0][0] + parts[1][0]).toUpperCase();
+      } else if (parts[0].isNotEmpty) {
+        initials = parts[0][0].toUpperCase();
+      }
+    }
+    
+    return Container(
+      color: Colors.white.withOpacity(0.9),
+      alignment: Alignment.center,
+      child: Text(
+        initials.isEmpty ? '?' : initials,
+        style: GoogleFonts.inter(
+          color: AppColors.primary,
+          fontWeight: FontWeight.w800,
+          fontSize: fontSize,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFallbackAvatar() {
+    return Container(
+      color: Colors.white,
+      child: const Icon(Icons.person, size: 30, color: AppColors.primary),
+    );
+  }
+
+  Widget _buildInfoRow(IconData icon, String label, String value, {Color? iconColor}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: iconColor ?? Colors.grey[400]),
+          const SizedBox(width: 12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: GoogleFonts.inter(fontSize: 10, color: Colors.grey[500], fontWeight: FontWeight.w400)),
+              const SizedBox(height: 1),
+              Text(
+                value.isEmpty ? 'Not set' : value,
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: value.isEmpty ? Colors.grey[400] : AppColors.textPrimary,
+                ),
+              ),
+            ],
           ),
-          ListTile(
-            leading: const Icon(Icons.history, color: AppColors.textPrimary),
-            title: Text('Ride History', style: GoogleFonts.inter(color: AppColors.textPrimary)),
-            onTap: () {},
-          ),
-          ListTile(
-            leading: const Icon(Icons.payment, color: AppColors.textPrimary),
-            title: Text('Payment Methods', style: GoogleFonts.inter(color: AppColors.textPrimary)),
-            onTap: () {},
-          ),
-          ListTile(
-            leading: const Icon(Icons.card_giftcard, color: AppColors.textPrimary),
-            title: Text('Promos', style: GoogleFonts.inter(color: AppColors.textPrimary)),
-            onTap: () {},
-          ),
-          ListTile(
-            leading: const Icon(Icons.help_outline, color: AppColors.textPrimary),
-            title: Text('Support', style: GoogleFonts.inter(color: AppColors.textPrimary)),
-            onTap: () {},
-          ),
-          const Spacer(),
-          const Divider(color: AppColors.lightGrey),
-          ListTile(
-            leading: const Icon(Icons.logout, color: Colors.red),
-            title: Text('Logout', style: GoogleFonts.inter(color: Colors.red)),
-            onTap: _handleLogout,
-          ),
-          const SizedBox(height: 20),
         ],
       ),
+    );
+  }
+
+  Widget _buildEditableRow(IconData icon, String label, TextEditingController controller, {Color? iconColor}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: iconColor ?? Colors.grey[500]),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: GoogleFonts.inter(fontSize: 11, color: Colors.grey[500], fontWeight: FontWeight.w500)),
+                const SizedBox(height: 2),
+                TextField(
+                  controller: controller,
+                  style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w500, color: AppColors.textPrimary),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 0),
+                    border: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.primary.withOpacity(0.3))),
+                    focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: AppColors.primary, width: 2)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDrawer() {
+    return MouseRegion(
+      onEnter: (_) {
+        if (kIsWeb && _isMouseOverMap) setState(() => _isMouseOverMap = false);
+      },
+      onExit: (_) {
+        if (kIsWeb && !_isMouseOverMap) setState(() => _isMouseOverMap = true);
+      },
+      child: Drawer(
+      backgroundColor: AppColors.surface,
+      width: 300, // Fixed width for a more standard sidebar look
+      child: Column(
+        children: [
+          // Profile Header with DP
+          Container(
+            width: double.infinity,
+            padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12, bottom: 12),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF1B5E20), Color(0xFF2E7D32), Color(0xFF43A047)],
+              ),
+            ),
+            child: Column(
+              children: [
+                // Profile Picture with Edit Overlay
+                GestureDetector(
+                  onTap: _savingProfile ? null : _uploadProfilePicture,
+                  child: Stack(
+                    children: [
+                      Container(
+                        width: 60,
+                        height: 60,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                          boxShadow: [
+                            BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 4, offset: const Offset(0, 2)),
+                          ],
+                        ),
+                        child: ClipOval(
+                          child: _savingProfile 
+                            ? const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary)))
+                            : (_userPhoto != null && _userPhoto!.isNotEmpty
+                                ? Image.network(
+                                    _userPhoto!,
+                                    fit: BoxFit.cover,
+                                    width: 60,
+                                    height: 60,
+                                    errorBuilder: (context, error, stackTrace) => _buildInitialsAvatar(),
+                                  )
+                                : (FirebaseAuth.instance.currentUser?.photoURL != null 
+                                    ? Image.network(
+                                        FirebaseAuth.instance.currentUser!.photoURL!,
+                                        fit: BoxFit.cover,
+                                        width: 60,
+                                        height: 60,
+                                        errorBuilder: (context, error, stackTrace) => _buildInitialsAvatar(),
+                                      )
+                                    : _buildInitialsAvatar())),
+                        ),
+                      ),
+                      Positioned(
+                        bottom: 0,
+                        right: 0,
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: const BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.camera_alt, size: 12, color: AppColors.primary),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _userName ?? 'User',
+                  style: GoogleFonts.inter(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700),
+                ),
+                Text(
+                  _userEmail ?? '',
+                  style: GoogleFonts.inter(color: Colors.white.withOpacity(0.8), fontSize: 9.5),
+                ),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1.5),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text('RIDER', style: GoogleFonts.inter(color: Colors.white, fontSize: 8.5, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+                ),
+              ],
+            ),
+          ),
+
+          // Scrollable sections
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.zero,
+              children: [
+                // --- Personal Information ---
+                _buildDrawerSectionHeader(
+                  icon: Icons.person_outline,
+                  title: 'Personal Information',
+                  isExpanded: _showPersonalInfo,
+                  onTap: () {
+                    setState(() {
+                      _showPersonalInfo = !_showPersonalInfo;
+                      if (_showPersonalInfo && !_isEditingProfile) {
+                        _nameEditController.text = _userName ?? '';
+                        _phoneEditController.text = _phoneNumber ?? '';
+                      }
+                    });
+                  },
+                ),
+                AnimatedCrossFade(
+                  firstChild: const SizedBox.shrink(),
+                  secondChild: Container(
+                    color: AppColors.surface,
+                    padding: const EdgeInsets.only(top: 8, bottom: 12),
+                    child: Column(
+                      children: [
+                        if (_isEditingProfile) ...[
+                          _buildEditableRow(Icons.person, 'Full Name', _nameEditController),
+                          _buildEditableRow(Icons.phone, 'Phone Number', _phoneEditController),
+                          _buildInfoRow(Icons.email, 'Email Address', _userEmail ?? '', iconColor: Colors.grey[400]),
+                          const SizedBox(height: 8),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton(
+                                    onPressed: () => setState(() => _isEditingProfile = false),
+                                    style: OutlinedButton.styleFrom(
+                                      side: const BorderSide(color: Colors.red),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    ),
+                                    child: Text('Cancel', style: GoogleFonts.inter(color: Colors.red, fontWeight: FontWeight.w600)),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: _savingProfile ? null : _saveProfile,
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: AppColors.primary,
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    ),
+                                    child: _savingProfile
+                                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                        : Text('Save', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600)),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ] else ...[
+                          _buildInfoRow(Icons.person, 'Full Name', _userName ?? ''),
+                          _buildInfoRow(Icons.phone, 'Phone Number', _phoneNumber ?? ''),
+                          _buildInfoRow(Icons.email, 'Email Address', _userEmail ?? ''),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                            child: SizedBox(
+                              width: double.infinity,
+                              child: OutlinedButton.icon(
+                                onPressed: () {
+                                  setState(() {
+                                    _isEditingProfile = true;
+                                    _nameEditController.text = _userName ?? '';
+                                    _phoneEditController.text = _phoneNumber ?? '';
+                                  });
+                                },
+                                icon: const Icon(Icons.edit, size: 16),
+                                label: Text('Edit', style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: AppColors.primary,
+                                  side: BorderSide(color: AppColors.primary.withOpacity(0.5)),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  crossFadeState: _showPersonalInfo ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+                  duration: const Duration(milliseconds: 250),
+                ),
+
+                // --- Eco Points ---
+                _buildDrawerSectionHeader(
+                  icon: Icons.eco,
+                  title: 'Eco Points',
+                  isExpanded: _showEcoPoints,
+                  iconColor: const Color(0xFF22C55E),
+                  onTap: () => setState(() => _showEcoPoints = !_showEcoPoints),
+                ),
+                AnimatedCrossFade(
+                  firstChild: const SizedBox.shrink(),
+                  secondChild: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF22C55E), Color(0xFF16A34A)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(color: const Color(0xFF22C55E).withOpacity(0.2), blurRadius: 8, offset: const Offset(0, 3)),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.eco, color: Colors.white, size: 24),
+                        const SizedBox(width: 12),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _greenPoints.toString(),
+                              style: GoogleFonts.inter(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800),
+                            ),
+                            Text(
+                              'Green Points Earned',
+                              style: GoogleFonts.inter(color: Colors.white.withOpacity(0.8), fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  crossFadeState: _showEcoPoints ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+                  duration: const Duration(milliseconds: 250),
+                ),
+
+                // --- Saved Places ---
+                _buildDrawerSectionHeader(
+                  icon: Icons.bookmark_outline,
+                  title: 'Saved Places',
+                  isExpanded: _showSavedPlaces,
+                  iconColor: Colors.orange,
+                  onTap: () {
+                    setState(() {
+                      _showSavedPlaces = !_showSavedPlaces;
+                      if (_showSavedPlaces) {
+                        final home = _savedLocations['home'];
+                        final work = _savedLocations['work'];
+                        final fav = _savedLocations['favourite'];
+                        _homeAddrController.text = (home is Map ? home['name'] : '') ?? '';
+                        _workAddrController.text = (work is Map ? work['name'] : '') ?? '';
+                        _favAddrController.text = (fav is Map ? fav['name'] : '') ?? '';
+                      }
+                    });
+                  },
+                ),
+                AnimatedCrossFade(
+                  firstChild: const SizedBox.shrink(),
+                  secondChild: Container(
+                    color: AppColors.surface,
+                    padding: const EdgeInsets.only(top: 8, bottom: 12),
+                    child: Column(
+                      children: [
+                        if (_isEditingProfile) ...[
+                          _buildEditableRow(Icons.home, 'Home', _homeAddrController),
+                          _buildEditableRow(Icons.work, 'Work', _workAddrController),
+                          _buildEditableRow(Icons.favorite, 'Favourite', _favAddrController, iconColor: Colors.red[400]),
+                        ] else ...[
+                          _buildInfoRow(
+                            Icons.home,
+                            'Home',
+                            (_savedLocations['home'] is Map ? (_savedLocations['home'] as Map)['name'] : null) as String? ?? '',
+                          ),
+                          _buildInfoRow(
+                            Icons.work,
+                            'Work',
+                            (_savedLocations['work'] is Map ? (_savedLocations['work'] as Map)['name'] : null) as String? ?? '',
+                          ),
+                          _buildInfoRow(
+                            Icons.favorite,
+                            'Favourite',
+                            (_savedLocations['favourite'] is Map ? (_savedLocations['favourite'] as Map)['name'] : null) as String? ?? '',
+                            iconColor: Colors.red[400],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  crossFadeState: _showSavedPlaces ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+                  duration: const Duration(milliseconds: 250),
+                ),
+
+                // --- Ride History ---
+                _buildDrawerSectionHeader(
+                  icon: Icons.history,
+                  title: 'Ride History',
+                  isExpanded: _showRideHistory,
+                  iconColor: Colors.blue,
+                  onTap: () {
+                    setState(() => _showRideHistory = !_showRideHistory);
+                    if (_showRideHistory && _pastRides.isEmpty) {
+                      _fetchRideHistory();
+                    }
+                  },
+                ),
+                AnimatedCrossFade(
+                  firstChild: const SizedBox.shrink(),
+                  secondChild: Container(
+                    color: AppColors.surface,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: _loadingHistory
+                        ? const Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Center(child: CircularProgressIndicator(color: AppColors.primary)),
+                          )
+                        : _pastRides.isEmpty
+                            ? Padding(
+                                padding: const EdgeInsets.all(24),
+                                child: Column(
+                                  children: [
+                                    Icon(Icons.directions_car_outlined, size: 40, color: Colors.grey[300]),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'No rides yet.\nYour green journey starts here!',
+                                      textAlign: TextAlign.center,
+                                      style: GoogleFonts.inter(color: Colors.grey[400], fontSize: 13),
+                                    ),
+                                  ],
+                                ),
+                              )
+                            : Column(
+                                children: _pastRides.map((ride) {
+                                  final ts = ride['timestamp'] as Timestamp?;
+                                  final ca = ride['createdAt'] as Timestamp?;
+                                  final dateStr = ts != null
+                                      ? '${ts.toDate().day}/${ts.toDate().month}/${ts.toDate().year}'
+                                      : ca != null
+                                          ? '${ca.toDate().day}/${ca.toDate().month}/${ca.toDate().year}'
+                                          : 'Recently';
+
+                                  final fare = ride['fare'];
+                                  final dur = ride['duration'];
+                                  String durationStr = '--';
+                                  if (dur is num) {
+                                    if (dur > 3600) {
+                                      durationStr = '${(dur / 3600).floor()}h ${((dur % 3600) / 60).floor()}m';
+                                    } else {
+                                      durationStr = '${(dur / 60).floor()}m';
+                                    }
+                                  } else if (dur is String) {
+                                    durationStr = dur;
+                                  }
+
+                                  return Container(
+                                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                                    padding: const EdgeInsets.all(14),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(14),
+                                      border: Border.all(color: Colors.grey.withOpacity(0.1)),
+                                      boxShadow: [
+                                        BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
+                                      ],
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        // Date + Completed badge
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Icon(Icons.calendar_today, size: 12, color: Colors.grey[400]),
+                                                const SizedBox(width: 6),
+                                                Text(dateStr, style: GoogleFonts.inter(fontSize: 11, color: Colors.grey[500])),
+                                              ],
+                                            ),
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF22C55E).withOpacity(0.1),
+                                                borderRadius: BorderRadius.circular(6),
+                                              ),
+                                              child: Text('COMPLETED', style: GoogleFonts.inter(fontSize: 9, fontWeight: FontWeight.w700, color: const Color(0xFF22C55E))),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 10),
+                                        // Pickup → Drop
+                                        Row(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Column(
+                                              children: [
+                                                Container(width: 8, height: 8, decoration: const BoxDecoration(color: Color(0xFF22C55E), shape: BoxShape.circle)),
+                                                Container(width: 1, height: 20, color: Colors.grey[300]),
+                                                Icon(Icons.location_on, size: 14, color: Colors.red[400]),
+                                              ],
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    ride['pickupName'] ?? 'Trip',
+                                                    style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500, color: AppColors.textPrimary),
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                  const SizedBox(height: 14),
+                                                  Text(
+                                                    ride['dropName'] ?? 'Destination',
+                                                    style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500, color: AppColors.textPrimary),
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 10),
+                                        Divider(color: Colors.grey[200], height: 1),
+                                        const SizedBox(height: 8),
+                                        // Duration + Points + Fare
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Icon(Icons.timer, size: 14, color: Colors.grey[400]),
+                                                const SizedBox(width: 4),
+                                                Text(durationStr, style: GoogleFonts.inter(fontSize: 12, color: Colors.grey[600])),
+                                                const SizedBox(width: 12),
+                                                const Icon(Icons.eco, size: 14, color: Color(0xFF22C55E)),
+                                                const SizedBox(width: 4),
+                                                Text(
+                                                  '+${ride['greenPointsAwarded'] ?? 10} pts',
+                                                  style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600, color: const Color(0xFF22C55E)),
+                                                ),
+                                              ],
+                                            ),
+                                            Text(
+                                              '₹${fare ?? 0}',
+                                              style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                  ),
+                  crossFadeState: _showRideHistory ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+                  duration: const Duration(milliseconds: 250),
+                ),
+              ],
+            ),
+          ),
+
+          // Logout button at bottom
+          Container(
+            decoration: BoxDecoration(
+              border: Border(top: BorderSide(color: Colors.grey.withOpacity(0.15))),
+            ),
+            child: ListTile(
+              leading: const Icon(Icons.logout, color: Colors.red, size: 22),
+              title: Text('Logout', style: GoogleFonts.inter(color: Colors.red, fontWeight: FontWeight.w600)),
+              onTap: _handleLogout,
+            ),
+          ),
+          SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
+        ],
+      ),
+    ),
     );
   }
 }
