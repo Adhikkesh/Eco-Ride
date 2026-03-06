@@ -1,0 +1,31 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "appId": "1:657562697192:android:80ea68083821034a00f85d",
+          "fileOutput": "android/app/google-services.json",
+          "projectId": "eco-ride-07"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "configurations": {
+            "android": "1:657562697192:android:80ea68083821034a00f85d",
+            "ios": "1:657562697192:ios:350d044a9442014000f85d",
+            "web": "1:657562697192:web:0236606067c0c14400f85d"
+          },
+          "projectId": "eco-ride-07"
+        }
+      },
+      "ios": {
+        "default": {
+          "appId": "1:657562697192:ios:350d044a9442014000f85d",
+          "fileOutput": "ios/Runner/GoogleService-Info.plist",
+          "projectId": "eco-ride-07",
+          "uploadDebugSymbols": false
+        }
+      }
+    }
+  }
+}

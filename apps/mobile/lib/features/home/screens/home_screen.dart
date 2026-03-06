@@ -15,6 +15,7 @@ import '../../../core/services/auth_service.dart';
 import '../../../core/services/map_service.dart';
 import '../../auth/screens/login_screen.dart';
 import '../../payment/screens/payment_screen.dart';
+import '../../payment/screens/rating_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -54,6 +55,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // State for estimates
     Map<String, dynamic>? _estimateData;
   bool _isSearchingForDriver = false;
+  bool _isPooled = false; // Ride pooling toggle
 
   // Ride lifecycle state
   String? _rideId;
@@ -68,6 +70,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Driver live tracking state
   String? _driverId;
+  double _driverRating = 0;
+  int _driverRatingCount = 0;
   LatLng? _driverPosition;
   double _driverHeading = 0;
   StreamSubscription<DatabaseEvent>? _driverLocationSubscription;
@@ -223,6 +227,8 @@ class _HomeScreenState extends State<HomeScreen> {
       distance: distanceKm,
       duration: durationMin,
       polyline: _estimateData!['polyline'] ?? '',
+      isPooled: _isPooled,
+      co2Saved: (_estimateData!['co2_saved_g'] as num?)?.toDouble() ?? 0,
     );
 
     if (mounted) {
@@ -234,6 +240,8 @@ class _HomeScreenState extends State<HomeScreen> {
           _rideStatus = 'searching';
           if (result['driverName'] != null) _driverName = result['driverName'];
           if (result['driverPhone'] != null) _driverPhone = result['driverPhone'];
+          _driverRating = (result['driverRating'] as num?)?.toDouble() ?? 0;
+          _driverRatingCount = (result['driverRatingCount'] as num?)?.toInt() ?? 0;
         });
         _startRideStatusListener(rideId);
       } else {
@@ -272,6 +280,10 @@ class _HomeScreenState extends State<HomeScreen> {
         _driverName = data['driverName'] as String? ?? _driverName ?? 'Driver';
         _driverPhone = data['driverPhone'] as String? ?? _driverPhone ?? '';
 
+        // Parse driver rating from ride data (sent by backend on match)
+        _driverRating = (data['driverRating'] as num?)?.toDouble() ?? _driverRating;
+        _driverRatingCount = (data['driverRatingCount'] as num?)?.toInt() ?? _driverRatingCount;
+
         // Capture driverId for live location tracking
         final newDriverId = data['driverId'] as String?;
         if (newDriverId != null && newDriverId != _driverId) {
@@ -307,8 +319,10 @@ class _HomeScreenState extends State<HomeScreen> {
           // Save ride info before resetting
           final completedRideId = _rideId;
           final fare = (data['fare'] as num?)?.toDouble() ?? 100.0;
+          final completedDriverId = _driverId;
+          final completedDriverName = _driverName ?? 'Driver';
           _resetRideState();
-          // Navigate to payment screen
+          // Navigate to payment screen, then rating screen
           if (completedRideId != null) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (!mounted) return;
@@ -320,7 +334,28 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ).then((paid) {
-                if (mounted) {
+                if (!mounted) return;
+                if (paid == true && completedDriverId != null) {
+                  // Navigate to rating screen after successful payment
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => RatingScreen(
+                        rideId: completedRideId,
+                        driverId: completedDriverId,
+                        driverName: completedDriverName,
+                      ),
+                    ),
+                  ).then((rated) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(rated == true ? 'Rating submitted! Thank you 🎉' : 'Payment successful! 🎉'),
+                          backgroundColor: Colors.green,
+                        ),
+                      );
+                    }
+                  });
+                } else {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: Text(paid == true ? 'Payment successful! 🎉' : 'Trip completed! 🎉'),
@@ -435,6 +470,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _estimateData = null;
       // Clear driver tracking state
       _driverId = null;
+      _driverRating = 0;
+      _driverRatingCount = 0;
       _driverPosition = null;
       _driverHeading = 0;
       _lastDriverWrittenPosition = null;
@@ -447,6 +484,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _destinationPosition = null;
       _pickupController.clear();
       _searchController.clear();
+      _isPooled = false;
     });
   }
 
@@ -854,18 +892,34 @@ class _HomeScreenState extends State<HomeScreen> {
                             style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 15, color: AppColors.textPrimary),
                           ),
                           const SizedBox(height: 2),
+                          // Driver rating display
                           Row(
                             children: [
+                              const Icon(Icons.star_rounded, size: 16, color: Color(0xFFFBBF24)),
+                              const SizedBox(width: 3),
+                              Text(
+                                _driverRating > 0 ? _driverRating.toStringAsFixed(1) : 'New',
+                                style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary),
+                              ),
+                              const SizedBox(width: 3),
+                              Text(
+                                '($_driverRatingCount)',
+                                style: GoogleFonts.inter(fontSize: 11, color: AppColors.textSecondary),
+                              ),
+                              const SizedBox(width: 10),
                               Icon(Icons.phone_outlined, size: 14, color: AppColors.textSecondary),
                               const SizedBox(width: 4),
-                              Text(
-                                (_driverPhone != null && _driverPhone!.isNotEmpty)
-                                    ? _driverPhone!
-                                    : 'Fetching...',
-                                style: GoogleFonts.inter(
-                                  color: AppColors.textSecondary,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w500,
+                              Expanded(
+                                child: Text(
+                                  (_driverPhone != null && _driverPhone!.isNotEmpty)
+                                      ? _driverPhone!
+                                      : 'Fetching...',
+                                  style: GoogleFonts.inter(
+                                    color: AppColors.textSecondary,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ),
                             ],
@@ -1110,7 +1164,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       // 1. Try Backend Estimation FIRST (More features: Price, CO2, Accurate Route)
-      final estimate = await MapService.getRideEstimate(_pickupPosition!, _destinationPosition!);
+      final estimate = await MapService.getRideEstimate(_pickupPosition!, _destinationPosition!, isPooled: _isPooled);
 
       if (estimate != null && mounted) {
         debugPrint('HomeScreen: Backend estimate received!');
@@ -1359,6 +1413,10 @@ class _HomeScreenState extends State<HomeScreen> {
                      if (!_isSearchingForDriver) ...[
                        const SizedBox(height: 12),
                        _buildRouteCard(),
+                       if (_pickupPosition != null && _destinationPosition != null) ...[
+                         const SizedBox(height: 10),
+                         _buildPoolingToggle(),
+                       ],
                      ],
                   ],
                 ),
@@ -1579,6 +1637,145 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// Share Ride (pooling) toggle — mirrors web app's ECO-RIDE POOLING TOGGLE
+  Widget _buildPoolingToggle() {
+    return Container(
+      decoration: BoxDecoration(
+        color: _isPooled ? const Color(0xFFECFDF5) : AppColors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: _isPooled
+              ? AppColors.primaryLight.withValues(alpha: 0.5)
+              : AppColors.lightGrey,
+        ),
+        boxShadow: AppShadows.soft,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Toggle row
+          InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: () {
+              setState(() {
+                _isPooled = !_isPooled;
+                // Clear estimate when toggling so user re-estimates
+                if (_estimateData != null) {
+                  _estimateData = null;
+                  _polylines.clear();
+                }
+              });
+            },
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Row(
+                children: [
+                  // Icon
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      gradient: _isPooled
+                          ? AppGradients.primaryButton
+                          : const LinearGradient(colors: [Color(0xFFE2E8F0), Color(0xFFCBD5E1)]),
+                      borderRadius: BorderRadius.circular(11),
+                    ),
+                    child: const Icon(Icons.group, color: Colors.white, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  // Labels
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Share Ride',
+                          style: GoogleFonts.inter(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        Text(
+                          'Save up to 35% & reduce CO₂',
+                          style: GoogleFonts.inter(
+                            fontSize: 11,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Toggle switch
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 250),
+                    width: 48,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(14),
+                      gradient: _isPooled ? AppGradients.primaryButton : null,
+                      color: _isPooled ? null : const Color(0xFFCBD5E1),
+                    ),
+                    child: AnimatedAlign(
+                      duration: const Duration(milliseconds: 250),
+                      alignment: _isPooled ? Alignment.centerRight : Alignment.centerLeft,
+                      child: Container(
+                        width: 22,
+                        height: 22,
+                        margin: const EdgeInsets.symmetric(horizontal: 3),
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(color: Colors.black26, blurRadius: 3, offset: Offset(0, 1)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Info chips (visible when enabled)
+          if (_isPooled)
+            Container(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Row(
+                      children: [
+                        const Icon(Icons.eco, color: AppColors.primary, size: 14),
+                        const SizedBox(width: 4),
+                        Text(
+                          '25% fare discount',
+                          style: GoogleFonts.inter(fontSize: 11, color: AppColors.primary, fontWeight: FontWeight.w500),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: Row(
+                      children: [
+                        const Icon(Icons.eco, color: AppColors.primary, size: 14),
+                        const SizedBox(width: 4),
+                        Text(
+                          '1.5x green points',
+                          style: GoogleFonts.inter(fontSize: 11, color: AppColors.primary, fontWeight: FontWeight.w500),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildSearchField({
     required TextEditingController controller,
     required String hint,
@@ -1711,13 +1908,43 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(height: 20),
 
               // Title
-              Text(
-                'Ride Estimate',
-                style: GoogleFonts.inter(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary,
-                ),
+              Row(
+                children: [
+                  Text(
+                    'Ride Estimate',
+                    style: GoogleFonts.inter(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  if (_isPooled) ...[
+                    const SizedBox(width: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        gradient: AppGradients.primaryButton,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.group, color: Colors.white, size: 12),
+                          const SizedBox(width: 4),
+                          Text(
+                            'SHARED RIDE',
+                            style: GoogleFonts.inter(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
               ),
               const SizedBox(height: 20),
 
@@ -1740,21 +1967,48 @@ class _HomeScreenState extends State<HomeScreen> {
                          crossAxisAlignment: CrossAxisAlignment.start,
                          children: [
                            Text(
-                             'Estimated Fare',
+                             _isPooled ? 'Pooled Fare' : 'Estimated Fare',
                              style: GoogleFonts.inter(
                                color: AppColors.textSecondary,
                                fontSize: 12,
                                fontWeight: FontWeight.w500,
                              ),
                            ),
-                           Text(
-                             '₹${_estimateData!['fare']}',
-                             style: GoogleFonts.inter(
-                               color: AppColors.textPrimary,
-                               fontSize: 26,
-                               fontWeight: FontWeight.w800,
-                             ),
+                           Row(
+                             crossAxisAlignment: CrossAxisAlignment.baseline,
+                             textBaseline: TextBaseline.alphabetic,
+                             children: [
+                               Text(
+                                 '₹${_estimateData!['fare']}',
+                                 style: GoogleFonts.inter(
+                                   color: AppColors.textPrimary,
+                                   fontSize: 26,
+                                   fontWeight: FontWeight.w800,
+                                 ),
+                               ),
+                               if (_isPooled && _estimateData!['solo_fare'] != null &&
+                                   (_estimateData!['solo_fare'] as num) > (_estimateData!['fare'] as num)) ...[
+                                 const SizedBox(width: 8),
+                                 Text(
+                                   '₹${_estimateData!['solo_fare']}',
+                                   style: GoogleFonts.inter(
+                                     color: AppColors.grey,
+                                     fontSize: 14,
+                                     decoration: TextDecoration.lineThrough,
+                                   ),
+                                 ),
+                               ],
+                             ],
                            ),
+                           if (_isPooled && (_estimateData!['pool_discount_pct'] as num? ?? 0) > 0)
+                             Text(
+                               'You save ₹${_estimateData!['pool_savings']} (${_estimateData!['pool_discount_pct']}% off)',
+                               style: GoogleFonts.inter(
+                                 color: AppColors.primary,
+                                 fontSize: 11,
+                                 fontWeight: FontWeight.w600,
+                               ),
+                             ),
                          ],
                        ),
                      ],
@@ -1886,7 +2140,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           borderRadius: BorderRadius.circular(16),
                           child: Center(
                             child: Text(
-                              'Find Ride',
+                              _isPooled ? 'Confirm Shared Ride' : 'Find Ride',
                               style: GoogleFonts.inter(fontWeight: FontWeight.w700, color: AppColors.white, fontSize: 16),
                             ),
                           ),

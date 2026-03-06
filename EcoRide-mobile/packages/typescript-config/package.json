@@ -1,0 +1,12 @@
+{
+  "files": [
+    "base.json",
+    "nextjs.json"
+  ],
+  "name": "@repo/typescript-config",
+  "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
+  "version": "0.0.0"
+}
