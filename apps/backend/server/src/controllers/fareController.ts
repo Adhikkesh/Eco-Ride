@@ -19,6 +19,8 @@ import type { Request, Response } from "express";
  */
 const PRICING = {
   BASE_FARE: 40,
+  GREEN_DISCOUNT_MAX_PCT: 0.10,
+  GREEN_DISCOUNT_PER_KM: 0.5,
   PER_KM: 12,
   PER_MIN: 1.5,
   POOL_BASE_DISCOUNT: 0.25,
@@ -106,7 +108,8 @@ export const calculateFare = async (req: Request, res: Response) => {
         computeAlternativeRoutes: false,
         destination: { location: { latLng: { latitude: drop.lat, longitude: drop.lng } } },
         origin: { location: { latLng: { latitude: pickup.lat, longitude: pickup.lng } } },
-        routingPreference: "TRAFFIC_AWARE",
+        requestedReferenceRoutes: ["FUEL_EFFICIENT"],
+        routingPreference: "TRAFFIC_AWARE_OPTIMAL",
         travelMode: "DRIVE",
       }),
       headers: {
@@ -165,6 +168,15 @@ export const calculateFare = async (req: Request, res: Response) => {
       finalFare = baseFare - poolSavings;
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // GREEN DISCOUNT — Incentive for eco-friendly rides
+    // ₹0.5 per km driven, capped at 10% of base fare
+    // ═══════════════════════════════════════════════════════════════
+    const greenDiscountRaw = distanceKm * PRICING.GREEN_DISCOUNT_PER_KM;
+    const greenDiscountCap = baseFare * PRICING.GREEN_DISCOUNT_MAX_PCT;
+    const greenDiscount = Math.round(Math.min(greenDiscountRaw, greenDiscountCap));
+    finalFare = finalFare - greenDiscount;
+
     const roundedFare = Math.round(finalFare);
 
     // ═══════════════════════════════════════════════════════════════
@@ -192,6 +204,8 @@ export const calculateFare = async (req: Request, res: Response) => {
       distance_km: distanceKm.toFixed(1),
       eta_min: Math.round(durationMin),
       fare: roundedFare,
+      green_discount: greenDiscount,
+      green_discount_pct: Math.round((greenDiscount / baseFare) * 100),
       green_points: greenPoints,
       is_pooled: isPooled || false,
       passenger_count: effectivePassengers,

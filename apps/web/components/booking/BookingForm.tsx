@@ -263,6 +263,11 @@ export default function BookingForm({
               <div style={{ color: "#bbf7d0", fontSize: "12px" }}>
                 You're saving {estimate.co2_saved_g}g of CO2
               </div>
+              {estimate.green_discount != null && estimate.green_discount > 0 && (
+                <div style={{ color: "#86efac", fontSize: "13px", fontWeight: "600", marginTop: "4px" }}>
+                  🌿 ₹{estimate.green_discount} Green Discount ({estimate.green_discount_pct}% off)
+                </div>
+              )}
             </div>
           </div>
         </div>

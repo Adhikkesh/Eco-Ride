@@ -42,6 +42,10 @@ export interface TripEstimate {
   passenger_count?: number;
   /** Green points that will be awarded. */
   green_points?: number;
+  /** Green discount amount in currency (e.g. ₹5). */
+  green_discount?: number;
+  /** Green discount as a percentage of base fare. */
+  green_discount_pct?: number;
   /** Optional raw distance/duration values from the routing API. */
   details?: {
     /** Route duration in seconds. */

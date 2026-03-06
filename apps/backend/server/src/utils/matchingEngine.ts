@@ -520,7 +520,8 @@ export function phase4GlobalOptimization(
     return null;
   }
 
-  const { WEIGHT_PICKUP_TIME, WEIGHT_DETOUR, WEIGHT_FUEL } = MATCHING_CONFIG;
+  const { WEIGHT_PICKUP_TIME, WEIGHT_DETOUR, WEIGHT_FUEL, EV_BONUS, HYBRID_BONUS } =
+    MATCHING_CONFIG;
 
   // Calculate raw values for all candidates
   const pickupTimes: number[] = [];
@@ -563,16 +564,26 @@ export function phase4GlobalOptimization(
     const normDetour = normalize(detours[i] ?? 0, minDetour, maxDetour);
     const normFuel = normalize(fuels[i] ?? 0, minFuel, maxFuel);
 
-    // Calculate weighted cost
-    const cost =
+    // Calculate base weighted cost
+    let cost =
       WEIGHT_PICKUP_TIME * normPickup + WEIGHT_DETOUR * normDetour + WEIGHT_FUEL * normFuel;
+
+    // Apply EV/Hybrid bonus — subtract bonus from cost so low-emission vehicles rank higher
+    const vType = (candidate.location.vehicleType ?? "PETROL").toUpperCase();
+    let ecoBonus = 0;
+    if (vType === "ELECTRIC" || vType === "EV") {
+      ecoBonus = EV_BONUS;
+    } else if (vType === "HYBRID") {
+      ecoBonus = HYBRID_BONUS;
+    }
+    cost = Math.max(0, cost - ecoBonus);
 
     candidate.cost = cost;
 
     console.log(
       `[Phase 4] Driver ${candidate.driverId}: ` +
-        `pickup=${(pickupTimes[i] ?? 0).toFixed(1)}min, detour=${(detours[i] ?? 0).toFixed(1)}min, ` +
-        `fuel=${(fuels[i] ?? 0).toFixed(2)}L, cost=${cost.toFixed(4)}`,
+        `type=${vType}, pickup=${(pickupTimes[i] ?? 0).toFixed(1)}min, detour=${(detours[i] ?? 0).toFixed(1)}min, ` +
+        `fuel=${(fuels[i] ?? 0).toFixed(2)}L, ecoBonus=${ecoBonus}, cost=${cost.toFixed(4)}`,
     );
 
     if (cost < bestCost) {

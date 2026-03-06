@@ -391,6 +391,8 @@ export default function RiderMap({
   const [isGreenPointsUsed, setIsGreenPointsUsed] = useState(false);
   const [discountAmount, setDiscountAmount] = useState(0);
   const [pointsUsed, setPointsUsed] = useState(0);
+  const [isCarbonOffset, setIsCarbonOffset] = useState(false);
+  const [carbonOffsetAmount, setCarbonOffsetAmount] = useState(0);
 
   // Pooling / Eco-Ride State
   const [isPooled, setIsPooled] = useState(false);
@@ -399,6 +401,7 @@ export default function RiderMap({
   const [dropOffLocation, setDropOffLocation] = useState<{ lat: number; lng: number } | null>(null);
   const autoCompleteTriggeredRef = useRef(false);
   const tripStartTimeRef = useRef<number | null>(null);
+  const paymentInitializedRef = useRef(false);
 
   // Estimation State
   const { getEstimate, estimate, loading: estimating, clearEstimate } = useTripEstimator();
@@ -730,6 +733,7 @@ export default function RiderMap({
         const token = await auth.currentUser.getIdToken();
         const response = await fetch(`${backendUrl}/payment/create-intent`, {
           body: JSON.stringify({
+            carbonOffset: isCarbonOffset,
             rideId,
             useGreenPoints: usePoints,
           }),
@@ -753,6 +757,39 @@ export default function RiderMap({
           setPaymentAmount(data.amount);
           setDiscountAmount(data.discountAmount || 0);
           setPointsUsed(data.pointsUsed || 0);
+          setCarbonOffsetAmount(data.carbonOffsetAmount || 0);
+        }
+      } catch (error) {
+        console.error("Error updating payment intent:", error);
+      }
+    }
+  };
+
+  const handleCarbonOffsetToggle = async (enabled: boolean) => {
+    setIsCarbonOffset(enabled);
+
+    if (rideId && auth.currentUser) {
+      try {
+        const token = await auth.currentUser.getIdToken();
+        const response = await fetch(`${backendUrl}/payment/create-intent`, {
+          body: JSON.stringify({
+            carbonOffset: enabled,
+            rideId,
+            useGreenPoints: isGreenPointsUsed,
+          }),
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        });
+        const data = await response.json();
+        if (data.success) {
+          setClientSecret(data.clientSecret);
+          setPaymentAmount(data.amount);
+          setDiscountAmount(data.discountAmount || 0);
+          setPointsUsed(data.pointsUsed || 0);
+          setCarbonOffsetAmount(data.carbonOffsetAmount || 0);
         }
       } catch (error) {
         console.error("Error updating payment intent:", error);
@@ -821,6 +858,7 @@ export default function RiderMap({
     setDecodedPolyline([]);
     autoCompleteTriggeredRef.current = false;
     tripStartTimeRef.current = null;
+    paymentInitializedRef.current = false;
   }, [rideId, paymentAmount, pointsUsed, assignedDriverId, assignedDriverName]);
 
   // Listen for ride status changes (Start/Complete) via RTDB (Bypasses Firestore permissions)
@@ -846,9 +884,10 @@ export default function RiderMap({
           setDirectionsToDestination(null);
           setDecodedPolyline([]);
 
-          // Fetch payment intent
+          // Fetch payment intent (only once — toggles create their own intents)
           const user = auth?.currentUser;
-          if (user) {
+          if (user && !paymentInitializedRef.current) {
+            paymentInitializedRef.current = true;
             user.getIdToken().then((token: string) => {
               fetch(`${backendUrl}/payment/create-intent`, {
                 body: JSON.stringify({ rideId }),
@@ -3365,6 +3404,7 @@ export default function RiderMap({
                       style={{
                         borderTop: "1px solid rgba(34, 197, 94, 0.2)",
                         display: "flex",
+                        flexWrap: "wrap",
                         gap: "12px",
                         marginBottom: "12px",
                         paddingTop: "10px",
@@ -3378,6 +3418,7 @@ export default function RiderMap({
                           display: "flex",
                           flex: 1,
                           gap: "6px",
+                          minWidth: "120px",
                           padding: "8px 10px",
                         }}
                       >
@@ -3397,6 +3438,7 @@ export default function RiderMap({
                           display: "flex",
                           flex: 1,
                           gap: "6px",
+                          minWidth: "120px",
                           padding: "8px 10px",
                         }}
                       >
@@ -3410,6 +3452,29 @@ export default function RiderMap({
                           </div>
                         </div>
                       </div>
+                      {(estimate as any).green_discount > 0 && (
+                        <div
+                          style={{
+                            alignItems: "center",
+                            background: "rgba(34, 197, 94, 0.15)",
+                            border: "1px solid rgba(34, 197, 94, 0.3)",
+                            borderRadius: "8px",
+                            display: "flex",
+                            flex: 1,
+                            gap: "6px",
+                            minWidth: "120px",
+                            padding: "8px 10px",
+                          }}
+                        >
+                          <FaLeaf style={{ color: "#10b981", fontSize: "14px" }} />
+                          <div>
+                            <div style={{ color: "#94a3b8", fontSize: "10px" }}>Green Discount</div>
+                            <div style={{ color: "#34d399", fontSize: "13px", fontWeight: 600 }}>
+                              -₹{(estimate as any).green_discount} ({(estimate as any).green_discount_pct}% off)
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     <div style={{ display: "flex", gap: "12px" }}>
@@ -4034,6 +4099,9 @@ export default function RiderMap({
           isPointsUsed={isGreenPointsUsed}
           onTogglePoints={handleGreenPointsToggle}
           discountAmount={discountAmount}
+          isCarbonOffset={isCarbonOffset}
+          onToggleCarbonOffset={handleCarbonOffsetToggle}
+          carbonOffsetAmount={carbonOffsetAmount}
           onClose={() => setShowPayment(false)}
           onSuccess={handlePaymentSuccess}
         />
