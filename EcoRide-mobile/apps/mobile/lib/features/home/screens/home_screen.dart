@@ -107,7 +107,7 @@ class _HomeScreenState extends State<HomeScreen> {
   StreamSubscription<DatabaseEvent>? _driverCountSubscription;
 
   // --- Theme State ---
-  bool _isDarkMode = false;
+  bool _isDarkMode = true;
   String? _darkMapStyle;
 
   // --- Map Interaction State (Web) ---
@@ -1007,7 +1007,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final controller = isPickup ? _pickupController : _searchController;
     
     if (_debounce?.isActive ?? false) _debounce!.cancel();
-    _debounce = Timer(const Duration(milliseconds: 300), () {
+    _debounce = Timer(const Duration(milliseconds: 150), () {
       if (controller.text.isNotEmpty) {
         _fetchSuggestions(controller.text, isPickup: isPickup);
       } else {
@@ -1273,8 +1273,21 @@ class _HomeScreenState extends State<HomeScreen> {
           _userName = userModel.name ?? userModel.email.split('@')[0];
           _userEmail = userModel.email;
           _greenPoints = userModel.greenPoints;
-          _phoneNumber = userModel.phoneNumber ?? userModel.toString(); // Fallback if phone_number used instead of phoneNumber
+          _phoneNumber = userModel.phoneNumber ?? userModel.toString();
         });
+
+        // Override name with displayName from raw Firestore doc if available (matches web)
+        final uid = AuthService.instance.currentUser?.uid;
+        if (uid != null) {
+          final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+          if (userDoc.exists && mounted) {
+            final data = userDoc.data()!;
+            final displayName = data['displayName'] as String?;
+            if (displayName != null && displayName.isNotEmpty) {
+              setState(() => _userName = displayName);
+            }
+          }
+        }
         debugPrint('HomeScreen: Loaded profile for $_userName');
       } else {
         final user = AuthService.instance.currentUser;
@@ -1482,7 +1495,7 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Icon(icon, color: AppColors.primary, size: 18),
           ),
           const SizedBox(width: 12),
-          Expanded(child: Text(action, style: GoogleFonts.inter(fontSize: 14, color: _isDarkMode ? Colors.white70 : AppColors.textPrimary))),
+          Expanded(child: Text(action, style: GoogleFonts.inter(fontSize: 14, color: _isDarkMode ? Colors.white.withOpacity(0.9) : AppColors.textPrimary))),
           Text(points, style: GoogleFonts.inter(fontWeight: FontWeight.w700, color: AppColors.primary, fontSize: 14)),
         ],
       ),
@@ -1736,6 +1749,10 @@ class _HomeScreenState extends State<HomeScreen> {
               polylines: _polylines,
               onMapCreated: (GoogleMapController controller) {
                 _controller.complete(controller);
+                // Apply dark map style on startup if dark mode is active
+                if (_isDarkMode && _darkMapStyle != null) {
+                  controller.setMapStyle(_darkMapStyle);
+                }
               },
             ),
           ),
@@ -1981,36 +1998,131 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildRouteCard() {
+    // Theme-aware colors
+    final cardBg = _isDarkMode ? const Color(0xFF1A2332) : Colors.white;
+    final borderColor = _isDarkMode ? AppColors.primary.withOpacity(0.3) : Colors.grey.withOpacity(0.2);
+    final shadowColor = _isDarkMode ? Colors.black.withOpacity(0.25) : Colors.black.withOpacity(0.08);
+    final dotBorderColor = _isDarkMode ? Colors.white.withOpacity(0.4) : Colors.white.withOpacity(0.9);
+    final dashColor = _isDarkMode ? Colors.grey.withOpacity(0.4) : Colors.grey.withOpacity(0.35);
+    final dividerColor = _isDarkMode ? Colors.grey.withOpacity(0.3) : Colors.grey.withOpacity(0.2);
+
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.white,
+        color: cardBg,
         borderRadius: BorderRadius.circular(20),
-        boxShadow: AppShadows.medium,
+        border: Border.all(color: borderColor, width: 1.5),
+        boxShadow: [
+          BoxShadow(color: shadowColor, blurRadius: 20, offset: const Offset(0, 8)),
+          if (_isDarkMode) BoxShadow(
+            color: AppColors.primary.withOpacity(0.08),
+            blurRadius: 30,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Pickup Field
-          _buildSearchField(
-            controller: _pickupController,
-            hint: 'Pickup location',
-            icon: Icons.circle,
-            iconColor: AppColors.primaryLight,
-            isPickup: true,
-          ),
-
+          // Pickup + Destination with connected line
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 52),
-            child: Container(height: 1, color: AppColors.lightGrey.withValues(alpha: 0.5)),
-          ),
-
-          // Destination Field
-          _buildSearchField(
-            controller: _searchController,
-            hint: 'Where to?',
-            icon: Icons.circle,
-            iconColor: AppColors.error,
-            isPickup: false,
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Route indicator dots + line
+                Padding(
+                  padding: const EdgeInsets.only(top: 14),
+                  child: Column(
+                    children: [
+                      // Green pickup dot with glow
+                      Container(
+                        width: 14,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF4CAF50),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: dotBorderColor, width: 1.5),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF4CAF50).withOpacity(0.5),
+                              blurRadius: 8,
+                              spreadRadius: 1,
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Dashed vertical line
+                      ...List.generate(3, (_) => Column(
+                        children: [
+                          const SizedBox(height: 3),
+                          Container(
+                            width: 2,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: dashColor,
+                              borderRadius: BorderRadius.circular(1),
+                            ),
+                          ),
+                        ],
+                      )),
+                      const SizedBox(height: 3),
+                      // Red destination dot with glow
+                      Container(
+                        width: 14,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEF5350),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: dotBorderColor, width: 1.5),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFFEF5350).withOpacity(0.5),
+                              blurRadius: 8,
+                              spreadRadius: 1,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Text fields
+                Expanded(
+                  child: Column(
+                    children: [
+                      _buildSearchField(
+                        controller: _pickupController,
+                        hint: 'Pickup location',
+                        icon: Icons.circle,
+                        iconColor: const Color(0xFF4CAF50),
+                        isPickup: true,
+                      ),
+                      Container(
+                        height: 1,
+                        margin: const EdgeInsets.symmetric(horizontal: 4),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              Colors.transparent,
+                              dividerColor,
+                              Colors.transparent,
+                            ],
+                          ),
+                        ),
+                      ),
+                      _buildSearchField(
+                        controller: _searchController,
+                        hint: 'Where to?',
+                        icon: Icons.circle,
+                        iconColor: const Color(0xFFEF5350),
+                        isPickup: false,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
 
           if (_pickupSuggestions.isNotEmpty) _buildSuggestionsList(isPickup: true),
@@ -2027,57 +2139,86 @@ class _HomeScreenState extends State<HomeScreen> {
     required Color iconColor,
     required bool isPickup,
   }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        children: [
-          Icon(icon, color: iconColor, size: 20),
-          const SizedBox(width: 12),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              style: GoogleFonts.inter(color: Colors.black, fontSize: 14, fontWeight: FontWeight.w500),
-              decoration: InputDecoration(
-                hintText: hint,
-                hintStyle: GoogleFonts.inter(color: Colors.black45, fontSize: 14),
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 12),
-              ),
-              onTap: () {
-                // Clear the other suggestions when switching fields
-                setState(() {
-                  if (isPickup) _suggestions = [];
-                  else _pickupSuggestions = [];
-                });
-              },
-            ),
-          ),
-        ],
+    // Theme-aware text colors
+    final textColor = _isDarkMode ? Colors.white : Colors.black87;
+    final hintColor = _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade500;
+    final clearColor = _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600;
+
+    return TextField(
+      controller: controller,
+      style: GoogleFonts.inter(
+        color: textColor,
+        fontSize: 15,
+        fontWeight: FontWeight.w500,
       ),
+      cursorColor: textColor,
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: GoogleFonts.inter(
+          color: hintColor,
+          fontSize: 15,
+          fontWeight: FontWeight.w400,
+        ),
+        border: InputBorder.none,
+        enabledBorder: InputBorder.none,
+        focusedBorder: InputBorder.none,
+        filled: true,
+        fillColor: Colors.transparent,
+        hoverColor: Colors.transparent,
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+        suffixIcon: controller.text.isNotEmpty
+            ? GestureDetector(
+                onTap: () {
+                  setState(() {
+                    controller.clear();
+                    if (isPickup) _pickupSuggestions = [];
+                    else _suggestions = [];
+                  });
+                },
+                child: Icon(Icons.close, color: clearColor, size: 18),
+              )
+            : null,
+      ),
+      onTap: () {
+        setState(() {
+          if (isPickup) _suggestions = [];
+          else _pickupSuggestions = [];
+        });
+      },
     );
   }
 
   Widget _buildSuggestionsList({required bool isPickup}) {
     final suggestions = isPickup ? _pickupSuggestions : _suggestions;
+    // Theme-aware colors
+    final listBg = _isDarkMode ? const Color(0xFF1A2332) : Colors.white;
+    final separatorColor = _isDarkMode ? Colors.grey.withOpacity(0.15) : Colors.grey.withOpacity(0.12);
+    final textColor = _isDarkMode ? Colors.white.withOpacity(0.85) : Colors.black87;
+    final locationLabelColor = const Color(0xFF26C6DA);
+
     return Column(
       children: [
-        const Divider(color: Colors.grey, height: 1, thickness: 0.1),
+        Divider(color: _isDarkMode ? Colors.grey.withOpacity(0.2) : Colors.grey.withOpacity(0.15), height: 1, thickness: 0.5),
         Container(
           constraints: const BoxConstraints(maxHeight: 250),
+          decoration: BoxDecoration(
+            color: listBg,
+            borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
+          ),
           child: ListView.separated(
             shrinkWrap: true,
             padding: EdgeInsets.zero,
             itemCount: suggestions.length + (isPickup ? 1 : 0),
-            separatorBuilder: (context, index) => Divider(color: Colors.grey.withOpacity(0.1), height: 1),
+            separatorBuilder: (context, index) => Divider(color: separatorColor, height: 1),
             itemBuilder: (context, index) {
               // Show "Use Current Location" as first item for Pickup
               if (isPickup && index == 0) {
                  return ListTile(
-                  leading: const Icon(Icons.my_location, color: Colors.blue, size: 20),
+                  leading: Icon(Icons.my_location, color: locationLabelColor, size: 20),
                   title: Text(
                     'Use Current Location',
-                    style: GoogleFonts.inter(color: Colors.blue, fontSize: 13, fontWeight: FontWeight.w600),
+                    style: GoogleFonts.inter(color: locationLabelColor, fontSize: 13, fontWeight: FontWeight.w600),
                   ),
                   dense: true,
                   onTap: _useCurrentLocationForPickup,
@@ -2086,11 +2227,15 @@ class _HomeScreenState extends State<HomeScreen> {
               
               final suggestion = isPickup ? suggestions[index - 1] : suggestions[index];
               return ListTile(
-                leading: const Icon(Icons.location_on, color: Colors.grey, size: 18),
+                leading: Icon(
+                  Icons.location_on,
+                  color: isPickup ? const Color(0xFF4CAF50).withOpacity(0.8) : const Color(0xFFEF5350).withOpacity(0.8),
+                  size: 18,
+                ),
                 title: Text(
                   suggestion['description'],
-                  style: GoogleFonts.inter(color: Colors.black87, fontSize: 13),
-                  maxLines: 1,
+                  style: GoogleFonts.inter(color: textColor, fontSize: 13),
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
                 dense: true,
@@ -2430,8 +2575,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 Text(
                   subtitle,
                   style: GoogleFonts.inter(
-                    color: _isDarkMode ? Colors.white54 : AppColors.textSecondary,
-                    fontSize: 10,
+                    color: _isDarkMode ? Colors.white.withValues(alpha: 0.8) : AppColors.textSecondary,
+                    fontSize: 11,
                   ),
                 ),
               ],
