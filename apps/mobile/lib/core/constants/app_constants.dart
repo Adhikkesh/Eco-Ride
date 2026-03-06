@@ -218,6 +218,7 @@ class ApiConfig {
   static const String cancelRide = '/api/v1/ride/cancel';
   static const String activeRide = '/api/v1/ride/active';
   static const String getOtp = '/api/v1/ride/otp';
+  static const String rateRide = '/api/v1/ride/rate';
 
   // Payment
   static const String createPaymentIntent = '/api/v1/payment/create-intent';

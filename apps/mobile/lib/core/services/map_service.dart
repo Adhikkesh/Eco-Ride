@@ -263,7 +263,7 @@ class MapService {
     return null;
   }
 
-  static Future<Map<String, dynamic>?> getRideEstimate(LatLng pickup, LatLng drop) async {
+  static Future<Map<String, dynamic>?> getRideEstimate(LatLng pickup, LatLng drop, {bool isPooled = false}) async {
     try {
       final token = await AuthService.instance.getIdToken();
       if (token == null) {
@@ -272,7 +272,7 @@ class MapService {
       }
 
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.estimateRide}');
-      debugPrint('MapService: Requesting estimate from $url');
+      debugPrint('MapService: Requesting estimate from $url (pooled=$isPooled)');
 
       final response = await _client.post(
         url,
@@ -283,7 +283,7 @@ class MapService {
         body: json.encode({
           'pickup': {'lat': pickup.latitude, 'lng': pickup.longitude},
           'drop': {'lat': drop.latitude, 'lng': drop.longitude},
-          'isPooled': false, // Default for now
+          'isPooled': isPooled,
         }),
       );
 
@@ -311,6 +311,8 @@ class MapService {
     required double distance,
     required double duration,
     required String polyline,
+    bool isPooled = false,
+    double co2Saved = 0,
   }) async {
     try {
       final token = await AuthService.instance.getIdToken();
@@ -327,7 +329,7 @@ class MapService {
       }
 
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.requestRide}');
-      debugPrint('MapService: Requesting ride at $url');
+      debugPrint('MapService: Requesting ride at $url (pooled=$isPooled)');
 
       // Match backend expected fields exactly (same as web app RiderMap.tsx)
       final response = await _client.post(
@@ -347,7 +349,8 @@ class MapService {
           'fare': fare,
           'distance': distance,
           'duration': duration,
-          'co2Saved': 0,
+          'co2Saved': co2Saved,
+          'isPooled': isPooled,
         }),
       );
 
@@ -594,6 +597,47 @@ class MapService {
       return null;
     } catch (e) {
       debugPrint('MapService: Error getting OTP: $e');
+      return null;
+    }
+  }
+
+  /// Submit a rating for a completed ride
+  static Future<Map<String, dynamic>?> submitRating({
+    required String rideId,
+    required String driverId,
+    required int rating,
+    String comment = '',
+  }) async {
+    try {
+      final token = await AuthService.instance.getIdToken();
+      if (token == null) return null;
+
+      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.rateRide}');
+      debugPrint('MapService: Submitting rating for ride $rideId (stars=$rating)');
+
+      final response = await _client.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: json.encode({
+          'rideId': rideId,
+          'driverId': driverId,
+          'rating': rating,
+          'comment': comment,
+        }),
+      );
+
+      debugPrint('MapService: Rating submit status: ${response.statusCode}');
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      } else {
+        debugPrint('MapService: Rating submit failed: ${response.body}');
+        return json.decode(response.body);
+      }
+    } catch (e) {
+      debugPrint('MapService: Error submitting rating: $e');
       return null;
     }
   }
