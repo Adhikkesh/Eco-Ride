@@ -81,7 +81,6 @@ jobs:
           SHA=$(echo ${{ github.sha }} | cut -c1-7)
           echo "sha=$SHA" >> $GITHUB_OUTPUT
           echo "server=${{ env.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/server" >> $GITHUB_OUTPUT
-          echo "simulator=${{ env.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/simulator" >> $GITHUB_OUTPUT
           echo "web=${{ env.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/web" >> $GITHUB_OUTPUT
 
       # ── Build Server ──
@@ -93,16 +92,6 @@ jobs:
             .
           docker push ${{ steps.tags.outputs.server }}:latest
           docker push ${{ steps.tags.outputs.server }}:latest
-
-      # ── Build Simulator ──
-      - name: Build & Push Simulator
-        run: |
-          docker build \
-            -f apps/backend/simulator/Dockerfile \
-            -t ${{ steps.tags.outputs.simulator }}:latest \
-            .
-          docker push ${{ steps.tags.outputs.simulator }}:latest
-          docker push ${{ steps.tags.outputs.simulator }}:latest
 
       # ── Build Web (NEXT_PUBLIC_* baked at build time) ──
       - name: Build & Push Web
@@ -169,26 +158,6 @@ jobs:
             --allow-unauthenticated
             --min-instances=0
             --max-instances=5
-            --memory=512Mi
-            --cpu=1
-
-      # ── Deploy Simulator ──
-      - name: Deploy Simulator to Cloud Run
-        uses: google-github-actions/deploy-cloudrun@v2
-        with:
-          service: eco-ride-simulator
-          image: ${{ env.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/simulator:latest
-          region: ${{ env.GCP_REGION }}
-          env_vars: |
-            GOOGLE_MAPS_API_KEY=${{ secrets.GOOGLE_MAPS_API_KEY }}
-            FIREBASE_DATABASE_URL=${{ secrets.FIREBASE_DATABASE_URL }}
-            FIREBASE_CREDENTIAL_PATH=/secrets/firebase_credential.json
-          secrets: |
-            /secrets/firebase_credential.json=firebase-credential-json:latest
-          flags: |
-            --allow-unauthenticated
-            --min-instances=0
-            --max-instances=1
             --memory=512Mi
             --cpu=1
 
