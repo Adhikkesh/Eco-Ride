@@ -484,7 +484,9 @@ export class DriverAgent {
 
       // When OTP is verified, backend sets rides/{rideId}.status to IN_PROGRESS
       if (data?.status === "IN_PROGRESS") {
-        console.log(`  ✅ ${this.driverId} OTP verified for ride ${waitingForRideId}, starting trip!`);
+        console.log(
+          `  ✅ ${this.driverId} OTP verified for ride ${waitingForRideId}, starting trip!`,
+        );
 
         // Cleanup listener
         if (this.otpListenerUnsubscribe) {
@@ -535,9 +537,7 @@ export class DriverAgent {
       if (existingData?.riders && Array.isArray(existingData.riders)) {
         const updatedRiders = existingData.riders.map(
           (r: { rideId: string; [key: string]: unknown }) =>
-            r.rideId === this.currentAssignment!.rideId
-              ? { ...r, status: "IN_PROGRESS" }
-              : r,
+            r.rideId === this.currentAssignment!.rideId ? { ...r, status: "IN_PROGRESS" } : r,
         );
         await rtdb.ref(`rides-assigned/${this.driverId}`).update({
           riders: updatedRiders,
@@ -554,7 +554,9 @@ export class DriverAgent {
       await rtdb.ref(`rides/${this.currentAssignment.rideId}`).update({
         status: "IN_PROGRESS",
       });
-      console.log(`  📝 ${this.driverId} RTDB rides-assigned status → IN_PROGRESS (ride ${this.currentAssignment.rideId})`);
+      console.log(
+        `  📝 ${this.driverId} RTDB rides-assigned status → IN_PROGRESS (ride ${this.currentAssignment.rideId})`,
+      );
     } catch (err) {
       console.error(`  ❌ Failed to update rides-assigned status to IN_PROGRESS:`, err);
     }
@@ -703,9 +705,7 @@ export class DriverAgent {
       if (distanceToWaypoint <= 500) {
         this.currentPosition = { ...destination };
         if (this.currentWaypointType === "PICKUP") {
-          console.log(
-            `  📍 ${this.driverId} snapped to pooled pickup (close enough)`,
-          );
+          console.log(`  📍 ${this.driverId} snapped to pooled pickup (close enough)`);
           await this.startWaitingMode();
         } else {
           console.log(`  🏁 ${this.driverId} snapped to drop (close enough)`);
@@ -821,20 +821,20 @@ export class DriverAgent {
     // Add drop-offs for all active passengers currently in the vehicle
     for (const [, assignment] of this.activePassengers) {
       waypoints.push({
-        type: "DROP",
         assignment,
-        location: assignment.drop,
         distance: this.distanceTo(assignment.drop),
+        location: assignment.drop,
+        type: "DROP",
       });
     }
 
     // Add pickups for all queued assignments waiting to be collected
     for (const assignment of this.queuedAssignments) {
       waypoints.push({
-        type: "PICKUP",
         assignment,
-        location: assignment.pickup,
         distance: this.distanceTo(assignment.pickup),
+        location: assignment.pickup,
+        type: "PICKUP",
       });
     }
 
@@ -860,7 +860,8 @@ export class DriverAgent {
       );
     }
 
-    const destination = nearest.type === "PICKUP" ? nearest.assignment.pickup : nearest.assignment.drop;
+    const destination =
+      nearest.type === "PICKUP" ? nearest.assignment.pickup : nearest.assignment.drop;
     await this.fetchRoute(this.currentPosition, destination);
     this.setSpeedForMode("TRIP");
 
@@ -976,7 +977,7 @@ export class DriverAgent {
           mode: "driving",
           origin: `${origin.lat},${origin.lng}`,
         },
-        timeout: 5000,
+        timeout: 15000,
       });
 
       if (response.data.status !== "OK" || !response.data.routes?.[0]?.overview_polyline?.points) {
