@@ -10,7 +10,6 @@ import { getApp, getApps, initializeApp } from "firebase/app";
 import { GoogleAuthProvider, getAuth } from "firebase/auth";
 import { getDatabase } from "firebase/database";
 import { getFirestore } from "firebase/firestore";
-import { getStorage } from "firebase/storage";
 
 /**
  * Google Authentication Provider instance.
@@ -58,12 +57,6 @@ export const auth = app ? getAuth(app) : (null as unknown as ReturnType<typeof g
  */
 export const db = app ? getFirestore(app) : (null as unknown as ReturnType<typeof getFirestore>);
 
-/**
- * Firebase Cloud Storage instance.
- * Used for uploading KYC documents and profile images.
- * @type {FirebaseStorage}
- */
-export const storage = app ? getStorage(app) : (null as unknown as ReturnType<typeof getStorage>);
 
 /**
  * Firebase Realtime Database instance.
