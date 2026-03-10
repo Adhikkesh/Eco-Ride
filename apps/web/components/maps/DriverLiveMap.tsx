@@ -26,6 +26,7 @@ import {
 import { backendUrl } from "@/config";
 import { auth, db, rtdb } from "@/lib/firebase";
 import { darkMapStyles, lightMapStyles } from "@/lib/mapStyles";
+import PredictionHeatmap from "./PredictionHeatmap";
 
 interface DriverLocation {
   lat: number;
@@ -342,6 +343,8 @@ export default function DriverLiveMap({
   const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null);
 
   const [userId, setUserId] = useState<string | null>(null);
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [showDemandHeatmap, setShowDemandHeatmap] = useState(true);
   const [authReady, setAuthReady] = useState(false);
 
   const [driverName, setDriverName] = useState<string | null>(null);
@@ -352,8 +355,13 @@ export default function DriverLiveMap({
       return;
     }
 
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setUserId(user?.uid ?? null);
+      if (user) {
+        setAuthToken(await user.getIdToken());
+      } else {
+        setAuthToken(null);
+      }
       setAuthReady(true);
     });
 
@@ -1800,6 +1808,33 @@ export default function DriverLiveMap({
                 position: "relative",
               }}
             >
+              {/* Heatmap Toggle Button directly on map */}
+              <button
+                onClick={() => setShowDemandHeatmap((p) => !p)}
+                style={{
+                  position: "absolute",
+                  top: 16,
+                  right: 16,
+                  zIndex: 20,
+                  background: showDemandHeatmap ? "linear-gradient(135deg, #7c3aed, #4f46e5)" : "rgba(30, 41, 59, 0.9)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: "8px",
+                  padding: "8px 12px",
+                  color: "white",
+                  fontSize: "0.85rem",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  transition: "all 0.2s",
+                }}
+                title="Toggle Demand Heatmap"
+              >
+                <span style={{ fontSize: "1.1rem" }}>🔥</span>
+                {showDemandHeatmap ? "Hide Demand" : "Show Demand"}
+              </button>
               {/* Location selection mode indicator (before going online) */}
               {!isOnline && locationMode === "map" && (
                 <div
@@ -1856,10 +1891,21 @@ export default function DriverLiveMap({
                   draggableCursor: manualLocationMode ? "crosshair" : undefined,
                   gestureHandling: "greedy",
                   styles: darkMode ? darkMapStyles : lightMapStyles,
-                  zoomControl: true,
-                }}
-              >
-                {/* Selected start location marker (before going online) */}
+                zoomControl: true,
+              }}
+            >
+              {authToken && showDemandHeatmap && isOnline && (
+                <PredictionHeatmap
+                  token={authToken}
+                  centerLat={position?.lat || undefined}
+                  centerLng={position?.lng || undefined}
+                  radiusKm={8}
+                  gridSize={5}
+                  visible={showDemandHeatmap}
+                />
+              )}
+
+              {/* Selected start location marker (before going online) */}
                 {!isOnline && selectedStartLocation && (
                   <Marker
                     position={{ lat: selectedStartLocation.lat, lng: selectedStartLocation.lng }}
