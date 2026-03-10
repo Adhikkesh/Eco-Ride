@@ -55,5 +55,16 @@
 	<array>
 		<string>_dartobservatory._tcp</string>
 	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.657562697192-inf2h9o4j373rf08porfjgl3qcuk55tb</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

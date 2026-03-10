@@ -204,7 +204,8 @@ class ApiConfig {
 
   // Backend URL - Use your machine's LAN IP for physical device testing
   // Change to 'http://localhost:3001' for simulator, or your deployed URL for production
-  static const String baseUrl = 'http://10.12.228.47:3001';
+  static const String baseUrl =
+      'https://eco-ride-server-255554451298.asia-south1.run.app';
 
   // Endpoints
   static const String verifyToken = '/api/auth/verify';
