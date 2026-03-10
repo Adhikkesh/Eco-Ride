@@ -187,7 +187,8 @@ class AppStrings {
   static const String emailRequired = 'Email is required';
   static const String invalidEmail = 'Please enter a valid email';
   static const String passwordRequired = 'Password is required';
-  static const String passwordTooShort = 'Password must be at least 6 characters';
+  static const String passwordTooShort =
+      'Password must be at least 6 characters';
   static const String passwordsDoNotMatch = 'Passwords do not match';
   static const String nameRequired = 'Name is required';
   static const String phoneRequired = 'Phone number is required';
@@ -203,7 +204,7 @@ class ApiConfig {
 
   // Backend URL - Use your machine's LAN IP for physical device testing
   // Change to 'http://localhost:3001' for simulator, or your deployed URL for production
-  static const String baseUrl = 'http://10.12.227.19:3001';
+  static const String baseUrl = 'http://10.12.228.47:3001';
 
   // Endpoints
   static const String verifyToken = '/api/auth/verify';
@@ -223,12 +224,20 @@ class ApiConfig {
   // Payment
   static const String createPaymentIntent = '/api/v1/payment/create-intent';
   static const String confirmPayment = '/api/v1/ride/confirm-payment';
-  
+
+  // Saved Locations
+  static const String savedLocations = '/api/v1/user/saved-locations';
+
+  // Call Masking
+  static const String callMask = '/api/v1/call/mask';
+
   // Google Maps API
-  static const String googleMapsApiKey = 'AIzaSyD5ucfXDiTYX9T7Nirz_de1vz2qgwbNJXo';
+  static const String googleMapsApiKey =
+      'AIzaSyDZ2zldwOYeqX7CTzVniu1z__fSVTgq2nE';
 
   // Stripe
-  static const String stripePublishableKey = 'pk_test_51SvYXY48on6RPqrGxOElRVwHiZLMQcSQo8UAWKYw3au5cFzc0xn929H2DJO9eie73pLzGpRrxaEFT1CcKZ6ZNrEA00q1Pb35Ps';
+  static const String stripePublishableKey =
+      'pk_test_51SvYXY48on6RPqrGxOElRVwHiZLMQcSQo8UAWKYw3au5cFzc0xn929H2DJO9eie73pLzGpRrxaEFT1CcKZ6ZNrEA00q1Pb35Ps';
 }
 
 // =============================================================================

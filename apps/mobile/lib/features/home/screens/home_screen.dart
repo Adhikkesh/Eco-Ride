@@ -18,6 +18,8 @@ import '../../../core/services/map_service.dart';
 import '../../auth/screens/login_screen.dart';
 import '../../payment/screens/payment_screen.dart';
 import '../../payment/screens/rating_screen.dart';
+import 'rider_profile_screen.dart';
+import '../widgets/save_location_modal.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -81,6 +83,7 @@ class _HomeScreenState extends State<HomeScreen> {
   DateTime _lastRouteFetchTime = DateTime(2000); // For throttling route API calls
   BitmapDescriptor? _carIcon; // Custom car icon for driver marker
   String _cameraFittedForPhase = ''; // Track which ride phase camera was fitted for
+  bool _autoCompleteTriggered = false; // Prevent duplicate auto-complete triggers
 
   // --- Profile Drawer State ---
   int _greenPoints = 0;
@@ -522,6 +525,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _lastDriverWrittenPosition = null;
       _cameraFittedForPhase = '';
       _isPooled = false;
+      _autoCompleteTriggered = false;
       // Clear ALL markers and polylines
       _markers.clear();
       _polylines.clear();
@@ -606,6 +610,24 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       debugPrint('HomeScreen: Driver at (${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)}) heading: ${heading.toStringAsFixed(0)}°');
+
+      // Auto-complete trip detection: when driver reaches ~200m of destination during ON_TRIP
+      if (_rideStatus == 'on_trip' && !_autoCompleteTriggered && _destinationPosition != null) {
+        final distToDest = _haversineDistance(newPosition, _destinationPosition!);
+        if (distToDest < 200) {
+          _autoCompleteTriggered = true;
+          debugPrint('HomeScreen: Auto-complete triggered — driver within ${distToDest.toStringAsFixed(0)}m of destination');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('📍 Arriving at destination...'),
+                backgroundColor: Color(0xFF22C55E),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+        }
+      }
     });
   }
 
@@ -972,30 +994,47 @@ class _HomeScreenState extends State<HomeScreen> {
                         ],
                       ),
                     ),
-                    // Call button — always visible
+                    // Call button — Twilio masked call
                     GestureDetector(
-                      onTap: (_driverPhone != null && _driverPhone!.isNotEmpty)
+                      onTap: (_rideId != null)
                           ? () async {
-                              final uri = Uri(scheme: 'tel', path: _driverPhone!);
-                              if (await canLaunchUrl(uri)) {
-                                await launchUrl(uri);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Connecting call securely...'),
+                                  backgroundColor: Colors.green,
+                                  behavior: SnackBarBehavior.floating,
+                                  margin: EdgeInsets.only(top: 10, left: 16, right: 16, bottom: 600),
+                                ),
+                              );
+                              final result = await MapService.initiateCallMask(_rideId!, 'rider');
+                              if (mounted) {
+                                final message = result?['message'] ?? 'Call failed';
+                                final success = result?['success'] == true;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(message),
+                                    backgroundColor: success ? Colors.green : Colors.red,
+                                    behavior: SnackBarBehavior.floating,
+                                    margin: const EdgeInsets.only(top: 10, left: 16, right: 16, bottom: 600),
+                                  ),
+                                );
                               }
                             }
                           : null,
                       child: Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          gradient: (_driverPhone != null && _driverPhone!.isNotEmpty)
+                          gradient: (_rideId != null)
                               ? AppGradients.primaryButton
                               : null,
-                          color: (_driverPhone != null && _driverPhone!.isNotEmpty)
+                          color: (_rideId != null)
                               ? null
                               : AppColors.lightGrey,
                           shape: BoxShape.circle,
                         ),
                         child: Icon(
                           Icons.call_rounded,
-                          color: (_driverPhone != null && _driverPhone!.isNotEmpty)
+                          color: (_rideId != null)
                               ? AppColors.white
                               : AppColors.grey,
                           size: 20,
@@ -3349,6 +3388,32 @@ class _HomeScreenState extends State<HomeScreen> {
                   duration: const Duration(milliseconds: 250),
                 ),
               ],
+            ),
+          ),
+
+          // View Full Profile
+          Container(
+            decoration: BoxDecoration(
+              border: Border(top: BorderSide(color: Colors.grey.withOpacity(0.15))),
+            ),
+            child: ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF22C55E).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.person_rounded, color: Color(0xFF22C55E), size: 20),
+              ),
+              title: Text('View Full Profile', style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
+              subtitle: Text('Green points, ride history & more', style: GoogleFonts.inter(fontSize: 11, color: Colors.grey[500])),
+              trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: Colors.grey),
+              onTap: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const RiderProfileScreen()),
+                );
+              },
             ),
           ),
 

@@ -30,6 +30,7 @@ import {
 } from "../controllers/rideController.js";
 import { getSavedLocations, updateSavedLocation } from "../controllers/savedLocationsController.js";
 import { CreateUserController, GetDriverStatusController } from "../controllers/userController.js";
+import { initiateCallMask } from "../controllers/callController.js";
 import { verifyToken } from "../middleware/authMiddleware.js";
 
 /**
@@ -130,3 +131,10 @@ router.get("/admin/drivers/unverified", verifyToken, GetUnverifiedDriversControl
 
 /** Approve or decline driver verification (admin only) */
 router.post("/admin/drivers/verify", verifyToken, VerifyDriverController);
+
+// ============================================================================
+// Call Masking Routes
+// ============================================================================
+
+/** Initiate a Twilio masked call between rider and driver */
+router.post("/call/mask", verifyToken, initiateCallMask);

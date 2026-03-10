@@ -22,11 +22,12 @@ class DriverHomeScreen extends StatefulWidget {
 }
 
 class _DriverHomeScreenState extends State<DriverHomeScreen> {
-  final Completer<GoogleMapController> _controller = Completer<GoogleMapController>();
+  final Completer<GoogleMapController> _controller =
+      Completer<GoogleMapController>();
   final Location _location = Location();
   final FirebaseDatabase _rtdb = FirebaseDatabase.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  
+
   static const CameraPosition _kDefaultLocation = CameraPosition(
     target: LatLng(11.0168, 76.9558), // Coimbatore
     zoom: 14.4746,
@@ -52,9 +53,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   double _simDistanceTraveled = 0;
   double _simTotalDistance = 0;
   static const double _simSpeedMps = 12.5; // ~45 km/h in m/s
-  
+
   // Ride lifecycle state
-  String _rideStatus = 'idle'; // idle, pending, matched, arrived, in_progress, completed
+  String _rideStatus =
+      'idle'; // idle, pending, matched, arrived, in_progress, completed
   String? _rideId;
   String? _riderName;
   String? _riderPhone;
@@ -125,8 +127,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             _userName = (firestoreName != null && firestoreName.isNotEmpty)
                 ? firestoreName
                 : (fallbackName != null && fallbackName.isNotEmpty)
-                    ? fallbackName
-                    : user.displayName ?? 'Driver';
+                ? fallbackName
+                : user.displayName ?? 'Driver';
             _userPhoto = data['photoURL']?.toString() ?? user.photoURL;
             _userEmail = data['email']?.toString() ?? user.email;
           });
@@ -233,7 +235,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     try {
       final locationData = await _location.getLocation();
       setState(() {
-        _currentPosition = LatLng(locationData.latitude!, locationData.longitude!);
+        _currentPosition = LatLng(
+          locationData.latitude!,
+          locationData.longitude!,
+        );
         _isLoading = false;
       });
     } catch (e) {
@@ -274,7 +279,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           debugPrint('DriverHome: Location permission denied');
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Location permission required to go online.')),
+              const SnackBar(
+                content: Text('Location permission required to go online.'),
+              ),
             );
           }
           return;
@@ -282,15 +289,37 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       }
 
       // Initial location check before starting stream
-      final initialLocation = await _location.getLocation().timeout(const Duration(seconds: 20));
+      final initialLocation = await _location.getLocation().timeout(
+        const Duration(seconds: 20),
+      );
+      final initialPos = LatLng(
+        initialLocation.latitude!,
+        initialLocation.longitude!,
+      );
       setState(() {
-        _currentPosition = LatLng(initialLocation.latitude!, initialLocation.longitude!);
+        _currentPosition = initialPos;
         _isOnline = true;
       });
 
+      // Create the RTDB node with set() for the first time (node doesn't exist yet)
+      final userId0 = _auth.currentUser?.uid;
+      if (userId0 != null) {
+        await _rtdb.ref('drivers-online/$userId0').set({
+          'lat': initialPos.latitude,
+          'lng': initialPos.longitude,
+          'heading': 0.0,
+          'status': 'AVAILABLE',
+          'lastUpdated': ServerValue.timestamp,
+          'vehicleType': 'CAR',
+        });
+      }
+
       debugPrint('DriverHome: Starting location stream...');
-      _locationSubscription = _location.onLocationChanged.listen((LocationData locationData) {
-        if (locationData.latitude == null || locationData.longitude == null) return;
+      _locationSubscription = _location.onLocationChanged.listen((
+        LocationData locationData,
+      ) {
+        if (locationData.latitude == null || locationData.longitude == null)
+          return;
 
         final newPos = LatLng(locationData.latitude!, locationData.longitude!);
         final heading = locationData.heading ?? 0.0;
@@ -315,33 +344,42 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       // Listen for PENDING ride requests (driver must accept/decline)
       final userId = _auth.currentUser?.uid;
       if (userId != null) {
-        debugPrint('DriverHome: Listening for pending rides at rides-pending/$userId');
-        _pendingRideSubscription = _rtdb.ref('rides-pending/$userId').onValue.listen((event) {
-          final data = event.snapshot.value as Map<dynamic, dynamic>?;
-          if (data != null && data['status'] == 'PENDING_ACCEPTANCE') {
-            debugPrint('DriverHome: PENDING RIDE RECEIVED! $data');
-            if (mounted) {
-              setState(() {
-                _pendingRide = data;
-                _rideId = data['rideId']?.toString();
-                _rideStatus = 'pending';
-                _riderName = data['riderName']?.toString() ?? 'Rider';
-                _riderPhone = data['riderPhone']?.toString() ?? '';
-              });
-            }
-          } else {
-            if (_pendingRide != null && mounted) {
-              setState(() {
-                _pendingRide = null;
-                if (_rideStatus == 'pending') _rideStatus = 'idle';
-              });
-            }
-          }
-        });
+        debugPrint(
+          'DriverHome: Listening for pending rides at rides-pending/$userId',
+        );
+        _pendingRideSubscription = _rtdb
+            .ref('rides-pending/$userId')
+            .onValue
+            .listen((event) {
+              final data = event.snapshot.value as Map<dynamic, dynamic>?;
+              if (data != null && data['status'] == 'PENDING_ACCEPTANCE') {
+                debugPrint('DriverHome: PENDING RIDE RECEIVED! $data');
+                if (mounted) {
+                  setState(() {
+                    _pendingRide = data;
+                    _rideId = data['rideId']?.toString();
+                    _rideStatus = 'pending';
+                    _riderName = data['riderName']?.toString() ?? 'Rider';
+                    _riderPhone = data['riderPhone']?.toString() ?? '';
+                  });
+                }
+              } else {
+                if (_pendingRide != null && mounted) {
+                  setState(() {
+                    _pendingRide = null;
+                    if (_rideStatus == 'pending') _rideStatus = 'idle';
+                  });
+                }
+              }
+            });
 
         // Listen for ride assignments (after accept)
-        debugPrint('DriverHome: Listening for assigned rides at rides-assigned/$userId');
-        _rideSubscription = _rtdb.ref('rides-assigned/$userId').onValue.listen((event) {
+        debugPrint(
+          'DriverHome: Listening for assigned rides at rides-assigned/$userId',
+        );
+        _rideSubscription = _rtdb.ref('rides-assigned/$userId').onValue.listen((
+          event,
+        ) {
           final data = event.snapshot.value as Map<dynamic, dynamic>?;
           if (data != null) {
             debugPrint('DriverHome: RIDE ASSIGNED! $data');
@@ -349,19 +387,42 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               setState(() {
                 _currentRide = data;
                 _rideId = data['rideId']?.toString() ?? _rideId;
-                _rideStatus = (data['status']?.toString() ?? 'MATCHED').toLowerCase();
-                _riderName = data['riderName']?.toString() ?? _riderName ?? 'Rider';
-                _riderPhone = data['riderPhone']?.toString() ?? _riderPhone ?? '';
+
+                // Guard status transitions — don't let RTDB auto-skip OTP step
+                final newStatus = (data['status']?.toString() ?? 'MATCHED')
+                    .toLowerCase();
+                if (newStatus == 'in_progress' && _rideStatus != 'arrived') {
+                  // Don't jump to in_progress unless driver has locally arrived + verified OTP
+                  debugPrint(
+                    'DriverHome: Ignoring RTDB in_progress — driver still in $_rideStatus (OTP not verified locally)',
+                  );
+                } else if (newStatus == 'arrived' && _rideStatus == 'matched') {
+                  // Only accept arrived if driver explicitly triggered it
+                  debugPrint(
+                    'DriverHome: Ignoring RTDB arrived — driver must tap "Arrived at Pickup" button',
+                  );
+                } else {
+                  _rideStatus = newStatus;
+                }
+
+                _riderName =
+                    data['riderName']?.toString() ?? _riderName ?? 'Rider';
+                _riderPhone =
+                    data['riderPhone']?.toString() ?? _riderPhone ?? '';
 
                 // Parse pooled riders
                 if (data['riders'] != null && data['riders'] is List) {
-                  final riders = (data['riders'] as List).cast<Map<dynamic, dynamic>>();
+                  final riders = (data['riders'] as List)
+                      .cast<Map<dynamic, dynamic>>();
                   _pooledRiders = riders;
                   // Mid-trip new rider detection
-                  if (_previousRidersCount > 0 && riders.length > _previousRidersCount) {
+                  if (_previousRidersCount > 0 &&
+                      riders.length > _previousRidersCount) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
-                        content: Text('New rider added to your pooled trip! 🚗'),
+                        content: Text(
+                          'New rider added to your pooled trip! 🚗',
+                        ),
                         backgroundColor: Colors.blue,
                       ),
                     );
@@ -383,11 +444,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             // the backend simulator may clean up RTDB but the driver app
             // should keep its state until the driver explicitly completes the ride.
             if (_currentRide != null && mounted) {
-              final activePhases = ['arrived', 'in_progress', 'waiting_payment'];
+              final activePhases = [
+                'arrived',
+                'in_progress',
+                'waiting_payment',
+              ];
               if (activePhases.contains(_rideStatus)) {
-                debugPrint('DriverHome: RTDB assignment removed but ride is in $_rideStatus phase — keeping state');
+                debugPrint(
+                  'DriverHome: RTDB assignment removed but ride is in $_rideStatus phase — keeping state',
+                );
               } else {
-                debugPrint('DriverHome: Ride assignment removed (status=$_rideStatus). Resetting.');
+                debugPrint(
+                  'DriverHome: Ride assignment removed (status=$_rideStatus). Resetting.',
+                );
                 _resetRideState();
               }
             }
@@ -399,7 +468,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       if (mounted) {
         setState(() => _isOnline = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error going online: ${e.toString().contains('denied') ? 'Location permission denied' : 'Could not fetch location'}')),
+          SnackBar(
+            content: Text(
+              'Error going online: ${e.toString().contains('denied') ? 'Location permission denied' : 'Could not fetch location'}',
+            ),
+          ),
         );
       }
     }
@@ -426,9 +499,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       debugPrint('DriverHome: Accept result: $result');
       debugPrint('DriverHome: result is null? ${result == null}');
       if (result != null) {
-        debugPrint('DriverHome: success=${result['success']}, message=${result['message']}');
+        debugPrint(
+          'DriverHome: success=${result['success']}, message=${result['message']}',
+        );
       }
-      
+
       if (result != null && result['success'] == true) {
         debugPrint('DriverHome: Ride accepted successfully!');
         if (mounted) {
@@ -437,7 +512,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             _rideStatus = 'matched';
             _isAccepting = false;
           });
-          // rides-assigned listener will pick up the ride and trigger navigation
+          // rides-assigned listener will pick up the ride and trigger navigation.
+          // As a fallback, if _currentRide is already populated by the listener
+          // but navigation hasn't started, trigger it now.
+          if (_currentRide != null && !_isNavigating) {
+            debugPrint(
+              'DriverHome: Fallback — triggering navigation directly after accept',
+            );
+            _navigateToRide();
+          }
         }
       } else {
         final message = result?['message'] ?? 'Ride is no longer available';
@@ -446,10 +529,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         if (mounted) {
           _clearPendingRide();
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(message),
-              backgroundColor: Colors.orange,
-            ),
+            SnackBar(content: Text(message), backgroundColor: Colors.orange),
           );
         }
       }
@@ -482,7 +562,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           debugPrint('DriverHome: Decline failed, clearing stale pending data');
           _clearPendingRide();
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Ride was already cancelled. Cleared.')),
+            const SnackBar(
+              content: Text('Ride was already cancelled. Cleared.'),
+            ),
           );
         }
       }
@@ -511,7 +593,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   /// Navigation logic — draws blue route (driver→pickup) and green route (pickup→destination)
   Future<void> _navigateToRide() async {
     if (_currentPosition == null || _currentRide == null) return;
-    
+
     setState(() => _isNavigating = true);
 
     final pickup = _currentRide!['pickup'];
@@ -546,46 +628,55 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       // Blue polyline: Driver → Pickup
       if (toPickup != null) {
         final points = toPickup['points'] as List<LatLng>;
-        newPolylines.add(Polyline(
-          polylineId: const PolylineId('to_pickup'),
-          points: points,
-          color: const Color(0xFF2196F3), // Blue
-          width: 5,
-        ));
+        newPolylines.add(
+          Polyline(
+            polylineId: const PolylineId('to_pickup'),
+            points: points,
+            color: const Color(0xFF2196F3), // Blue
+            width: 5,
+          ),
+        );
         allPoints.addAll(points);
       }
 
       // Green polyline: Pickup → Destination
       if (toDrop != null) {
         final points = toDrop['points'] as List<LatLng>;
-        newPolylines.add(Polyline(
-          polylineId: const PolylineId('to_destination'),
-          points: points,
-          color: const Color(0xFF4CAF50), // Green
-          width: 5,
-        ));
+        newPolylines.add(
+          Polyline(
+            polylineId: const PolylineId('to_destination'),
+            points: points,
+            color: const Color(0xFF4CAF50), // Green
+            width: 5,
+          ),
+        );
         allPoints.addAll(points);
       }
 
       // Add markers for pickup (blue) and destination (red)
-      newMarkers.add(Marker(
-        markerId: const MarkerId('pickup'),
-        position: pickupLatLng,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
-        infoWindow: InfoWindow(
-          title: 'Pickup',
-          snippet: _currentRide!['pickupName']?.toString() ?? 'Pickup Location',
+      newMarkers.add(
+        Marker(
+          markerId: const MarkerId('pickup'),
+          position: pickupLatLng,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+          infoWindow: InfoWindow(
+            title: 'Pickup',
+            snippet:
+                _currentRide!['pickupName']?.toString() ?? 'Pickup Location',
+          ),
         ),
-      ));
-      newMarkers.add(Marker(
-        markerId: const MarkerId('destination'),
-        position: dropLatLng,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-        infoWindow: InfoWindow(
-          title: 'Destination',
-          snippet: _currentRide!['dropName']?.toString() ?? 'Drop Location',
+      );
+      newMarkers.add(
+        Marker(
+          markerId: const MarkerId('destination'),
+          position: dropLatLng,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+          infoWindow: InfoWindow(
+            title: 'Destination',
+            snippet: _currentRide!['dropName']?.toString() ?? 'Drop Location',
+          ),
         ),
-      ));
+      );
 
       // Add the driver's car marker
       if (_currentPosition != null) {
@@ -596,7 +687,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             rotation: _currentHeading,
             anchor: const Offset(0.5, 0.5),
             flat: true,
-            icon: _carIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+            icon:
+                _carIcon ??
+                BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueGreen,
+                ),
             zIndex: 10,
           ),
         );
@@ -635,17 +730,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
     try {
       final result = await MapService.cancelRide(_rideId!);
-      
+
       if (mounted) {
         if (result != null && result['success'] == true) {
-             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Ride cancelled successfully.')),
-            );
-            _resetRideState();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Ride cancelled successfully.')),
+          );
+          _resetRideState();
         } else {
-             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(result?['message'] ?? 'Failed to cancel ride')),
-            );
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(result?['message'] ?? 'Failed to cancel ride'),
+            ),
+          );
         }
       }
     } catch (e) {
@@ -658,15 +755,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   /// Mark arrival at pickup via backend
   Future<void> _handleArriveAtPickup() async {
     if (_rideId == null) return;
-    
+
     setState(() => _isArriving = true);
 
     try {
       // Notify backend (best-effort — timer starts regardless)
-      final result = await MapService.arriveAtPickup(_rideId!).timeout(
-        const Duration(seconds: 5),
-        onTimeout: () => null,
-      );
+      final result = await MapService.arriveAtPickup(
+        _rideId!,
+      ).timeout(const Duration(seconds: 5), onTimeout: () => null);
       if (result != null && result['success'] == true) {
         debugPrint('DriverHome: Backend notified of arrival');
       } else {
@@ -717,13 +813,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   Future<void> _handleOtpTimeout() async {
     debugPrint('DriverHome: OTP Timer expired. Cancelling ride...');
     ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Rider did not show up in 5 mins. Ride cancelled.')),
+      const SnackBar(
+        content: Text('Rider did not show up in 5 mins. Ride cancelled.'),
+      ),
     );
     // Call cancel ride
     await _cancelRide(); // Reuse existing cancel method
   }
-
-
 
   /// Start ride after OTP verification
   Future<void> _handleStartRide(String otp) async {
@@ -747,9 +843,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     } else {
       final message = result?['message'] ?? 'Failed to start ride. Check OTP.';
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
       }
     }
   }
@@ -772,7 +868,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     );
 
     try {
-      final directions = await MapService.getDirections(pickupLatLng, dropLatLng);
+      final directions = await MapService.getDirections(
+        pickupLatLng,
+        dropLatLng,
+      );
       if (directions != null && mounted) {
         final points = directions['points'] as List<LatLng>;
 
@@ -819,9 +918,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       // Refresh today's stats
       _loadTodayStats();
     } else if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Error completing ride')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Error completing ride')));
     }
   }
 
@@ -838,10 +937,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       final paidAmount = data['paidAmount'];
       final fare = data['fare'];
 
-      debugPrint('DriverHome: Payment check — status=$status, paymentStatus=$paymentStatus, paidAmount=$paidAmount, fare=$fare');
+      debugPrint(
+        'DriverHome: Payment check — status=$status, paymentStatus=$paymentStatus, paidAmount=$paidAmount, fare=$fare',
+      );
 
       if (paymentStatus == 'PAID' || status == 'PAYMENT_CONFIRMED') {
-        final amount = (paidAmount as num?)?.toDouble() ?? (fare as num?)?.toDouble() ?? 0;
+        final amount =
+            (paidAmount as num?)?.toDouble() ?? (fare as num?)?.toDouble() ?? 0;
         debugPrint('DriverHome: Payment received! Amount: $amount');
         if (mounted) {
           setState(() {
@@ -926,7 +1028,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       _simTotalDistance += _haversine(routePoints[i - 1], routePoints[i]);
     }
 
-    debugPrint('DriverSim: Starting simulation, ${routePoints.length} points, ${_simTotalDistance.toStringAsFixed(0)}m total');
+    debugPrint(
+      'DriverSim: Starting simulation, ${routePoints.length} points, ${_simTotalDistance.toStringAsFixed(0)}m total',
+    );
 
     // 1-second tick loop (like backend simulator)
     _simTimer = Timer.periodic(const Duration(seconds: 1), (_) => _simTick());
@@ -967,10 +1071,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         final remaining = _simDistanceTraveled - accumulated;
         final fraction = segLen > 0 ? remaining / segLen : 0.0;
 
-        final lat = _simRoutePoints[i - 1].latitude +
-            (_simRoutePoints[i].latitude - _simRoutePoints[i - 1].latitude) * fraction;
-        final lng = _simRoutePoints[i - 1].longitude +
-            (_simRoutePoints[i].longitude - _simRoutePoints[i - 1].longitude) * fraction;
+        final lat =
+            _simRoutePoints[i - 1].latitude +
+            (_simRoutePoints[i].latitude - _simRoutePoints[i - 1].latitude) *
+                fraction;
+        final lng =
+            _simRoutePoints[i - 1].longitude +
+            (_simRoutePoints[i].longitude - _simRoutePoints[i - 1].longitude) *
+                fraction;
 
         final interpPos = LatLng(lat, lng);
 
@@ -980,12 +1088,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         _updateSimPosition(interpPos, heading);
 
         // Trim active polyline: show only remaining points ahead of the car
-        final remainingPoints = <LatLng>[interpPos, ..._simRoutePoints.sublist(i)];
+        final remainingPoints = <LatLng>[
+          interpPos,
+          ..._simRoutePoints.sublist(i),
+        ];
         setState(() {
           // Determine which polyline is active and trim it
-          final hasPickup = _polylines.any((p) => p.polylineId.value == 'to_pickup');
+          final hasPickup = _polylines.any(
+            (p) => p.polylineId.value == 'to_pickup',
+          );
           final polyId = hasPickup ? 'to_pickup' : 'to_destination';
-          final polyColor = hasPickup ? const Color(0xFF2196F3) : const Color(0xFF4CAF50);
+          final polyColor = hasPickup
+              ? const Color(0xFF2196F3)
+              : const Color(0xFF4CAF50);
 
           _polylines.removeWhere((p) => p.polylineId.value == polyId);
           _polylines.add(
@@ -1020,7 +1135,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           rotation: heading,
           anchor: const Offset(0.5, 0.5),
           flat: true,
-          icon: _carIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          icon:
+              _carIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
           zIndex: 10,
         ),
       );
@@ -1037,8 +1154,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final dLng = _toRad(b.longitude - a.longitude);
     final sinLat = math.sin(dLat / 2);
     final sinLng = math.sin(dLng / 2);
-    final h = sinLat * sinLat +
-        math.cos(_toRad(a.latitude)) * math.cos(_toRad(b.latitude)) * sinLng * sinLng;
+    final h =
+        sinLat * sinLat +
+        math.cos(_toRad(a.latitude)) *
+            math.cos(_toRad(b.latitude)) *
+            sinLng *
+            sinLng;
     return 2 * R * math.asin(math.sqrt(h));
   }
 
@@ -1048,7 +1169,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final lat1 = _toRad(a.latitude);
     final lat2 = _toRad(b.latitude);
     final y = math.sin(dLng) * math.cos(lat2);
-    final x = math.cos(lat1) * math.sin(lat2) -
+    final x =
+        math.cos(lat1) * math.sin(lat2) -
         math.sin(lat1) * math.cos(lat2) * math.cos(dLng);
     return (_toDeg(math.atan2(y, x)) + 360) % 360;
   }
@@ -1129,23 +1251,31 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final userId = _auth.currentUser?.uid;
     if (userId == null) return;
 
-    // Simplified location data for now, consistent with web app structure
-    await _rtdb.ref('drivers-online/$userId').set({
+    // Use update() instead of set() to avoid overwriting fields written by backend
+    // (e.g. status=BUSY, pooledRides, currentPassengers, etc.)
+    final Map<String, dynamic> locationData = {
       'lat': pos.latitude,
       'lng': pos.longitude,
       'heading': heading,
-      'status': 'AVAILABLE',
       'lastUpdated': ServerValue.timestamp,
       'vehicleType': 'CAR',
-      // Note: geohash omitted for simplicity, can be added if a library is used
-    });
+    };
+
+    // Only set status to AVAILABLE when driver is truly idle (no active ride)
+    final isIdle =
+        _rideStatus == 'idle' && !_isNavigating && _currentRide == null;
+    if (isIdle) {
+      locationData['status'] = 'AVAILABLE';
+    }
+
+    await _rtdb.ref('drivers-online/$userId').update(locationData);
   }
 
   Future<void> _updateCamera(LatLng pos) async {
     final controller = await _controller.future;
-    controller.animateCamera(CameraUpdate.newCameraPosition(
-      CameraPosition(target: pos, zoom: 16),
-    ));
+    controller.animateCamera(
+      CameraUpdate.newCameraPosition(CameraPosition(target: pos, zoom: 16)),
+    );
   }
 
   Future<void> _handleLogout() async {
@@ -1154,9 +1284,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       await AuthService.instance.signOut();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error logging out: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error logging out: $e')));
       }
     }
   }
@@ -1164,7 +1294,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _isDarkMode ? const Color(0xFF0F172A) : AppColors.background,
+      backgroundColor: _isDarkMode
+          ? const Color(0xFF0F172A)
+          : AppColors.background,
       body: Stack(
         children: [
           // 1. Google Map
@@ -1195,20 +1327,22 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   const Spacer(),
                   _buildStatusCard(),
                   const SizedBox(height: 16),
-                   _buildStatsRow(),
+                  _buildStatsRow(),
                   const SizedBox(height: 16),
                 ],
               ),
             ),
           ),
-          
+
           // 3. Incoming/Active Ride Sheet
-          if (_pendingRide != null || _currentRide != null) 
-             Align(alignment: Alignment.bottomCenter, child: _buildIncomingRideSheet()),
+          if (_pendingRide != null || _currentRide != null)
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: _buildIncomingRideSheet(),
+            ),
 
           // 4. Waiting for Payment overlay
-          if (_rideStatus == 'waiting_payment')
-             _buildWaitingPaymentSheet(),
+          if (_rideStatus == 'waiting_payment') _buildWaitingPaymentSheet(),
         ],
       ),
     );
@@ -1249,8 +1383,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                     shape: BoxShape.circle,
                   ),
                   child: _userPhoto != null
-                      ? ClipOval(child: Image.network(_userPhoto!, fit: BoxFit.cover))
-                      : const Icon(Icons.person, size: 18, color: AppColors.white),
+                      ? ClipOval(
+                          child: Image.network(_userPhoto!, fit: BoxFit.cover),
+                        )
+                      : const Icon(
+                          Icons.person,
+                          size: 18,
+                          color: AppColors.white,
+                        ),
                 ),
                 const SizedBox(width: 10),
                 Column(
@@ -1291,10 +1431,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   color: cardBg,
                   borderRadius: BorderRadius.circular(14),
                   boxShadow: _isDarkMode ? [] : AppShadows.soft,
-                  border: _isDarkMode ? Border.all(color: Colors.white12) : null,
+                  border: _isDarkMode
+                      ? Border.all(color: Colors.white12)
+                      : null,
                 ),
                 child: Icon(
-                  _isDarkMode ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+                  _isDarkMode
+                      ? Icons.light_mode_rounded
+                      : Icons.dark_mode_rounded,
                   color: _isDarkMode ? Colors.amber : Colors.blueGrey,
                   size: 20,
                 ),
@@ -1309,9 +1453,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   color: cardBg,
                   borderRadius: BorderRadius.circular(14),
                   boxShadow: _isDarkMode ? [] : AppShadows.soft,
-                  border: _isDarkMode ? Border.all(color: Colors.white12) : null,
+                  border: _isDarkMode
+                      ? Border.all(color: Colors.white12)
+                      : null,
                 ),
-                child: Icon(Icons.logout_rounded, color: AppColors.error.withValues(alpha: 0.8), size: 20),
+                child: Icon(
+                  Icons.logout_rounded,
+                  color: AppColors.error.withValues(alpha: 0.8),
+                  size: 20,
+                ),
               ),
             ),
           ],
@@ -1323,7 +1473,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   Widget _buildStatusCard() {
     final cardBg = _isDarkMode ? const Color(0xFF1E293B) : AppColors.white;
     final titleColor = _isDarkMode ? Colors.white : AppColors.textPrimary;
-    final subtitleColor = _isDarkMode ? Colors.white70 : AppColors.textSecondary;
+    final subtitleColor = _isDarkMode
+        ? Colors.white70
+        : AppColors.textSecondary;
 
     return Container(
       width: double.infinity,
@@ -1352,7 +1504,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    _isOnline ? 'Accepting rides now' : 'Go online to start earning',
+                    _isOnline
+                        ? 'Accepting rides now'
+                        : 'Go online to start earning',
                     style: GoogleFonts.inter(
                       color: subtitleColor,
                       fontSize: 13,
@@ -1370,13 +1524,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   padding: const EdgeInsets.all(3),
                   decoration: BoxDecoration(
                     gradient: _isOnline ? AppGradients.primaryButton : null,
-                    color: _isOnline ? null : (_isDarkMode ? Colors.grey[700] : AppColors.lightGrey),
+                    color: _isOnline
+                        ? null
+                        : (_isDarkMode
+                              ? Colors.grey[700]
+                              : AppColors.lightGrey),
                     borderRadius: BorderRadius.circular(16),
                     boxShadow: _isOnline ? AppShadows.soft : [],
                   ),
                   child: AnimatedAlign(
                     duration: const Duration(milliseconds: 300),
-                    alignment: _isOnline ? Alignment.centerRight : Alignment.centerLeft,
+                    alignment: _isOnline
+                        ? Alignment.centerRight
+                        : Alignment.centerLeft,
                     child: Container(
                       width: 26,
                       height: 26,
@@ -1403,19 +1563,40 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   Widget _buildStatsRow() {
-     return Row(
-       children: [
-         Expanded(child: _buildStatItem('₹${_todayEarnings.toStringAsFixed(0)}', 'Today\'s Earnings', Icons.account_balance_wallet_outlined, AppColors.primaryLight)),
-         const SizedBox(width: 12),
-         Expanded(child: _buildStatItem('$_todayRides', 'Today\'s Rides', Icons.directions_car_outlined, AppColors.info)),
-       ],
-     );
+    return Row(
+      children: [
+        Expanded(
+          child: _buildStatItem(
+            '₹${_todayEarnings.toStringAsFixed(0)}',
+            'Today\'s Earnings',
+            Icons.account_balance_wallet_outlined,
+            AppColors.primaryLight,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _buildStatItem(
+            '$_todayRides',
+            'Today\'s Rides',
+            Icons.directions_car_outlined,
+            AppColors.info,
+          ),
+        ),
+      ],
+    );
   }
 
-  Widget _buildStatItem(String value, String label, IconData icon, Color color) {
+  Widget _buildStatItem(
+    String value,
+    String label,
+    IconData icon,
+    Color color,
+  ) {
     final cardBg = _isDarkMode ? const Color(0xFF1E293B) : AppColors.white;
     final titleColor = _isDarkMode ? Colors.white : AppColors.textPrimary;
-    final subtitleColor = _isDarkMode ? Colors.white70 : AppColors.textSecondary;
+    final subtitleColor = _isDarkMode
+        ? Colors.white70
+        : AppColors.textSecondary;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1488,11 +1669,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           children: [
             if (_paidFare == null) ...[
               // Waiting state
-              const Icon(Icons.hourglass_top_rounded, color: Color(0xFF2E7D32), size: 48),
+              const Icon(
+                Icons.hourglass_top_rounded,
+                color: Color(0xFF2E7D32),
+                size: 48,
+              ),
               const SizedBox(height: 16),
               Text(
                 'Waiting for Payment',
-                style: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.w700, color: textColor),
+                style: GoogleFonts.inter(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: textColor,
+                ),
               ),
               const SizedBox(height: 8),
               Text(
@@ -1502,8 +1691,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               ),
               const SizedBox(height: 20),
               const SizedBox(
-                width: 32, height: 32,
-                child: CircularProgressIndicator(color: Color(0xFF2E7D32), strokeWidth: 3),
+                width: 32,
+                height: 32,
+                child: CircularProgressIndicator(
+                  color: Color(0xFF2E7D32),
+                  strokeWidth: 3,
+                ),
               ),
             ] else ...[
               // Payment received state
@@ -1513,17 +1706,29 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   color: const Color(0xFFE8F5E9),
                   borderRadius: BorderRadius.circular(16),
                 ),
-                child: const Icon(Icons.check_circle_rounded, color: Color(0xFF2E7D32), size: 56),
+                child: const Icon(
+                  Icons.check_circle_rounded,
+                  color: Color(0xFF2E7D32),
+                  size: 56,
+                ),
               ),
               const SizedBox(height: 16),
               Text(
                 'Payment Received! 🎉',
-                style: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.w700, color: const Color(0xFF2E7D32)),
+                style: GoogleFonts.inter(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: const Color(0xFF2E7D32),
+                ),
               ),
               const SizedBox(height: 8),
               Text(
                 '₹${_paidFare!.toStringAsFixed(0)}',
-                style: GoogleFonts.inter(fontSize: 36, fontWeight: FontWeight.w800, color: const Color(0xFF1B5E20)),
+                style: GoogleFonts.inter(
+                  fontSize: 36,
+                  fontWeight: FontWeight.w800,
+                  color: const Color(0xFF1B5E20),
+                ),
               ),
               const SizedBox(height: 4),
               Text(
@@ -1534,17 +1739,32 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(14),
-                  gradient: const LinearGradient(colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)]),
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)],
+                  ),
                 ),
                 child: ElevatedButton.icon(
                   onPressed: _resetRideState,
-                  icon: const Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 22),
-                  label: Text('Continue', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                  icon: const Icon(
+                    Icons.arrow_forward_rounded,
+                    color: Colors.white,
+                    size: 22,
+                  ),
+                  label: Text(
+                    'Continue',
+                    style: GoogleFonts.inter(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.transparent,
                     shadowColor: Colors.transparent,
                     minimumSize: const Size(double.infinity, 56),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
                   ),
                 ),
               ),
@@ -1568,7 +1788,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         color: sheetBg,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
         boxShadow: _isDarkMode ? [] : AppShadows.medium,
-        border: _isDarkMode ? const Border(top: BorderSide(color: Colors.white12)) : null,
+        border: _isDarkMode
+            ? const Border(top: BorderSide(color: Colors.white12))
+            : null,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1576,8 +1798,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           // Drag handle
           Container(
             margin: const EdgeInsets.only(top: 12),
-            width: 36, height: 4,
-            decoration: BoxDecoration(color: handleColor, borderRadius: BorderRadius.circular(2)),
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: handleColor,
+              borderRadius: BorderRadius.circular(2),
+            ),
           ),
           // Status header
           _buildStatusHeader(),
@@ -1647,10 +1873,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        gradient: LinearGradient(colors: gradientColors, begin: Alignment.topLeft, end: Alignment.bottomRight),
+        gradient: LinearGradient(
+          colors: gradientColors,
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
-          BoxShadow(color: gradientColors[0].withValues(alpha: 0.3), blurRadius: 12, offset: const Offset(0, 4)),
+          BoxShadow(
+            color: gradientColors[0].withValues(alpha: 0.3),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
         ],
       ),
       child: Row(
@@ -1668,9 +1902,22 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: GoogleFonts.inter(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                Text(
+                  title,
+                  style: GoogleFonts.inter(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
                 if (subtitle.isNotEmpty)
-                  Text(subtitle, style: GoogleFonts.inter(color: Colors.white.withValues(alpha: 0.85), fontSize: 12)),
+                  Text(
+                    subtitle,
+                    style: GoogleFonts.inter(
+                      color: Colors.white.withValues(alpha: 0.85),
+                      fontSize: 12,
+                    ),
+                  ),
               ],
             ),
           ),
@@ -1697,13 +1944,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           Container(
             padding: const EdgeInsets.all(2),
             decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)]),
+              gradient: const LinearGradient(
+                colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)],
+              ),
               borderRadius: BorderRadius.circular(22),
             ),
             child: const CircleAvatar(
               backgroundColor: Colors.white,
               radius: 20,
-              child: Icon(Icons.person_rounded, color: Color(0xFF2E7D32), size: 22),
+              child: Icon(
+                Icons.person_rounded,
+                color: Color(0xFF2E7D32),
+                size: 22,
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -1711,16 +1964,83 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(_riderName ?? 'Rider', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 15, color: nameColor)),
-                if (_riderPhone != null && _riderPhone!.isNotEmpty)
-                  Row(
-                    children: [
-                      Icon(Icons.phone_rounded, color: phoneColor, size: 14),
-                      const SizedBox(width: 4),
-                      Text(_riderPhone!, style: GoogleFonts.inter(color: phoneColor, fontSize: 12)),
-                    ],
+                Text(
+                  _riderName ?? 'Rider',
+                  style: GoogleFonts.inter(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                    color: nameColor,
                   ),
+                ),
+                Row(
+                  children: [
+                    Icon(Icons.shield_rounded, color: phoneColor, size: 14),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Protected Number',
+                      style: GoogleFonts.inter(color: phoneColor, fontSize: 12),
+                    ),
+                  ],
+                ),
               ],
+            ),
+          ),
+          // Masked call button
+          GestureDetector(
+            onTap: (_rideId != null)
+                ? () async {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Connecting call securely...'),
+                        backgroundColor: Colors.green,
+                        behavior: SnackBarBehavior.floating,
+                        margin: EdgeInsets.only(
+                          top: 10,
+                          left: 16,
+                          right: 16,
+                          bottom: 600,
+                        ),
+                      ),
+                    );
+                    final result = await MapService.initiateCallMask(
+                      _rideId!,
+                      'driver',
+                    );
+                    if (mounted) {
+                      final message = result?['message'] ?? 'Call failed';
+                      final success = result?['success'] == true;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(message),
+                          backgroundColor: success ? Colors.green : Colors.red,
+                          behavior: SnackBarBehavior.floating,
+                          margin: const EdgeInsets.only(
+                            top: 10,
+                            left: 16,
+                            right: 16,
+                            bottom: 600,
+                          ),
+                        ),
+                      );
+                    }
+                  }
+                : null,
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                gradient: (_rideId != null)
+                    ? const LinearGradient(
+                        colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)],
+                      )
+                    : null,
+                color: (_rideId != null) ? null : Colors.grey[300],
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.call_rounded,
+                color: (_rideId != null) ? Colors.white : Colors.grey,
+                size: 20,
+              ),
             ),
           ),
         ],
@@ -1733,7 +2053,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final dropName = ride['dropName']?.toString() ?? 'Drop Location';
     final cardBg = _isDarkMode ? const Color(0xFF0F172A) : Colors.grey[50];
     final borderCol = _isDarkMode ? Colors.white12 : Colors.grey[200]!;
-    final textColor = _isDarkMode ? Colors.white.withValues(alpha: 0.9) : Colors.black87;
+    final textColor = _isDarkMode
+        ? Colors.white.withValues(alpha: 0.9)
+        : Colors.black87;
     final dividerCol = _isDarkMode ? Colors.white12 : Colors.grey[200];
 
     return Container(
@@ -1748,22 +2070,38 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           Column(
             children: [
               Container(
-                width: 12, height: 12,
+                width: 12,
+                height: 12,
                 decoration: BoxDecoration(
                   color: const Color(0xFF4CAF50),
                   shape: BoxShape.circle,
                   border: Border.all(color: Colors.white, width: 2),
-                  boxShadow: [BoxShadow(color: const Color(0xFF4CAF50).withValues(alpha: 0.3), blurRadius: 4)],
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF4CAF50).withValues(alpha: 0.3),
+                      blurRadius: 4,
+                    ),
+                  ],
                 ),
               ),
-              Container(width: 2, height: 30, color: _isDarkMode ? Colors.grey[700] : Colors.grey[300]),
               Container(
-                width: 12, height: 12,
+                width: 2,
+                height: 30,
+                color: _isDarkMode ? Colors.grey[700] : Colors.grey[300],
+              ),
+              Container(
+                width: 12,
+                height: 12,
                 decoration: BoxDecoration(
                   color: const Color(0xFFE53935),
                   shape: BoxShape.circle,
                   border: Border.all(color: Colors.white, width: 2),
-                  boxShadow: [BoxShadow(color: const Color(0xFFE53935).withValues(alpha: 0.3), blurRadius: 4)],
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFE53935).withValues(alpha: 0.3),
+                      blurRadius: 4,
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -1773,9 +2111,31 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(pickupName, style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500, color: textColor), maxLines: 1, overflow: TextOverflow.ellipsis),
-                Container(margin: const EdgeInsets.symmetric(vertical: 8), height: 1, color: dividerCol),
-                Text(dropName, style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500, color: textColor), maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(
+                  pickupName,
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: textColor,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Container(
+                  margin: const EdgeInsets.symmetric(vertical: 8),
+                  height: 1,
+                  color: dividerCol,
+                ),
+                Text(
+                  dropName,
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: textColor,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ],
             ),
           ),
@@ -1790,7 +2150,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: [Color(0xFFFFF8E1), Color(0xFFFFF3E0)]),
+        gradient: const LinearGradient(
+          colors: [Color(0xFFFFF8E1), Color(0xFFFFF3E0)],
+        ),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: const Color(0xFFFFE082)),
       ),
@@ -1799,19 +2161,38 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         children: [
           Row(
             children: [
-              const Icon(Icons.currency_rupee_rounded, color: Color(0xFFF57C00), size: 20),
+              const Icon(
+                Icons.currency_rupee_rounded,
+                color: Color(0xFFF57C00),
+                size: 20,
+              ),
               const SizedBox(width: 6),
-              Text('Estimated Fare', style: GoogleFonts.inter(fontSize: 13, color: const Color(0xFFF57C00), fontWeight: FontWeight.w500)),
+              Text(
+                'Estimated Fare',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  color: const Color(0xFFF57C00),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
             ],
           ),
-          Text('\u20B9$fare', style: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.bold, color: const Color(0xFFE65100))),
+          Text(
+            '\u20B9$fare',
+            style: GoogleFonts.inter(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: const Color(0xFFE65100),
+            ),
+          ),
         ],
       ),
     );
   }
 
   Widget _buildTimerSection() {
-    if (_otpTimer == null || !_otpTimer!.isActive) return const SizedBox.shrink();
+    if (_otpTimer == null || !_otpTimer!.isActive)
+      return const SizedBox.shrink();
     final progress = _otpTimeRemaining / 300.0;
     final isUrgent = _otpTimeRemaining < 60;
 
@@ -1825,27 +2206,37 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               : [const Color(0xFFE3F2FD), const Color(0xFFE8EAF6)],
         ),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: isUrgent ? const Color(0xFFEF9A9A) : const Color(0xFF90CAF9)),
+        border: Border.all(
+          color: isUrgent ? const Color(0xFFEF9A9A) : const Color(0xFF90CAF9),
+        ),
       ),
       child: Row(
         children: [
           SizedBox(
-            width: 56, height: 56,
+            width: 56,
+            height: 56,
             child: Stack(
               alignment: Alignment.center,
               children: [
                 SizedBox(
-                  width: 56, height: 56,
+                  width: 56,
+                  height: 56,
                   child: CircularProgressIndicator(
                     value: progress,
                     strokeWidth: 5,
                     backgroundColor: Colors.grey[300],
-                    valueColor: AlwaysStoppedAnimation(isUrgent ? Colors.red : const Color(0xFF1565C0)),
+                    valueColor: AlwaysStoppedAnimation(
+                      isUrgent ? Colors.red : const Color(0xFF1565C0),
+                    ),
                   ),
                 ),
                 Text(
                   _formatTime(_otpTimeRemaining),
-                  style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.bold, color: isUrgent ? Colors.red : const Color(0xFF1565C0)),
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: isUrgent ? Colors.red : const Color(0xFF1565C0),
+                  ),
                 ),
               ],
             ),
@@ -1857,10 +2248,20 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               children: [
                 Text(
                   isUrgent ? 'Hurry! Time running out' : 'Waiting for rider',
-                  style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 14, color: isUrgent ? Colors.red[700] : const Color(0xFF1565C0)),
+                  style: GoogleFonts.inter(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: isUrgent ? Colors.red[700] : const Color(0xFF1565C0),
+                  ),
                 ),
                 const SizedBox(height: 2),
-                Text('Ride auto-cancels when timer expires', style: GoogleFonts.inter(fontSize: 11, color: Colors.grey[600])),
+                Text(
+                  'Ride auto-cancels when timer expires',
+                  style: GoogleFonts.inter(
+                    fontSize: 11,
+                    color: Colors.grey[600],
+                  ),
+                ),
               ],
             ),
           ),
@@ -1877,14 +2278,23 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             child: OutlinedButton.icon(
               onPressed: _isDeclining ? null : _declineRide,
               icon: _isDeclining
-                  ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  ? const SizedBox(
+                      height: 18,
+                      width: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
                   : const Icon(Icons.close_rounded, size: 18),
-              label: Text('Decline', style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
+              label: Text(
+                'Decline',
+                style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+              ),
               style: OutlinedButton.styleFrom(
                 foregroundColor: Colors.red,
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 side: const BorderSide(color: Colors.red, width: 1.5),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
               ),
             ),
           ),
@@ -1894,20 +2304,48 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             child: Container(
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(14),
-                gradient: const LinearGradient(colors: [Color(0xFF2E7D32), Color(0xFF43A047)]),
-                boxShadow: [BoxShadow(color: const Color(0xFF2E7D32).withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 4))],
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF2E7D32), Color(0xFF43A047)],
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF2E7D32).withValues(alpha: 0.3),
+                    blurRadius: 8,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
               ),
               child: ElevatedButton.icon(
                 onPressed: _isAccepting ? null : _acceptRide,
                 icon: _isAccepting
-                    ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-                label: Text('Accept Ride', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                    ? const SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : const Icon(
+                        Icons.check_circle_rounded,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                label: Text(
+                  'Accept Ride',
+                  style: GoogleFonts.inter(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                  ),
+                ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.transparent,
                   shadowColor: Colors.transparent,
                   padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                 ),
               ),
             ),
@@ -1919,20 +2357,44 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       return Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(14),
-          gradient: const LinearGradient(colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)]),
-          boxShadow: [BoxShadow(color: const Color(0xFF2E7D32).withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 4))],
+          gradient: const LinearGradient(
+            colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF2E7D32).withValues(alpha: 0.3),
+              blurRadius: 8,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         child: ElevatedButton.icon(
           onPressed: _isArriving ? null : _handleArriveAtPickup,
           icon: _isArriving
-              ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+              ? const SizedBox(
+                  height: 18,
+                  width: 18,
+                  child: CircularProgressIndicator(
+                    color: Colors.white,
+                    strokeWidth: 2,
+                  ),
+                )
               : const Icon(Icons.flag_rounded, color: Colors.white, size: 22),
-          label: Text('Arrived at Pickup', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+          label: Text(
+            'Arrived at Pickup',
+            style: GoogleFonts.inter(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: 15,
+            ),
+          ),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.transparent,
             shadowColor: Colors.transparent,
             minimumSize: const Size(double.infinity, 56),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
           ),
         ),
       );
@@ -1941,18 +2403,35 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       return Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(14),
-          gradient: const LinearGradient(colors: [Color(0xFF1B5E20), Color(0xFF43A047)]),
-          boxShadow: [BoxShadow(color: const Color(0xFF1B5E20).withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 4))],
+          gradient: const LinearGradient(
+            colors: [Color(0xFF1B5E20), Color(0xFF43A047)],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF1B5E20).withValues(alpha: 0.3),
+              blurRadius: 8,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         child: ElevatedButton.icon(
           onPressed: _showOtpDialog,
           icon: const Icon(Icons.pin_rounded, color: Colors.white, size: 22),
-          label: Text('Enter OTP & Start Ride', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+          label: Text(
+            'Enter OTP & Start Ride',
+            style: GoogleFonts.inter(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: 15,
+            ),
+          ),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.transparent,
             shadowColor: Colors.transparent,
             minimumSize: const Size(double.infinity, 56),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
           ),
         ),
       );
@@ -1961,18 +2440,39 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       return Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(14),
-          gradient: const LinearGradient(colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)]),
-          boxShadow: [BoxShadow(color: const Color(0xFF2E7D32).withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 4))],
+          gradient: const LinearGradient(
+            colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF2E7D32).withValues(alpha: 0.3),
+              blurRadius: 8,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         child: ElevatedButton.icon(
           onPressed: _handleCompleteRide,
-          icon: const Icon(Icons.check_circle_outline_rounded, color: Colors.white, size: 22),
-          label: Text('Complete Ride', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+          icon: const Icon(
+            Icons.check_circle_outline_rounded,
+            color: Colors.white,
+            size: 22,
+          ),
+          label: Text(
+            'Complete Ride',
+            style: GoogleFonts.inter(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: 15,
+            ),
+          ),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.transparent,
             shadowColor: Colors.transparent,
             minimumSize: const Size(double.infinity, 56),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
           ),
         ),
       );
@@ -1998,21 +2498,50 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
               const SizedBox(height: 20),
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [Color(0xFF1565C0), Color(0xFF42A5F5)]),
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF1565C0), Color(0xFF42A5F5)],
+                  ),
                   borderRadius: BorderRadius.circular(20),
-                  boxShadow: [BoxShadow(color: const Color(0xFF1565C0).withValues(alpha: 0.3), blurRadius: 12, offset: const Offset(0, 4))],
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF1565C0).withValues(alpha: 0.3),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
                 ),
-                child: const Icon(Icons.pin_rounded, color: Colors.white, size: 32),
+                child: const Icon(
+                  Icons.pin_rounded,
+                  color: Colors.white,
+                  size: 32,
+                ),
               ),
               const SizedBox(height: 16),
-              Text('Enter Ride OTP', style: GoogleFonts.inter(fontSize: 22, fontWeight: FontWeight.bold)),
+              Text(
+                'Enter Ride OTP',
+                style: GoogleFonts.inter(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
               const SizedBox(height: 6),
-              Text('Ask the rider for their 4-digit verification code', style: GoogleFonts.inter(fontSize: 13, color: Colors.grey[600]), textAlign: TextAlign.center),
+              Text(
+                'Ask the rider for their 4-digit verification code',
+                style: GoogleFonts.inter(fontSize: 13, color: Colors.grey[600]),
+                textAlign: TextAlign.center,
+              ),
               const SizedBox(height: 24),
               TextField(
                 controller: _otpController,
@@ -2020,16 +2549,37 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 maxLength: 4,
                 textAlign: TextAlign.center,
                 autofocus: true,
-                style: GoogleFonts.inter(fontSize: 36, fontWeight: FontWeight.bold, letterSpacing: 16, color: const Color(0xFF1565C0)),
+                style: GoogleFonts.inter(
+                  fontSize: 36,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 16,
+                  color: const Color(0xFF1565C0),
+                ),
                 decoration: InputDecoration(
                   hintText: '• • • •',
-                  hintStyle: GoogleFonts.inter(fontSize: 36, color: Colors.grey[300], letterSpacing: 16),
+                  hintStyle: GoogleFonts.inter(
+                    fontSize: 36,
+                    color: Colors.grey[300],
+                    letterSpacing: 16,
+                  ),
                   counterText: '',
                   filled: true,
                   fillColor: Colors.grey[50],
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: Colors.grey[300]!)),
-                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: Colors.grey[300]!)),
-                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: Color(0xFF1565C0), width: 2)),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(color: Colors.grey[300]!),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(color: Colors.grey[300]!),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: const BorderSide(
+                      color: Color(0xFF1565C0),
+                      width: 2,
+                    ),
+                  ),
                   contentPadding: const EdgeInsets.symmetric(vertical: 20),
                 ),
               ),
@@ -2042,9 +2592,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         side: BorderSide(color: Colors.grey[400]!),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
                       ),
-                      child: Text('Cancel', style: GoogleFonts.inter(color: Colors.grey[600], fontWeight: FontWeight.w500)),
+                      child: Text(
+                        'Cancel',
+                        style: GoogleFonts.inter(
+                          color: Colors.grey[600],
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -2053,28 +2611,56 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                     child: Container(
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(14),
-                        gradient: const LinearGradient(colors: [Color(0xFF2E7D32), Color(0xFF43A047)]),
-                        boxShadow: [BoxShadow(color: const Color(0xFF2E7D32).withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 4))],
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF2E7D32), Color(0xFF43A047)],
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(
+                              0xFF2E7D32,
+                            ).withValues(alpha: 0.3),
+                            blurRadius: 8,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
                       ),
                       child: ElevatedButton.icon(
                         onPressed: () async {
                           final otp = _otpController.text.trim();
                           if (otp.length != 4) {
                             ScaffoldMessenger.of(ctx).showSnackBar(
-                              const SnackBar(content: Text('Please enter a valid 4-digit OTP'), backgroundColor: Colors.red),
+                              const SnackBar(
+                                content: Text(
+                                  'Please enter a valid 4-digit OTP',
+                                ),
+                                backgroundColor: Colors.red,
+                              ),
                             );
                             return;
                           }
                           Navigator.pop(ctx);
                           await _handleStartRide(otp);
                         },
-                        icon: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 22),
-                        label: Text('Start Trip', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+                        icon: const Icon(
+                          Icons.play_arrow_rounded,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                        label: Text(
+                          'Start Trip',
+                          style: GoogleFonts.inter(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                          ),
+                        ),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.transparent,
                           shadowColor: Colors.transparent,
                           padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
                         ),
                       ),
                     ),
@@ -2095,4 +2681,3 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     return '$min:${sec.toString().padLeft(2, '0')}';
   }
 }
-

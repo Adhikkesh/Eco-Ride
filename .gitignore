@@ -49,6 +49,19 @@ driver_lint_clean.json
 full_lint_report.txt
 check_head.txt
 
+# TypeScript Build Artifacts
+*.tsbuildinfo
+
+# Flutter Build Artifacts
+*.lock
+.flutter-plugins-dependencies
+.dart_tool/
+Podfile.lock
+
+# Android Build
+*.apk
+*.aab
+
 .env.github
 
 

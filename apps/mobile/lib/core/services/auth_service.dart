@@ -435,7 +435,15 @@ class AuthService {
   Future<String> uploadBytes(Uint8List bytes, String path) async {
     try {
       final ref = _storage.ref().child(path);
-      await ref.putData(bytes);
+      // Infer content type from file extension to avoid object-not-found errors
+      final ext = path.split('.').last.toLowerCase();
+      final contentType = switch (ext) {
+        'jpg' || 'jpeg' => 'image/jpeg',
+        'png' => 'image/png',
+        'pdf' => 'application/pdf',
+        _ => 'application/octet-stream',
+      };
+      await ref.putData(bytes, SettableMetadata(contentType: contentType));
       return await ref.getDownloadURL();
     } catch (e) {
       throw AuthException('Failed to upload file bytes: ${e.toString()}');
