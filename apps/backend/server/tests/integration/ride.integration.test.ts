@@ -265,6 +265,72 @@ describe("Ride Integration Tests", () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
     });
+
+    it("should accept pooled second rider when driver is already on a trip", async () => {
+      // Second rider's Firestore ride document
+      setMockDoc(true, {
+        driverId: "test-user-uid-123",
+        driverName: "Test Driver",
+        drop: SAMPLE_DROP,
+        pickup: SAMPLE_PICKUP,
+        riderId: "rider-2",
+        riderName: "Rider Two",
+        riderPhone: "555-0002",
+        status: "PENDING_ACCEPTANCE",
+      });
+
+      // First call to RTDB once("value"): rides-assigned — driver already has a first ride
+      mockRtdbRef.once.mockResolvedValueOnce({
+        val: () => ({
+          drop: { lat: 12.5, lng: 77.5 },
+          pickup: { lat: 12.0, lng: 77.0 },
+          rideId: "first-ride-id",
+          riderId: "rider-1",
+          riderName: "Rider One",
+          riderPhone: "555-0001",
+          status: "IN_PROGRESS",
+          timestamp: Date.now() - 60000,
+        }),
+      });
+
+      // Second call to RTDB once("value"): drivers-online — driver is BUSY (on trip)
+      mockRtdbRef.once.mockResolvedValueOnce({
+        val: () => ({
+          heading: 0,
+          lastUpdated: Date.now(),
+          lat: 12.3,
+          lng: 77.3,
+          status: "BUSY",
+        }),
+      });
+
+      const res = await request
+        .post("/api/v1/ride/accept")
+        .set("Authorization", AUTH_HEADER)
+        .send({ rideId: "second-ride-id" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
+
+    it("should return 422 when second rides drop/pickup coords are missing", async () => {
+      setMockDoc(true, {
+        driverId: "test-user-uid-123",
+        riderId: "rider-2",
+        status: "PENDING_ACCEPTANCE",
+        // intentionally missing drop / pickup
+      });
+
+      // No RTDB mock needed — acceptRide returns 422 before any RTDB read
+
+      const res = await request
+        .post("/api/v1/ride/accept")
+        .set("Authorization", AUTH_HEADER)
+        .send({ rideId: "second-ride-id" });
+
+      expect(res.status).toBe(422);
+      expect(res.body.success).toBe(false);
+    });
   });
 
   describe("POST /api/v1/ride/decline", () => {
