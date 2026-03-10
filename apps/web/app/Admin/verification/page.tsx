@@ -16,6 +16,8 @@ import {
   FaSignOutAlt,
   FaTimes,
   FaUser,
+  FaChalkboardTeacher,
+  FaChartBar,
 } from "react-icons/fa";
 import { auth } from "@/lib/firebase";
 import { backendUrl } from "../../../config";
@@ -304,28 +306,51 @@ export default function AdminVerification(): JSX.Element {
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={handleLogout}
-              style={{
-                alignItems: "center",
-                background: "white",
-                border: "1px solid #ff5252",
-                borderRadius: "8px",
-                color: "#ff5252",
-                cursor: "pointer",
-                display: "flex",
-                fontSize: "14px",
-                fontWeight: "600",
-                gap: "8px",
-                marginLeft: "auto",
-                padding: "10px 16px",
-                transition: "all 0.2s",
-              }}
-            >
-              <FaSignOutAlt />
-              Logout
-            </button>
+            <div style={{ marginLeft: "auto", display: "flex", gap: "12px" }}>
+              <button
+                type="button"
+                onClick={() => router.push("/Admin/analytics")}
+                style={{
+                  alignItems: "center",
+                  background: "linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%)",
+                  border: "none",
+                  borderRadius: "8px",
+                  color: "white",
+                  cursor: "pointer",
+                  display: "flex",
+                  fontSize: "14px",
+                  fontWeight: "600",
+                  gap: "8px",
+                  padding: "10px 16px",
+                  transition: "all 0.2s",
+                  boxShadow: "0 2px 4px rgba(59, 130, 246, 0.3)",
+                }}
+              >
+                <FaChartBar />
+                Analytics Dashboard
+              </button>
+              <button
+                type="button"
+                onClick={handleLogout}
+                style={{
+                  alignItems: "center",
+                  background: "white",
+                  border: "1px solid #ff5252",
+                  borderRadius: "8px",
+                  color: "#ff5252",
+                  cursor: "pointer",
+                  display: "flex",
+                  fontSize: "14px",
+                  fontWeight: "600",
+                  gap: "8px",
+                  padding: "10px 16px",
+                  transition: "all 0.2s",
+                }}
+              >
+                <FaSignOutAlt />
+                Logout
+              </button>
+            </div>
           </div>
 
           {/* Driver Verification Queue */}
