@@ -11,7 +11,7 @@ import {
   updateDoc,
   where,
 } from "firebase/firestore";
-import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
+
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -39,7 +39,8 @@ import {
   FaWallet,
 } from "react-icons/fa";
 import { Button } from "@/components/ui/button";
-import { auth, db, storage } from "@/lib/firebase";
+import { auth, db } from "@/lib/firebase";
+import { uploadToSupabase } from "@/lib/supabase";
 
 interface Ride {
   id: string;
@@ -331,12 +332,10 @@ export default function ProfilePage() {
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target?.files?.[0] && user) {
       const file = e.target.files[0];
-      const storageRef = ref(storage, `profile-pictures/${user.uid}`);
 
       try {
         setSaving(true);
-        const snapshot = await uploadBytes(storageRef, file);
-        const downloadURL = await getDownloadURL(snapshot.ref);
+        const downloadURL = await uploadToSupabase("documents", `profile-pictures/${user.uid}`, file);
 
         setPhotoURL(downloadURL);
 
