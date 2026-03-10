@@ -344,7 +344,7 @@ export default function DriverLiveMap({
 
   const [userId, setUserId] = useState<string | null>(null);
   const [authToken, setAuthToken] = useState<string | null>(null);
-  const [showDemandHeatmap, setShowDemandHeatmap] = useState(true);
+  const [showDemandHeatmap, setShowDemandHeatmap] = useState(false);
   const [authReady, setAuthReady] = useState(false);
 
   const [driverName, setDriverName] = useState<string | null>(null);
@@ -1901,7 +1901,6 @@ export default function DriverLiveMap({
                   centerLng={position?.lng || undefined}
                   radiusKm={8}
                   gridSize={5}
-                  visible={showDemandHeatmap}
                 />
               )}
 
