@@ -38,7 +38,7 @@ export default function Onboarding(): React.ReactNode {
   const [pollutionExpiry, setPollutionExpiry] = useState("");
 
   // UI state
-  const [isLoading, setIsLoading] = useState(false);
+  const [submitStatus, setSubmitStatus] = useState("");
   const [error, setError] = useState("");
 
   // Get user info from Firebase auth
@@ -54,13 +54,26 @@ export default function Onboarding(): React.ReactNode {
 
   const uploadFile = async (file: File, path: string): Promise<string> => {
     const storageRef = ref(storage, path);
-    await uploadBytes(storageRef, file);
-    return getDownloadURL(storageRef);
+    // Add a 15-second timeout to prevent infinite hanging (e.g. from CORS issues)
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error("Storage upload timed out (Check Firebase CORS and Rules)")), 15000);
+    });
+    
+    try {
+      await Promise.race([
+        uploadBytes(storageRef, file),
+        timeoutPromise
+      ]);
+      return await getDownloadURL(storageRef);
+    } catch (error) {
+      console.error("File upload error:", error);
+      throw error;
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsLoading(true);
+    setSubmitStatus("Checking authentication...");
     setError("");
 
     try {
@@ -82,15 +95,18 @@ export default function Onboarding(): React.ReactNode {
       // Upload files if driver
       if (role === "driver") {
         if (kycFile) {
+          setSubmitStatus("Uploading KYC Document...");
           const kycPath = `drivers/${user.uid}/kyc/${Date.now()}_${kycFile.name}`;
           kycUrl = await uploadFile(kycFile, kycPath);
         }
         if (licenseFile) {
+          setSubmitStatus("Uploading Driver License...");
           const licensePath = `drivers/${user.uid}/license/${Date.now()}_${licenseFile.name}`;
           licenseUrl = await uploadFile(licenseFile, licensePath);
         }
       }
 
+      setSubmitStatus("Preparing profile data...");
       const token = await user.getIdToken();
 
       const payload: Record<string, unknown> = {
@@ -111,25 +127,43 @@ export default function Onboarding(): React.ReactNode {
         payload.pollution_expiry = pollutionExpiry;
       }
 
-      const response = await fetch(`${backendUrl}/user`, {
-        body: JSON.stringify(payload),
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        method: "POST",
-      });
+      setSubmitStatus("Saving profile to server...");
+      
+      // Add a timeout to the fetch call just in case the backend hangs
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+      
+      try {
+        const response = await fetch(`${backendUrl}/user`, {
+          body: JSON.stringify(payload),
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
 
-      if (response.ok) {
-        router.push("/dashboard");
-      } else {
-        const data = await response.json();
-        setError(data.message || "Failed to create profile");
+        if (response.ok) {
+          setSubmitStatus("Redirecting to dashboard...");
+          router.push("/dashboard");
+        } else {
+          const data = await response.json();
+          setError(data.message || "Failed to create profile (Server returned Error)");
+        }
+      } catch (fetchErr) {
+        clearTimeout(timeoutId);
+        if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
+          throw new Error("Backend server is not responding (Timeout connecting to server)");
+        }
+        throw fetchErr;
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
-      setIsLoading(false);
+      setSubmitStatus("");
     }
   };
 
@@ -534,17 +568,17 @@ export default function Onboarding(): React.ReactNode {
           {/* Submit Button */}
           <button
             type="submit"
-            disabled={isLoading}
+            disabled={!!submitStatus}
             style={{
               alignItems: "center",
-              background: isLoading
+              background: submitStatus
                 ? "linear-gradient(135deg, #a5d6a7 0%, #81c784 100%)"
                 : "linear-gradient(135deg, #4caf50 0%, #43a047 100%)",
               border: "none",
               borderRadius: "12px",
               boxShadow: "0 4px 15px rgba(76,175,80,0.35)",
               color: "white",
-              cursor: isLoading ? "not-allowed" : "pointer",
+              cursor: submitStatus ? "not-allowed" : "pointer",
               display: "flex",
               fontSize: "16px",
               fontWeight: "600",
@@ -555,7 +589,7 @@ export default function Onboarding(): React.ReactNode {
               width: "100%",
             }}
           >
-            {isLoading ? "Creating Profile..." : "Complete Registration"}
+            {submitStatus ? submitStatus : "Complete Registration"}
           </button>
         </form>
       </div>
