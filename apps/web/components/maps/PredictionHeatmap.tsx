@@ -69,10 +69,14 @@ export default function PredictionHeatmap({
   }, [token, centerLat, centerLng, radiusKm, gridSize, visible]);
 
   useEffect(() => {
+    if (!visible) {
+      setCells([]);
+      return;
+    }
     fetchHeatmap();
     const interval = setInterval(fetchHeatmap, 5 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [fetchHeatmap]);
+  }, [fetchHeatmap, visible]);
 
   if (!visible || cells.length === 0) return null;
 
