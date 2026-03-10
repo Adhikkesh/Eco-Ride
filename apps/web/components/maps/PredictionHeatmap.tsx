@@ -54,7 +54,10 @@ export default function PredictionHeatmap({
 
       const res = await fetch(
         `${backendUrl}/predict/demand-heatmap?lat=${centerLat}&lng=${centerLng}&radius=${radiusKm}&grid=${gridSize}&hour=${hour}&day=${day}`,
-        { headers: { Authorization: `Bearer ${token}` } }
+        { 
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` } 
+        }
       );
       if (res.ok) {
         const data = await res.json();
