@@ -8,6 +8,8 @@
 
 import type { Request, Response } from "express";
 
+const PREDICTION_SERVICE_URL = process.env.PREDICTION_SERVICE_URL || "http://prediction:5000";
+
 /**
  * Pricing configuration for fare calculation (in INR).
  * @constant {Object}
@@ -155,8 +157,30 @@ export const calculateFare = async (req: Request, res: Response) => {
     // ═══════════════════════════════════════════════════════════════
     // PRICING LOGIC — Eco-Friendly Fare Calculation
     // ═══════════════════════════════════════════════════════════════
-    const baseFare =
+    let baseFare =
       PRICING.BASE_FARE + distanceKm * PRICING.PER_KM + durationMin * PRICING.PER_MIN;
+
+    // Fetch dynamic surge multiplier from Python Microservice
+    let surgeMultiplier = 1.0;
+    try {
+      const now = new Date();
+      const surgeRes = await fetch(`${PREDICTION_SERVICE_URL}/predict/surge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          hour: now.getHours(),
+          day_of_week: now.getDay() === 0 ? 6 : now.getDay() - 1, // mapping to 0=Mon
+        }),
+      });
+      if (surgeRes.ok) {
+        const surgeData = await surgeRes.json();
+        surgeMultiplier = surgeData.surge_multiplier || 1.0;
+      }
+    } catch (e) {
+      console.warn("Could not fetch surge multiplier, defaulting to 1.0x", e);
+    }
+
+    baseFare = baseFare * surgeMultiplier;
 
     let finalFare = baseFare;
     let poolDiscount = 0;
@@ -213,6 +237,7 @@ export const calculateFare = async (req: Request, res: Response) => {
       pool_discount_pct: isPooled ? Math.round(poolDiscount * 100) : 0,
       pool_savings: poolSavings,
       solo_fare: Math.round(baseFare),
+      surge_multiplier: surgeMultiplier,
       success: true,
     });
   } catch (error) {

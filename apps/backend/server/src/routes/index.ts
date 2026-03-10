@@ -30,6 +30,12 @@ import {
 } from "../controllers/rideController.js";
 import { getSavedLocations, updateSavedLocation } from "../controllers/savedLocationsController.js";
 import { CreateUserController, GetDriverStatusController } from "../controllers/userController.js";
+import {
+  predictDemand,
+  predictForecast24h,
+  predictHeatmap,
+  predictSurge,
+} from "../controllers/predictionController.js";
 import { verifyToken } from "../middleware/authMiddleware.js";
 
 /**
@@ -130,3 +136,11 @@ router.get("/admin/drivers/unverified", verifyToken, GetUnverifiedDriversControl
 
 /** Approve or decline driver verification (admin only) */
 router.post("/admin/drivers/verify", verifyToken, VerifyDriverController);
+
+// ============================================================================
+// Prediction Proxy Routes (Auth optional for now)
+// ============================================================================
+router.post("/predict/demand", predictDemand);
+router.post("/predict/demand-heatmap", predictHeatmap);
+router.post("/predict/surge", predictSurge);
+router.post("/predict/forecast-24h", predictForecast24h);
