@@ -88,8 +88,9 @@ export default function Dashboard(): React.ReactNode {
         }
       } catch (error) {
         console.error("Error fetching user role:", error);
-        // Default to rider on error
-        setUserRole("rider");
+        // User profile not accessible - redirect to onboarding
+        router.push("/onboarding");
+        return;
       }
 
       setLoading(false);
@@ -391,8 +392,21 @@ export default function Dashboard(): React.ReactNode {
       <main style={{ paddingTop: "0" }}>
         {userRole === "driver" ? (
           <DriverLiveMap embedded darkMode={darkMode} />
-        ) : (
+        ) : userRole === "rider" ? (
           <RiderMap embedded darkMode={darkMode} />
+        ) : (
+          <div
+            style={{
+              alignItems: "center",
+              color: darkMode ? "#94a3b8" : "#64748b",
+              display: "flex",
+              fontSize: "16px",
+              justifyContent: "center",
+              minHeight: "60vh",
+            }}
+          >
+            Loading...
+          </div>
         )}
       </main>
 
