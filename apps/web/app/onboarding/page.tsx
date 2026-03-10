@@ -1,5 +1,4 @@
 "use client";
-import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
@@ -12,7 +11,8 @@ import {
   FaUser,
   FaUsers,
 } from "react-icons/fa";
-import { auth, storage } from "@/lib/firebase";
+import { auth } from "@/lib/firebase";
+import { uploadToSupabase } from "@/lib/supabase";
 import { backendUrl } from "../../config";
 
 // Prevent static generation - this page requires Firebase auth
@@ -52,24 +52,6 @@ export default function Onboarding(): React.ReactNode {
     }
   }, []);
 
-  const uploadFile = async (file: File, path: string): Promise<string> => {
-    const storageRef = ref(storage, path);
-    // Add a 15-second timeout to prevent infinite hanging (e.g. from CORS issues)
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error("Storage upload timed out (Check Firebase CORS and Rules)")), 15000);
-    });
-    
-    try {
-      await Promise.race([
-        uploadBytes(storageRef, file),
-        timeoutPromise
-      ]);
-      return await getDownloadURL(storageRef);
-    } catch (error) {
-      console.error("File upload error:", error);
-      throw error;
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -96,13 +78,15 @@ export default function Onboarding(): React.ReactNode {
       if (role === "driver") {
         if (kycFile) {
           setSubmitStatus("Uploading KYC Document...");
-          const kycPath = `drivers/${user.uid}/kyc/${Date.now()}_${kycFile.name}`;
-          kycUrl = await uploadFile(kycFile, kycPath);
+          const sanitizedFileName = kycFile.name.replace(/[^a-zA-Z0-9.-]/g, "-").replace(/-+/g, "-");
+        const kycPath = `drivers/${user.uid}/kyc/${Date.now()}_${sanitizedFileName}`;
+          kycUrl = await uploadToSupabase("documents", kycPath, kycFile);
         }
         if (licenseFile) {
           setSubmitStatus("Uploading Driver License...");
-          const licensePath = `drivers/${user.uid}/license/${Date.now()}_${licenseFile.name}`;
-          licenseUrl = await uploadFile(licenseFile, licensePath);
+          const sanitizedFileName = licenseFile.name.replace(/[^a-zA-Z0-9.-]/g, "-").replace(/-+/g, "-");
+        const licensePath = `drivers/${user.uid}/license/${Date.now()}_${sanitizedFileName}`;
+          licenseUrl = await uploadToSupabase("documents", licensePath, licenseFile);
         }
       }
 
