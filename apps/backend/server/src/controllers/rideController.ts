@@ -1138,8 +1138,8 @@ export const acceptRide = async (req: Request, res: Response) => {
         riderPhone: existingAssigned.riderPhone ?? null,
         status: existingAssigned.status ?? "MATCHED",
         timestamp: existingAssigned.timestamp ?? Date.now(),
-        ...(existingAssigned.arrivedAt !== undefined
-          ? { arrivedAt: existingAssigned.arrivedAt }
+        ...((existingAssigned as Record<string, unknown>).arrivedAt !== undefined
+          ? { arrivedAt: (existingAssigned as Record<string, unknown>).arrivedAt }
           : {}),
       } as Record<string, unknown>;
 
