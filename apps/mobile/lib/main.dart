@@ -15,10 +15,12 @@ import 'core/constants/app_constants.dart';
 import 'core/services/auth_service.dart';
 import 'features/auth/screens/login_screen.dart';
 import 'features/onboarding/screens/onboarding_screen.dart';
+import 'features/onboarding/screens/landing_screen.dart';
 import 'features/home/screens/home_screen.dart';
 import 'features/home/screens/driver_home_screen.dart';
 import 'core/models/user_model.dart';
 import 'firebase_options.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Global flag to indicate if Firebase is available
 /// When false, the app runs in demo/preview mode
@@ -371,8 +373,8 @@ class _AuthGateState extends State<AuthGate> {
           );
         }
 
-        // User is not signed in
-        return const LoginScreen();
+        // User is not signed in — show landing screen on first launch
+        return _LandingGate();
       },
     );
   }
@@ -434,6 +436,31 @@ class _AuthGateState extends State<AuthGate> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Shows landing screen on first launch, login screen thereafter
+class _LandingGate extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<SharedPreferences>(
+      future: SharedPreferences.getInstance(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Scaffold(
+            backgroundColor: AppColors.background,
+            body: Center(child: CircularProgressIndicator(color: AppColors.primary)),
+          );
+        }
+        final prefs = snapshot.data!;
+        final hasSeenLanding = prefs.getBool('hasSeenLanding') ?? false;
+        if (!hasSeenLanding) {
+          prefs.setBool('hasSeenLanding', true);
+          return const LandingScreen();
+        }
+        return const LoginScreen();
+      },
     );
   }
 }

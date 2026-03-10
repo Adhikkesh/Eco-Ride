@@ -45,6 +45,7 @@ import {
 } from "../controllers/rideController.js";
 import { getSavedLocations, updateSavedLocation } from "../controllers/savedLocationsController.js";
 import { CreateUserController, GetDriverStatusController } from "../controllers/userController.js";
+import { initiateCallMask } from "../controllers/callController.js";
 import { verifyToken } from "../middleware/authMiddleware.js";
 
 /**
@@ -169,3 +170,8 @@ router.post("/pool/accept", verifyToken, acceptPoolOffer);
 
 /** Driver declines a pool offer (REST fallback for non-WebSocket clients) */
 router.post("/pool/decline", verifyToken, declinePoolOffer);
+// Call Masking Routes
+// ============================================================================
+
+/** Initiate a Twilio masked call between rider and driver */
+router.post("/call/mask", verifyToken, initiateCallMask);

@@ -72,18 +72,21 @@ class _LoginScreenState extends State<LoginScreen>
         password: _passwordController.text,
       );
 
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      if (mounted) {
-        final user = AuthService.instance.currentUser;
-        if (user != null) {
-          setState(() => _isLoading = false);
-        }
-      }
+      // Sign-in succeeded — AuthGate will handle navigation
+      debugPrint('LoginScreen: Sign-in successful, AuthGate will navigate');
     } on AuthException catch (e) {
+      debugPrint('LoginScreen: AuthException: ${e.message}');
       if (mounted) _showSnackbar(e.message, isError: true);
     } catch (e) {
-      if (mounted) _showSnackbar('An unexpected error occurred.', isError: true);
+      debugPrint('LoginScreen: Unexpected error: $e');
+      if (mounted) {
+        _showSnackbar(
+          e.toString().contains('network')
+              ? 'Network error. Check your connection.'
+              : 'Sign-in failed: ${e.toString()}',
+          isError: true,
+        );
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }

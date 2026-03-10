@@ -83,7 +83,9 @@ class UserModel {
       savedLocations: _parseSavedLocations(data['saved_locations']),
       createdAt: (data['created_at'] as Timestamp?)?.toDate(),
       lastLogin: (data['last_login'] as Timestamp?)?.toDate(),
-      isOnboarded: data['is_onboarded'] as bool? ?? false,
+      // Accounts created via web don't have is_onboarded flag,
+      // so also consider user onboarded if they have a name (profile was completed)
+      isOnboarded: (data['is_onboarded'] as bool?) ?? (data['name'] != null && (data['name'] as String).isNotEmpty),
       kycUrl: data['kyc_url'] as String?,
       licenseUrl: data['license_url'] as String?,
       plateNumber: data['plate_number'] as String?,

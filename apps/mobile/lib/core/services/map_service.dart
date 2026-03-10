@@ -3,15 +3,20 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../core/services/auth_service.dart';
 import '../constants/app_constants.dart';
 
 class MapService {
   // Persistent HTTP client to avoid iOS socket exhaustion (errno 48)
   static final http.Client _client = http.Client();
-  static const String _autocompleteUrl = 'https://maps.googleapis.com/maps/api/place/autocomplete/json';
-  static const String _detailsUrl = 'https://maps.googleapis.com/maps/api/place/details/json';
-  static const String _directionsUrl = 'https://maps.googleapis.com/maps/api/directions/json';
+  static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  static const String _autocompleteUrl =
+      'https://maps.googleapis.com/maps/api/place/autocomplete/json';
+  static const String _detailsUrl =
+      'https://maps.googleapis.com/maps/api/place/details/json';
+  static const String _directionsUrl =
+      'https://maps.googleapis.com/maps/api/directions/json';
 
   // Simulation data for Web/CORS bypass
   static const Map<String, Map<String, dynamic>> _simulatedPlaces = {
@@ -22,13 +27,15 @@ class MapService {
       'lng': 76.8992,
     },
     'coimbatore junction': {
-      'description': 'Coimbatore Junction Railway Station, Gopalapuram, Coimbatore',
+      'description':
+          'Coimbatore Junction Railway Station, Gopalapuram, Coimbatore',
       'place_id': 'sim_cbe_junction',
       'lat': 10.9980,
       'lng': 76.9666,
     },
     'coimbatore airport': {
-      'description': 'Coimbatore International Airport (CJB), Peelamedu, Coimbatore',
+      'description':
+          'Coimbatore International Airport (CJB), Peelamedu, Coimbatore',
       'place_id': 'sim_cbe_airport',
       'lat': 11.0300,
       'lng': 77.0434,
@@ -77,14 +84,17 @@ class MapService {
     },
   };
 
-  static Future<List<Map<String, dynamic>>> getPlaceSuggestions(String input) async {
+  static Future<List<Map<String, dynamic>>> getPlaceSuggestions(
+    String input,
+  ) async {
     if (input.isEmpty) return [];
 
     final query = input.toLowerCase();
-    
+
     // 1. Prepare the real API URL
-    final apiUri = '$_autocompleteUrl?input=${Uri.encodeComponent(input)}&key=${ApiConfig.googleMapsApiKey}';
-    
+    final apiUri =
+        '$_autocompleteUrl?input=${Uri.encodeComponent(input)}&key=${ApiConfig.googleMapsApiKey}';
+
     // 2. Try multiple proxies on Web
     if (kIsWeb) {
       final proxies = [
@@ -95,7 +105,9 @@ class MapService {
       for (var proxyUrl in proxies) {
         try {
           debugPrint('MapService: Trying proxy: $proxyUrl');
-          final response = await _client.get(Uri.parse(proxyUrl)).timeout(const Duration(seconds: 4));
+          final response = await _client
+              .get(Uri.parse(proxyUrl))
+              .timeout(const Duration(seconds: 4));
           if (response.statusCode == 200) {
             final data = json.decode(response.body);
             if (data['status'] == 'OK') {
@@ -109,7 +121,9 @@ class MapService {
     } else {
       // On Mobile, just call directly
       try {
-        final response = await _client.get(Uri.parse(apiUri)).timeout(const Duration(seconds: 3));
+        final response = await _client
+            .get(Uri.parse(apiUri))
+            .timeout(const Duration(seconds: 3));
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
           if (data['status'] == 'OK') {
@@ -132,23 +146,23 @@ class MapService {
       }
     });
 
-    return suggestions; 
+    return suggestions;
   }
 
   static Future<Map<String, double>?> getPlaceDetails(String placeId) async {
     debugPrint('MapService: Getting details for $placeId');
     for (var place in _simulatedPlaces.values) {
       if (place['place_id'] == placeId) {
-        debugPrint('MapService: Found simulated location: ${place['lat']}, ${place['lng']}');
-        return {
-          'lat': place['lat'] as double,
-          'lng': place['lng'] as double,
-        };
+        debugPrint(
+          'MapService: Found simulated location: ${place['lat']}, ${place['lng']}',
+        );
+        return {'lat': place['lat'] as double, 'lng': place['lng'] as double};
       }
     }
 
-    final apiUri = '$_detailsUrl?place_id=$placeId&key=${ApiConfig.googleMapsApiKey}';
-    
+    final apiUri =
+        '$_detailsUrl?place_id=$placeId&key=${ApiConfig.googleMapsApiKey}';
+
     if (kIsWeb) {
       final proxies = [
         'https://api.allorigins.win/raw?url=${Uri.encodeComponent(apiUri)}',
@@ -158,12 +172,16 @@ class MapService {
       for (var proxyUrl in proxies) {
         try {
           debugPrint('MapService: Details Proxy: $proxyUrl');
-          final response = await _client.get(Uri.parse(proxyUrl)).timeout(const Duration(seconds: 4));
+          final response = await _client
+              .get(Uri.parse(proxyUrl))
+              .timeout(const Duration(seconds: 4));
           if (response.statusCode == 200) {
             final data = json.decode(response.body);
             if (data['status'] == 'OK') {
               final location = data['result']['geometry']['location'];
-              debugPrint('MapService: Real Location Found: ${location['lat']}, ${location['lng']}');
+              debugPrint(
+                'MapService: Real Location Found: ${location['lat']}, ${location['lng']}',
+              );
               return {
                 'lat': (location['lat'] as num).toDouble(),
                 'lng': (location['lng'] as num).toDouble(),
@@ -176,7 +194,9 @@ class MapService {
       }
     } else {
       try {
-        final response = await _client.get(Uri.parse(apiUri)).timeout(const Duration(seconds: 5));
+        final response = await _client
+            .get(Uri.parse(apiUri))
+            .timeout(const Duration(seconds: 5));
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
           if (data['status'] == 'OK') {
@@ -194,12 +214,18 @@ class MapService {
     return null;
   }
 
-  static Future<Map<String, dynamic>?> getDirections(LatLng origin, LatLng destination) async {
-    debugPrint('MapService: Directions from ${origin.latitude},${origin.longitude} to ${destination.latitude},${destination.longitude}');
-    
+  static Future<Map<String, dynamic>?> getDirections(
+    LatLng origin,
+    LatLng destination,
+  ) async {
+    debugPrint(
+      'MapService: Directions from ${origin.latitude},${origin.longitude} to ${destination.latitude},${destination.longitude}',
+    );
+
     final originStr = '${origin.latitude},${origin.longitude}';
     final destStr = '${destination.latitude},${destination.longitude}';
-    final apiUri = '$_directionsUrl?origin=$originStr&destination=$destStr&key=${ApiConfig.googleMapsApiKey}';
+    final apiUri =
+        '$_directionsUrl?origin=$originStr&destination=$destStr&key=${ApiConfig.googleMapsApiKey}';
 
     if (kIsWeb) {
       final proxies = [
@@ -210,20 +236,28 @@ class MapService {
       for (var url in proxies) {
         try {
           debugPrint('MapService: Fetching directions via $url');
-          final response = await _client.get(Uri.parse(url)).timeout(const Duration(seconds: 5));
+          final response = await _client
+              .get(Uri.parse(url))
+              .timeout(const Duration(seconds: 5));
           if (response.statusCode == 200) {
             final data = json.decode(response.body);
             if (data['status'] == 'OK') {
               final route = data['routes'][0];
               final polyline = route['overview_polyline']['points'];
               final leg = route['legs'][0];
-              
-              debugPrint('MapService: Received Polyline string (length ${polyline.length})');
+
+              debugPrint(
+                'MapService: Received Polyline string (length ${polyline.length})',
+              );
               final points = _decodePolyline(polyline);
               debugPrint('MapService: Decoded ${points.length} points');
               if (points.isNotEmpty) {
-                debugPrint('MapService: First Point: ${points.first.latitude}, ${points.first.longitude}');
-                debugPrint('MapService: Last Point: ${points.last.latitude}, ${points.last.longitude}');
+                debugPrint(
+                  'MapService: First Point: ${points.first.latitude}, ${points.first.longitude}',
+                );
+                debugPrint(
+                  'MapService: Last Point: ${points.last.latitude}, ${points.last.longitude}',
+                );
               }
 
               return {
@@ -232,7 +266,9 @@ class MapService {
                 'duration': leg['duration']['text'],
               };
             } else {
-              debugPrint('MapService Directions API Error Status: ${data['status']}');
+              debugPrint(
+                'MapService Directions API Error Status: ${data['status']}',
+              );
             }
           }
         } catch (e) {
@@ -241,7 +277,9 @@ class MapService {
       }
     } else {
       try {
-        final response = await _client.get(Uri.parse(apiUri)).timeout(const Duration(seconds: 5));
+        final response = await _client
+            .get(Uri.parse(apiUri))
+            .timeout(const Duration(seconds: 5));
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
           if (data['status'] == 'OK') {
@@ -263,7 +301,11 @@ class MapService {
     return null;
   }
 
-  static Future<Map<String, dynamic>?> getRideEstimate(LatLng pickup, LatLng drop, {bool isPooled = false}) async {
+  static Future<Map<String, dynamic>?> getRideEstimate(
+    LatLng pickup,
+    LatLng drop, {
+    bool isPooled = false,
+  }) async {
     try {
       final token = await AuthService.instance.getIdToken();
       if (token == null) {
@@ -272,7 +314,9 @@ class MapService {
       }
 
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.estimateRide}');
-      debugPrint('MapService: Requesting estimate from $url (pooled=$isPooled)');
+      debugPrint(
+        'MapService: Requesting estimate from $url (pooled=$isPooled)',
+      );
 
       final response = await _client.post(
         url,
@@ -290,13 +334,17 @@ class MapService {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['success'] == true) {
-          debugPrint('MapService: Estimate received: ${data['fare']} ${data['currency']}');
+          debugPrint(
+            'MapService: Estimate received: ${data['fare']} ${data['currency']}',
+          );
           return data;
         } else {
           debugPrint('MapService: Backend returned error: ${data['message']}');
         }
       } else {
-        debugPrint('MapService: Estimate API error: ${response.statusCode} - ${response.body}');
+        debugPrint(
+          'MapService: Estimate API error: ${response.statusCode} - ${response.body}',
+        );
       }
     } catch (e) {
       debugPrint('MapService: Fatal error getting estimate: $e');
@@ -369,7 +417,6 @@ class MapService {
     }
   }
 
-
   // =========================================================================
   // Ride Lifecycle API Methods
   // =========================================================================
@@ -383,14 +430,16 @@ class MapService {
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.acceptRide}');
       debugPrint('MapService: Accepting ride $rideId at $url');
 
-      final response = await _client.post(
-        url,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: json.encode({'rideId': rideId}),
-      );
+      final response = await _client
+          .post(
+            url,
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: json.encode({'rideId': rideId}),
+          )
+          .timeout(const Duration(seconds: 15));
 
       debugPrint('MapService: Accept ride status: ${response.statusCode}');
       if (response.statusCode == 200) {
@@ -415,14 +464,16 @@ class MapService {
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.declineRide}');
       debugPrint('MapService: Declining ride $rideId');
 
-      final response = await _client.post(
-        url,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: json.encode({'rideId': rideId, 'driverId': userId}),
-      );
+      final response = await _client
+          .post(
+            url,
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: json.encode({'rideId': rideId, 'driverId': userId}),
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         return json.decode(response.body);
@@ -465,7 +516,10 @@ class MapService {
   }
 
   /// Start ride after OTP verification (driver side)
-  static Future<Map<String, dynamic>?> startRide(String rideId, String otp) async {
+  static Future<Map<String, dynamic>?> startRide(
+    String rideId,
+    String otp,
+  ) async {
     try {
       final token = await AuthService.instance.getIdToken();
       if (token == null) return null;
@@ -613,7 +667,9 @@ class MapService {
       if (token == null) return null;
 
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.rateRide}');
-      debugPrint('MapService: Submitting rating for ride $rideId (stars=$rating)');
+      debugPrint(
+        'MapService: Submitting rating for ride $rideId (stars=$rating)',
+      );
 
       final response = await _client.post(
         url,
@@ -642,6 +698,40 @@ class MapService {
     }
   }
 
+  /// Reverse geocode a lat/lng to a human-readable address
+  static Future<String?> reverseGeocode(double lat, double lng) async {
+    try {
+      final url =
+          'https://maps.googleapis.com/maps/api/geocode/json?latlng=$lat,$lng&key=${ApiConfig.googleMapsApiKey}';
+      final response = await _client
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'OK' &&
+            data['results'] != null &&
+            (data['results'] as List).isNotEmpty) {
+          // Try to find a short, meaningful name (locality or sublocality)
+          for (final result in data['results']) {
+            final types = List<String>.from(result['types'] ?? []);
+            if (types.contains('sublocality_level_1') ||
+                types.contains('sublocality') ||
+                types.contains('locality') ||
+                types.contains('neighborhood') ||
+                types.contains('point_of_interest') ||
+                types.contains('plus_code')) {
+              return result['formatted_address']?.toString();
+            }
+          }
+          // Fallback: return the first result's formatted address
+          return data['results'][0]['formatted_address']?.toString();
+        }
+      }
+    } catch (e) {
+      debugPrint('MapService: Reverse geocode error: $e');
+    }
+    return null;
+  }
 
   static List<LatLng> decodePolyline(String encoded) {
     return _decodePolyline(encoded);
@@ -651,14 +741,16 @@ class MapService {
     // Some proxies escape backslashes (\ to \\), which breaks the encoder.
     // We clean the string before processing.
     String pointsString = encoded.replaceAll('\\\\', '\\');
-    
+
     List<LatLng> points = [];
     int index = 0;
     int len = pointsString.length;
     int lat = 0;
     int lng = 0;
 
-    debugPrint('MapService: Decoding polyline. Original len: ${encoded.length}, Cleaned len: $len');
+    debugPrint(
+      'MapService: Decoding polyline. Original len: ${encoded.length}, Cleaned len: $len',
+    );
 
     try {
       while (index < len) {
@@ -668,9 +760,10 @@ class MapService {
           result |= (b & 0x1f) << shift;
           shift += 5;
         } while (b >= 0x20);
-        
+
         // Use .toSigned(32) to ensure Dart's 64-bit ints behave like 32-bit signed deltas
-        int dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1)).toSigned(32);
+        int dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1))
+            .toSigned(32);
         lat += dlat;
 
         shift = 0;
@@ -680,8 +773,9 @@ class MapService {
           result |= (b & 0x1f) << shift;
           shift += 5;
         } while (b >= 0x20);
-        
-        int dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1)).toSigned(32);
+
+        int dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1))
+            .toSigned(32);
         lng += dlng;
 
         double finalLat = lat / 100000.0;
@@ -689,28 +783,38 @@ class MapService {
 
         // Diagnostic logs for first few points to catch drift early
         if (points.length < 3) {
-          debugPrint('MapService: Decoded point #${points.length}: $finalLat, $finalLng');
+          debugPrint(
+            'MapService: Decoded point #${points.length}: $finalLat, $finalLng',
+          );
         }
 
         // Sanity Check: If a point jumps more than 1 degree suddenly, it's corrupt data.
         if (points.isNotEmpty) {
           double prevLat = points.last.latitude;
           double prevLng = points.last.longitude;
-          if ((finalLat - prevLat).abs() > 1.0 || (finalLng - prevLng).abs() > 1.0) {
-            debugPrint('MapService: !!! Decode ABORTED at point #${points.length} due to coordinate JUMP.');
-            debugPrint('MapService: prev($prevLat,$prevLng) -> curr($finalLat,$finalLng)');
-            break; 
+          if ((finalLat - prevLat).abs() > 1.0 ||
+              (finalLng - prevLng).abs() > 1.0) {
+            debugPrint(
+              'MapService: !!! Decode ABORTED at point #${points.length} due to coordinate JUMP.',
+            );
+            debugPrint(
+              'MapService: prev($prevLat,$prevLng) -> curr($finalLat,$finalLng)',
+            );
+            break;
           }
         }
 
-        if (finalLat >= -90 && finalLat <= 90 && finalLng >= -180 && finalLng <= 180) {
+        if (finalLat >= -90 &&
+            finalLat <= 90 &&
+            finalLng >= -180 &&
+            finalLng <= 180) {
           points.add(LatLng(finalLat, finalLng));
         }
       }
     } catch (e) {
       debugPrint('MapService: Fatal error in polyline decoder: $e');
     }
-    
+
     debugPrint('MapService: Final polyline point count: ${points.length}');
     return points;
   }
@@ -718,13 +822,21 @@ class MapService {
   // ===== Payment =====
 
   /// Create a Stripe PaymentIntent for a completed ride
-  static Future<Map<String, dynamic>?> createPaymentIntent(String rideId) async {
+  static Future<Map<String, dynamic>?> createPaymentIntent(
+    String rideId, {
+    bool useGreenPoints = false,
+    bool carbonOffset = false,
+  }) async {
     try {
       final token = await AuthService.instance.getIdToken();
       if (token == null) return null;
 
-      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.createPaymentIntent}');
-      debugPrint('MapService: Creating payment intent for ride $rideId');
+      final url = Uri.parse(
+        '${ApiConfig.baseUrl}${ApiConfig.createPaymentIntent}',
+      );
+      debugPrint(
+        'MapService: Creating payment intent for ride $rideId (greenPoints=$useGreenPoints, carbonOffset=$carbonOffset)',
+      );
 
       final response = await _client.post(
         url,
@@ -732,7 +844,11 @@ class MapService {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
-        body: json.encode({'rideId': rideId}),
+        body: json.encode({
+          'rideId': rideId,
+          'useGreenPoints': useGreenPoints,
+          'carbonOffset': carbonOffset,
+        }),
       );
 
       debugPrint('MapService: Payment intent status: ${response.statusCode}');
@@ -744,13 +860,19 @@ class MapService {
   }
 
   /// Confirm payment after Stripe succeeds
-  static Future<Map<String, dynamic>?> confirmPayment(String rideId, double amount) async {
+  static Future<Map<String, dynamic>?> confirmPayment(
+    String rideId,
+    double amount, {
+    int pointsUsed = 0,
+  }) async {
     try {
       final token = await AuthService.instance.getIdToken();
       if (token == null) return null;
 
       final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.confirmPayment}');
-      debugPrint('MapService: Confirming payment for ride $rideId, amount: $amount');
+      debugPrint(
+        'MapService: Confirming payment for ride $rideId, amount: $amount, pointsUsed: $pointsUsed',
+      );
 
       final response = await _client.post(
         url,
@@ -758,13 +880,115 @@ class MapService {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
-        body: json.encode({'rideId': rideId, 'amount': amount}),
+        body: json.encode({
+          'rideId': rideId,
+          'amount': amount,
+          'pointsUsed': pointsUsed,
+        }),
       );
 
       debugPrint('MapService: Confirm payment status: ${response.statusCode}');
       return json.decode(response.body);
     } catch (e) {
       debugPrint('MapService: Error confirming payment: $e');
+      return null;
+    }
+  }
+
+  /// Get user's available green points from Firestore
+  static Future<int> getUserGreenPoints() async {
+    try {
+      final user = AuthService.instance.currentUser;
+      if (user == null) return 0;
+      final doc = await _firestore.collection('users').doc(user.uid).get();
+      return (doc.data()?['green_points'] as num?)?.toInt() ?? 0;
+    } catch (e) {
+      debugPrint('MapService: Error fetching green points: $e');
+      return 0;
+    }
+  }
+
+  /// Get user's saved locations (home, work, favourite)
+  static Future<Map<String, dynamic>?> getSavedLocations() async {
+    try {
+      final token = await AuthService.instance.getIdToken();
+      if (token == null) return null;
+
+      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.savedLocations}');
+      final response = await _client.get(
+        url,
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('MapService: Error fetching saved locations: $e');
+      return null;
+    }
+  }
+
+  /// Update a saved location (type: home/work/favourite)
+  static Future<bool> updateSavedLocation(
+    String type,
+    Map<String, dynamic>? location,
+  ) async {
+    try {
+      final token = await AuthService.instance.getIdToken();
+      if (token == null) return false;
+
+      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.savedLocations}');
+      final response = await _client.put(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: json.encode({'type': type, 'location': location}),
+      );
+
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('MapService: Error updating saved location: $e');
+      return false;
+    }
+  }
+
+  /// Initiate a Twilio masked call between rider and driver
+  /// [rideId] - The active ride ID
+  /// [callerRole] - 'rider' or 'driver' (who is initiating the call)
+  static Future<Map<String, dynamic>?> initiateCallMask(
+    String rideId,
+    String callerRole,
+  ) async {
+    try {
+      final token = await AuthService.instance.getIdToken();
+      if (token == null) return null;
+
+      final url = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.callMask}');
+      debugPrint(
+        'MapService: Initiating masked call at $url for ride $rideId (role=$callerRole)',
+      );
+
+      final response = await _client
+          .post(
+            url,
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Content-Type': 'application/json',
+            },
+            body: json.encode({'rideId': rideId, 'callerRole': callerRole}),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      debugPrint('MapService: Call mask status: ${response.statusCode}');
+      final data = json.decode(response.body);
+      debugPrint('MapService: Call mask response: $data');
+      return data;
+    } catch (e) {
+      debugPrint('MapService: Error initiating masked call: $e');
       return null;
     }
   }
