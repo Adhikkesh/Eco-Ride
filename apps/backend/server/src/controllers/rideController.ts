@@ -960,6 +960,8 @@ export const acceptRide = async (req: Request, res: Response) => {
       });
     }
 
+    // ── PHASE 1: Read & validate everything BEFORE any state changes ──
+
     // 0. Fetch driver and rider details if needed
     let driverPhone = "No Phone";
     let riderName = rideData?.riderName || "Unknown Rider";
@@ -985,23 +987,32 @@ export const acceptRide = async (req: Request, res: Response) => {
       console.error("Error fetching details for acceptance:", err);
     }
 
-    // 1. Update Firestore ride status to MATCHED
-    await rideRef.update({
-      driverPhone,
-      matchedAt: FieldValue.serverTimestamp(),
-      riderName,
-      riderPhone,
-      status: "MATCHED",
-    });
+    // Guard against undefined lat/lng which would cause Firebase RTDB to throw
+    const safeNewDrop = rideData?.drop as { lat: number; lng: number } | undefined;
+    const safeNewPickup = rideData?.pickup as { lat: number; lng: number } | undefined;
 
-    // 2. Remove from rides-pending and add to rides-assigned
-    await rtdb.ref(`rides-pending/${driverId}`).remove();
+    if (
+      !safeNewDrop ||
+      typeof safeNewDrop.lat !== "number" ||
+      typeof safeNewDrop.lng !== "number" ||
+      !safeNewPickup ||
+      typeof safeNewPickup.lat !== "number" ||
+      typeof safeNewPickup.lng !== "number"
+    ) {
+      console.error(`[acceptRide] Missing drop/pickup coordinates in Firestore doc ${rideId}:`, {
+        drop: safeNewDrop,
+        pickup: safeNewPickup,
+      });
+      return res
+        .status(422)
+        .json({ message: "Ride data is incomplete (missing coordinates)", success: false });
+    }
 
     const assignedRideData = {
-      drop: rideData.drop,
-      pickup: rideData.pickup,
+      drop: safeNewDrop,
+      pickup: safeNewPickup,
       rideId,
-      riderId: rideData.riderId,
+      riderId: rideData?.riderId as string,
       riderName,
       riderPhone,
       status: "MATCHED",
@@ -1009,6 +1020,7 @@ export const acceptRide = async (req: Request, res: Response) => {
     };
 
     const assignedRef = rtdb.ref(`rides-assigned/${driverId}`);
+    console.log(`[acceptRide] Reading existing assignment for driver ${driverId}`);
     const existingAssignedSnap = await assignedRef.once("value");
     const existingAssigned = existingAssignedSnap.val() as
       | (typeof assignedRideData & {
@@ -1030,29 +1042,44 @@ export const acceptRide = async (req: Request, res: Response) => {
         })
       | null;
 
+    console.log(`[acceptRide] existingAssigned rideId=${existingAssigned?.rideId ?? "none"}`);
+
     const newRider = {
-      drop: rideData.drop,
-      pickup: rideData.pickup,
+      drop: safeNewDrop,
+      pickup: safeNewPickup,
       rideId,
-      riderId: rideData.riderId,
+      riderId: rideData?.riderId as string,
       riderName,
       riderPhone,
       status: "MATCHED",
     };
 
+    // ── Build the complete RTDB payload before writing anything ──
     let nextAssigned: Record<string, unknown> = assignedRideData;
 
     if (existingAssigned?.rideId) {
+      console.log(
+        `[acceptRide] Pooling branch: merging ride ${rideId} with existing ${existingAssigned.rideId}`,
+      );
+
+      // Build base riders list: prefer existing riders array, fall back to
+      // reconstructing from the top-level fields of the current assignment.
+      // Use ?? null for optional fields to prevent RTDB undefined errors.
       const baseRiders = Array.isArray(existingAssigned.riders)
-        ? existingAssigned.riders
+        ? existingAssigned.riders.map((r) => ({
+            ...r,
+            riderName: r.riderName ?? null,
+            riderPhone: r.riderPhone ?? null,
+            status: r.status ?? "MATCHED",
+          }))
         : [
             {
-              drop: existingAssigned.drop,
-              pickup: existingAssigned.pickup,
+              drop: existingAssigned.drop as { lat: number; lng: number },
+              pickup: existingAssigned.pickup as { lat: number; lng: number },
               rideId: existingAssigned.rideId,
               riderId: existingAssigned.riderId,
-              riderName: existingAssigned.riderName,
-              riderPhone: existingAssigned.riderPhone,
+              riderName: existingAssigned.riderName ?? null,
+              riderPhone: existingAssigned.riderPhone ?? null,
               status: existingAssigned.status || "MATCHED",
             },
           ];
@@ -1061,14 +1088,31 @@ export const acceptRide = async (req: Request, res: Response) => {
         ? baseRiders
         : [...baseRiders, newRider];
 
+      // Filter out any riders without valid coordinates to prevent RTDB encoding errors
+      const validRiders = riders.filter(
+        (r) =>
+          r.pickup &&
+          typeof r.pickup.lat === "number" &&
+          typeof r.pickup.lng === "number" &&
+          r.drop &&
+          typeof r.drop.lat === "number" &&
+          typeof r.drop.lng === "number",
+      );
+
+      if (validRiders.length !== riders.length) {
+        console.warn(
+          `[acceptRide] Filtered ${riders.length - validRiders.length} rider(s) with invalid coordinates`,
+        );
+      }
+
       const waypoints = [
-        ...riders.map((r) => ({
+        ...validRiders.map((r) => ({
           lat: r.pickup.lat,
           lng: r.pickup.lng,
           riderId: r.riderId,
           type: "PICKUP" as const,
         })),
-        ...riders.map((r) => ({
+        ...validRiders.map((r) => ({
           lat: r.drop.lat,
           lng: r.drop.lng,
           riderId: r.riderId,
@@ -1083,9 +1127,25 @@ export const acceptRide = async (req: Request, res: Response) => {
       const isMidTrip =
         existingAssigned.status === "IN_PROGRESS" || existingAssigned.status === "ARRIVED";
 
+      // Strip out any fields that RTDB cannot encode (Firestore Timestamps, etc.)
+      // by only keeping the known-safe scalar/object fields from existingAssigned.
+      const safeExisting = {
+        drop: existingAssigned.drop,
+        pickup: existingAssigned.pickup,
+        rideId: existingAssigned.rideId,
+        riderId: existingAssigned.riderId,
+        riderName: existingAssigned.riderName ?? null,
+        riderPhone: existingAssigned.riderPhone ?? null,
+        status: existingAssigned.status ?? "MATCHED",
+        timestamp: existingAssigned.timestamp ?? Date.now(),
+        ...((existingAssigned as Record<string, unknown>).arrivedAt !== undefined
+          ? { arrivedAt: (existingAssigned as Record<string, unknown>).arrivedAt }
+          : {}),
+      } as Record<string, unknown>;
+
       nextAssigned = {
-        ...existingAssigned,
-        riders,
+        ...safeExisting,
+        riders: validRiders,
         timestamp: Date.now(),
         waypoints,
         // Mid-trip: surface the new rider + reset status to MATCHED
@@ -1104,9 +1164,28 @@ export const acceptRide = async (req: Request, res: Response) => {
               status: existingAssigned.status || "MATCHED",
             }),
       };
+
+      console.log(
+        `[acceptRide] nextAssigned built: riders=${validRiders.length}, waypoints=${waypoints.length}, isMidTrip=${isMidTrip}`,
+      );
     }
 
+    // ── PHASE 2: All validation passed — now perform writes atomically ──
+    // Write RTDB assignment FIRST so that if it fails, Firestore is still
+    // PENDING_ACCEPTANCE and rides-pending is intact → driver can retry.
     await assignedRef.set(nextAssigned);
+
+    // Now that RTDB succeeded, update Firestore and clean up pending
+    await Promise.all([
+      rideRef.update({
+        driverPhone,
+        matchedAt: FieldValue.serverTimestamp(),
+        riderName,
+        riderPhone,
+        status: "MATCHED",
+      }),
+      rtdb.ref(`rides-pending/${driverId}`).remove(),
+    ]);
 
     // 3. Update driver status (pooling-aware)
     const driverRef = rtdb.ref(`drivers-online/${driverId}`);
@@ -1159,7 +1238,7 @@ export const acceptRide = async (req: Request, res: Response) => {
       success: true,
     });
   } catch (error) {
-    console.error("Accept Ride Error:", error);
+    console.error("Accept Ride Error:", error instanceof Error ? error.stack : String(error));
     return res.status(500).json({ message: "Error accepting ride", success: false });
   }
 };

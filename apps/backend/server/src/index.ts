@@ -31,11 +31,14 @@ console.log(
   process.env.GOOGLE_API_KEY ? "EXISTS" : "MISSING",
 );
 
+import { createServer } from "node:http";
+
 /**
  * Dynamic import of the Express application.
  * Done after environment variables are loaded to ensure config is available.
  */
 const { app } = await import("./app.js");
+const { initWebSocketServer } = await import("./services/websocketService.js");
 
 /**
  * Server port configuration.
@@ -45,9 +48,19 @@ const { app } = await import("./app.js");
 const PORT = process.env.PORT || 3001;
 
 /**
- * Start the Express server.
+ * Create an HTTP server from the Express app so that both HTTP
+ * and WebSocket traffic share the same port.
+ */
+const server = createServer(app);
+
+/** Bootstrap the WebSocket server for driver pool-offer dispatch */
+initWebSocketServer(server);
+
+/**
+ * Start the HTTP + WebSocket server.
  * Listens on configured port and logs startup message.
  */
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`🔌 WebSocket available at ws://localhost:${PORT}/ws/driver`);
 });

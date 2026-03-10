@@ -15,7 +15,22 @@ import { VerifyTokenController } from "../controllers/authController.js";
 import { calculateFare } from "../controllers/fareController.js";
 import { GetMeController, HealthCheckController } from "../controllers/index.js";
 import { confirmPayment, createPaymentIntent } from "../controllers/paymentController.js";
-import { SubmitRatingController, SubmitRiderRatingController } from "../controllers/ratingController.js";
+import {
+  acceptPoolOffer,
+  checkPoolStatus,
+  declinePoolOffer,
+  requestPoolRide,
+} from "../controllers/poolingController.js";
+import {
+  predictDemand,
+  predictForecast24h,
+  predictHeatmap,
+  predictSurge,
+} from "../controllers/predictionController.js";
+import {
+  SubmitRatingController,
+  SubmitRiderRatingController,
+} from "../controllers/ratingController.js";
 import {
   acceptRide,
   arriveAtPickup,
@@ -30,12 +45,6 @@ import {
 } from "../controllers/rideController.js";
 import { getSavedLocations, updateSavedLocation } from "../controllers/savedLocationsController.js";
 import { CreateUserController, GetDriverStatusController } from "../controllers/userController.js";
-import {
-  predictDemand,
-  predictForecast24h,
-  predictHeatmap,
-  predictSurge,
-} from "../controllers/predictionController.js";
 import { verifyToken } from "../middleware/authMiddleware.js";
 
 /**
@@ -144,3 +153,19 @@ router.post("/predict/demand", predictDemand);
 router.post("/predict/demand-heatmap", predictHeatmap);
 router.post("/predict/surge", predictSurge);
 router.post("/predict/forecast-24h", predictForecast24h);
+
+// ============================================================================
+// Dynamic En-Route Pooling Routes
+// ============================================================================
+
+/** Request a pooled ride — matches rider into active en-route trips */
+router.post("/pool/request", verifyToken, requestPoolRide);
+
+/** Check pooling availability for given pickup/dropoff coordinates */
+router.get("/pool/status", verifyToken, checkPoolStatus);
+
+/** Driver accepts a pool offer (REST fallback for non-WebSocket clients) */
+router.post("/pool/accept", verifyToken, acceptPoolOffer);
+
+/** Driver declines a pool offer (REST fallback for non-WebSocket clients) */
+router.post("/pool/decline", verifyToken, declinePoolOffer);
