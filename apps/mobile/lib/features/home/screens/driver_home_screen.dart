@@ -70,6 +70,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   int _previousRidersCount = 0;
   bool get _isPooledRide => _pooledRiders != null && _pooledRiders!.length > 1;
 
+  // ETA & distance from Directions API
+  String _etaText = '';
+  String _distanceText = '';
+
   String? _userName;
   String? _userPhoto;
   String? _userEmail;
@@ -362,6 +366,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                     _riderName = data['riderName']?.toString() ?? 'Rider';
                     _riderPhone = data['riderPhone']?.toString() ?? '';
                   });
+                  // Reverse geocode pickup/drop if names look like coordinates
+                  _resolveLocationNames(data);
                 }
               } else {
                 if (_pendingRide != null && mounted) {
@@ -436,6 +442,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               if (!_isNavigating) {
                 _navigateToRide();
               }
+              // Resolve location names if needed
+              _resolveLocationNames(data);
             }
           } else {
             // Ride assignment removed from RTDB
@@ -480,10 +488,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   Timer? _otpTimer;
   int _otpTimeRemaining = 300; // 5 minutes in seconds
-
-  // ... (keep existing methods)
-
-  // ... (keep existing methods)
 
   /// Accept a pending ride via backend API, then navigate
   Future<void> _acceptRide() async {
@@ -590,6 +594,50 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     });
   }
 
+  /// Reverse geocode pickup/drop if names are missing or look like coordinates
+  Future<void> _resolveLocationNames(Map<dynamic, dynamic> data) async {
+    bool _looksLikeCoords(String? name) {
+      if (name == null || name.isEmpty) return true;
+      // If the name is just numbers, dots, commas and spaces it's likely coords
+      return RegExp(r'^[\d\.\,\s\-]+$').hasMatch(name.trim());
+    }
+
+    final pickupName = data['pickupName']?.toString();
+    final dropName = data['dropName']?.toString();
+    final pickup = data['pickup'];
+    final drop = data['drop'];
+
+    // Resolve pickup name
+    if (_looksLikeCoords(pickupName) && pickup != null) {
+      final lat = (pickup['lat'] as num?)?.toDouble();
+      final lng = (pickup['lng'] as num?)?.toDouble();
+      if (lat != null && lng != null) {
+        final resolved = await MapService.reverseGeocode(lat, lng);
+        if (resolved != null && mounted) {
+          setState(() {
+            if (_pendingRide != null) _pendingRide!['pickupName'] = resolved;
+            if (_currentRide != null) _currentRide!['pickupName'] = resolved;
+          });
+        }
+      }
+    }
+
+    // Resolve drop name
+    if (_looksLikeCoords(dropName) && drop != null) {
+      final lat = (drop['lat'] as num?)?.toDouble();
+      final lng = (drop['lng'] as num?)?.toDouble();
+      if (lat != null && lng != null) {
+        final resolved = await MapService.reverseGeocode(lat, lng);
+        if (resolved != null && mounted) {
+          setState(() {
+            if (_pendingRide != null) _pendingRide!['dropName'] = resolved;
+            if (_currentRide != null) _currentRide!['dropName'] = resolved;
+          });
+        }
+      }
+    }
+  }
+
   /// Navigation logic — draws blue route (driver→pickup) and green route (pickup→destination)
   Future<void> _navigateToRide() async {
     if (_currentPosition == null || _currentRide == null) return;
@@ -620,6 +668,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       final toDrop = results[1];
 
       if (!mounted) return;
+
+      // Store ETA & distance (driver → pickup)
+      if (toPickup != null) {
+        setState(() {
+          _etaText = toPickup['duration']?.toString() ?? '';
+          _distanceText = toPickup['distance']?.toString() ?? '';
+        });
+      }
 
       final newPolylines = <Polyline>{};
       final newMarkers = <Marker>{};
@@ -875,6 +931,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       if (directions != null && mounted) {
         final points = directions['points'] as List<LatLng>;
 
+        // Update ETA & distance for trip (pickup → destination)
+        setState(() {
+          _etaText = directions['duration']?.toString() ?? '';
+          _distanceText = directions['distance']?.toString() ?? '';
+        });
+
         // Clear old polylines and show only trip route (green)
         setState(() {
           _polylines.clear();
@@ -968,6 +1030,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       _riderName = null;
       _riderPhone = null;
       _paidFare = null;
+      _etaText = '';
+      _distanceText = '';
       _pooledRiders = null;
       _previousRidersCount = 0;
       _polylines.clear();
@@ -1334,8 +1398,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             ),
           ),
 
-          // 3. Incoming/Active Ride Sheet
-          if (_pendingRide != null || _currentRide != null)
+          // 3. Incoming/Active Ride Sheet (hidden during waiting_payment)
+          if ((_pendingRide != null || _currentRide != null) &&
+              _rideStatus != 'waiting_payment')
             Align(
               alignment: Alignment.bottomCenter,
               child: _buildIncomingRideSheet(),
@@ -1640,11 +1705,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     );
   }
 
-  /// Waiting for payment bottom sheet
+  /// Waiting for payment — matches Image 5 (clock icon, amber text, orange progress bar)
   Widget _buildWaitingPaymentSheet() {
     final sheetBg = _isDarkMode ? const Color(0xFF1E293B) : Colors.white;
-    final textColor = _isDarkMode ? Colors.white : Colors.black87;
-    final subtextColor = _isDarkMode ? Colors.white60 : Colors.grey[600];
+    final borderCol = _isDarkMode
+        ? const Color(0xFFE6A817).withValues(alpha: 0.3)
+        : Colors.amber[200]!;
 
     return Align(
       alignment: Alignment.bottomCenter,
@@ -1655,10 +1721,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         decoration: BoxDecoration(
           color: sheetBg,
           borderRadius: BorderRadius.circular(24),
-          border: _isDarkMode ? Border.all(color: Colors.white12) : null,
+          border: Border.all(color: borderCol),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.15),
+              color: Colors.black.withValues(alpha: 0.2),
               blurRadius: 20,
               offset: const Offset(0, 8),
             ),
@@ -1668,48 +1734,61 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (_paidFare == null) ...[
-              // Waiting state
-              const Icon(
-                Icons.hourglass_top_rounded,
-                color: Color(0xFF2E7D32),
-                size: 48,
+              // Waiting state — Image 5
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE6A817).withValues(alpha: 0.2),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.schedule_rounded,
+                  color: Color(0xFFE6A817),
+                  size: 32,
+                ),
               ),
               const SizedBox(height: 16),
               Text(
                 'Waiting for Payment',
                 style: GoogleFonts.inter(
                   fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: textColor,
+                  fontWeight: FontWeight.w800,
+                  color: const Color(0xFFE6A817),
                 ),
               ),
               const SizedBox(height: 8),
               Text(
-                'The rider is completing payment...',
-                style: GoogleFonts.inter(color: subtextColor, fontSize: 14),
+                'Trip completed. Please wait while the rider\ncompletes the payment.',
+                style: GoogleFonts.inter(
+                  color: _isDarkMode ? Colors.white60 : Colors.grey[600],
+                  fontSize: 13,
+                ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 20),
-              const SizedBox(
-                width: 32,
-                height: 32,
-                child: CircularProgressIndicator(
-                  color: Color(0xFF2E7D32),
-                  strokeWidth: 3,
+              // Orange linear progress bar
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: const LinearProgressIndicator(
+                  minHeight: 6,
+                  backgroundColor: Color(0xFF2A2A2A),
+                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE6A817)),
                 ),
               ),
             ] else ...[
               // Payment received state
               Container(
-                padding: const EdgeInsets.all(16),
+                width: 64,
+                height: 64,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFE8F5E9),
-                  borderRadius: BorderRadius.circular(16),
+                  color: const Color(0xFF4CAF50).withValues(alpha: 0.2),
+                  shape: BoxShape.circle,
                 ),
                 child: const Icon(
                   Icons.check_circle_rounded,
-                  color: Color(0xFF2E7D32),
-                  size: 56,
+                  color: Color(0xFF4CAF50),
+                  size: 36,
                 ),
               ),
               const SizedBox(height: 16),
@@ -1717,8 +1796,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 'Payment Received! 🎉',
                 style: GoogleFonts.inter(
                   fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: const Color(0xFF2E7D32),
+                  fontWeight: FontWeight.w800,
+                  color: const Color(0xFF4CAF50),
                 ),
               ),
               const SizedBox(height: 8),
@@ -1727,43 +1806,39 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 style: GoogleFonts.inter(
                   fontSize: 36,
                   fontWeight: FontWeight.w800,
-                  color: const Color(0xFF1B5E20),
+                  color: _isDarkMode ? Colors.white : const Color(0xFF1B5E20),
                 ),
               ),
               const SizedBox(height: 4),
               Text(
                 'Trip fare collected',
-                style: GoogleFonts.inter(color: Colors.grey[600], fontSize: 14),
+                style: GoogleFonts.inter(
+                  color: _isDarkMode ? Colors.white60 : Colors.grey[600],
+                  fontSize: 14,
+                ),
               ),
               const SizedBox(height: 24),
               Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(14),
                   gradient: const LinearGradient(
-                    colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)],
+                    colors: [Color(0xFF2E7D32), Color(0xFF43A047)],
                   ),
                 ),
-                child: ElevatedButton.icon(
+                child: TextButton(
                   onPressed: _resetRideState,
-                  icon: const Icon(
-                    Icons.arrow_forward_rounded,
-                    color: Colors.white,
-                    size: 22,
-                  ),
-                  label: Text(
-                    'Continue',
-                    style: GoogleFonts.inter(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.transparent,
-                    shadowColor: Colors.transparent,
+                  style: TextButton.styleFrom(
                     minimumSize: const Size(double.infinity, 56),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  child: Text(
+                    'Continue',
+                    style: GoogleFonts.inter(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16,
                     ),
                   ),
                 ),
@@ -1780,51 +1855,61 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     if (ride == null) return const SizedBox.shrink();
 
     final sheetBg = _isDarkMode ? const Color(0xFF1E293B) : AppColors.white;
-    final handleColor = _isDarkMode ? Colors.grey[600] : AppColors.lightGrey;
 
     return Container(
       width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
         color: sheetBg,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-        boxShadow: _isDarkMode ? [] : AppShadows.medium,
-        border: _isDarkMode
-            ? const Border(top: BorderSide(color: Colors.white12))
-            : null,
+        borderRadius: BorderRadius.circular(20),
+        border: _isDarkMode ? Border.all(color: Colors.white12) : null,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.2),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Drag handle
-          Container(
-            margin: const EdgeInsets.only(top: 12),
-            width: 36,
-            height: 4,
-            decoration: BoxDecoration(
-              color: handleColor,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          // Status header
+          // Status header icon + title
           _buildStatusHeader(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (_riderName != null) _buildRiderCard(),
-                const SizedBox(height: 16),
-                _buildRouteDetails(ride),
-                if (ride['fare'] != null) ...[
-                  const SizedBox(height: 16),
-                  _buildFareCard(ride),
-                ],
-                const SizedBox(height: 20),
-                if (_rideStatus == 'arrived') _buildTimerSection(),
-                _buildActionButtons(),
-              ],
-            ),
-          ),
+          const SizedBox(height: 10),
+          // ETA/Distance bar (for matched, arrived, in_progress)
+          if (_rideStatus != 'pending' &&
+              (_etaText.isNotEmpty || _distanceText.isNotEmpty))
+            _buildEtaDistanceBar(),
+          if (_rideStatus != 'pending' &&
+              (_etaText.isNotEmpty || _distanceText.isNotEmpty))
+            const SizedBox(height: 10),
+          // Route details (pickup / drop)
+          _buildRouteDetails(ride),
+          // Fare card (only for pending)
+          if (_rideStatus == 'pending' && ride['fare'] != null) ...[
+            const SizedBox(height: 10),
+            _buildFareCard(ride),
+          ],
+          // Rider info card (for matched, arrived, in_progress)
+          if (_rideStatus != 'pending' && _riderName != null) ...[
+            const SizedBox(height: 10),
+            _buildRiderCard(),
+          ],
+          // Navigation info (for matched)
+          if (_rideStatus == 'matched' && _distanceText.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _buildNavigatingInfo(),
+          ],
+          // Timer section (for arrived)
+          if (_rideStatus == 'arrived') ...[
+            const SizedBox(height: 10),
+            _buildTimerSection(),
+          ],
+          const SizedBox(height: 12),
+          // Action buttons
+          _buildActionButtons(),
         ],
       ),
     );
@@ -1834,91 +1919,177 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     IconData icon;
     String title;
     String subtitle;
-    List<Color> gradientColors;
+    Color iconBgColor;
+
+    final titleColor = _isDarkMode ? Colors.white : Colors.black87;
+    final subtitleColor = _isDarkMode ? Colors.white60 : Colors.grey[600]!;
 
     switch (_rideStatus) {
       case 'pending':
-        icon = Icons.notifications_active_rounded;
-        title = 'New Ride Request!';
+        icon = Icons.local_taxi_rounded;
+        title = 'New Ride Request';
         subtitle = 'A rider is waiting for you';
-        gradientColors = [const Color(0xFF388E3C), const Color(0xFF66BB6A)];
+        iconBgColor = const Color(0xFF2196F3);
         break;
       case 'matched':
-        icon = Icons.navigation_rounded;
-        title = 'Navigating to Pickup';
-        subtitle = 'Head to the pickup location';
-        gradientColors = [const Color(0xFF2E7D32), const Color(0xFF4CAF50)];
+        icon = Icons.route_rounded;
+        title = 'Ride Assigned!';
+        subtitle = 'Navigate to pickup';
+        iconBgColor = const Color(0xFF4CAF50);
         break;
       case 'arrived':
         icon = Icons.location_on_rounded;
-        title = 'Waiting for Rider';
-        subtitle = 'Enter OTP to start the trip';
-        gradientColors = [const Color(0xFF1B5E20), const Color(0xFF43A047)];
+        title = 'Reached Pickup';
+        subtitle = 'Enter OTP to start trip';
+        iconBgColor = const Color(0xFF4CAF50);
         break;
       case 'in_progress':
-        icon = Icons.directions_car_rounded;
-        title = 'Trip In Progress';
-        subtitle = 'Drive safely to the destination';
-        gradientColors = [const Color(0xFF2E7D32), const Color(0xFF66BB6A)];
+        icon = Icons.route_rounded;
+        title = 'Trip in Progress';
+        subtitle = 'Head to destination';
+        iconBgColor = const Color(0xFF4CAF50);
         break;
       default:
         icon = Icons.info_outline;
         title = 'Ride Info';
         subtitle = '';
-        gradientColors = [Colors.grey[700]!, Colors.grey[500]!];
+        iconBgColor = Colors.grey;
     }
+
+    return Row(
+      children: [
+        Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(color: iconBgColor, shape: BoxShape.circle),
+          child: Icon(icon, color: Colors.white, size: 20),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: GoogleFonts.inter(
+                  color: titleColor,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              if (subtitle.isNotEmpty)
+                Text(
+                  subtitle,
+                  style: GoogleFonts.inter(color: subtitleColor, fontSize: 12),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// ETA & Distance bar matching Image 2 / Image 4
+  Widget _buildEtaDistanceBar() {
+    final cardBg = _isDarkMode ? const Color(0xFF0F172A) : Colors.grey[50];
+    final borderCol = _isDarkMode ? Colors.white12 : Colors.grey[200]!;
+    final labelColor = _isDarkMode ? Colors.white60 : Colors.grey[600]!;
 
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(vertical: 10),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: gradientColors,
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: gradientColors[0].withValues(alpha: 0.3),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        color: cardBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: borderCol),
       ),
       child: Row(
         children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: Colors.white, size: 24),
-          ),
-          const SizedBox(width: 14),
           Expanded(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  title,
+                  'ETA',
                   style: GoogleFonts.inter(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
+                    color: labelColor,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 1,
                   ),
                 ),
-                if (subtitle.isNotEmpty)
-                  Text(
-                    subtitle,
-                    style: GoogleFonts.inter(
-                      color: Colors.white.withValues(alpha: 0.85),
-                      fontSize: 12,
-                    ),
+                const SizedBox(height: 2),
+                Text(
+                  _etaText.isNotEmpty ? _etaText : '--',
+                  style: GoogleFonts.inter(
+                    color: const Color(0xFF4CAF50),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
                   ),
+                ),
               ],
+            ),
+          ),
+          Container(width: 1, height: 30, color: borderCol),
+          Expanded(
+            child: Column(
+              children: [
+                Text(
+                  'DISTANCE',
+                  style: GoogleFonts.inter(
+                    color: labelColor,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 1,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _distanceText.isNotEmpty ? _distanceText : '--',
+                  style: GoogleFonts.inter(
+                    color: const Color(0xFF2196F3),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Navigating to Pickup info bar (Image 2)
+  Widget _buildNavigatingInfo() {
+    final cardBg = _isDarkMode
+        ? const Color(0xFF0F172A).withValues(alpha: 0.7)
+        : Colors.grey[100];
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: cardBg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: _isDarkMode ? Colors.white12 : Colors.grey[300]!,
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(
+            Icons.local_taxi_rounded,
+            color: Color(0xFF4CAF50),
+            size: 16,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            'Navigating to Pickup ($_distanceText)',
+            style: GoogleFonts.inter(
+              color: _isDarkMode ? Colors.white70 : Colors.black87,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ],
@@ -1930,62 +2101,44 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final cardBg = _isDarkMode ? const Color(0xFF0F172A) : Colors.grey[50];
     final borderCol = _isDarkMode ? Colors.white12 : Colors.grey[200]!;
     final nameColor = _isDarkMode ? Colors.white : Colors.black87;
-    final phoneColor = _isDarkMode ? Colors.white60 : Colors.grey[600];
+    final labelColor = _isDarkMode ? Colors.white60 : Colors.grey[600]!;
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: cardBg,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: borderCol),
       ),
       child: Row(
         children: [
-          Container(
-            padding: const EdgeInsets.all(2),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)],
-              ),
-              borderRadius: BorderRadius.circular(22),
-            ),
-            child: const CircleAvatar(
-              backgroundColor: Colors.white,
-              radius: 20,
-              child: Icon(
-                Icons.person_rounded,
-                color: Color(0xFF2E7D32),
-                size: 22,
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
+          // Rider name section
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _riderName ?? 'Rider',
+                  'RIDER',
                   style: GoogleFonts.inter(
+                    color: labelColor,
+                    fontSize: 10,
                     fontWeight: FontWeight.w600,
-                    fontSize: 15,
-                    color: nameColor,
+                    letterSpacing: 1,
                   ),
                 ),
-                Row(
-                  children: [
-                    Icon(Icons.shield_rounded, color: phoneColor, size: 14),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Protected Number',
-                      style: GoogleFonts.inter(color: phoneColor, fontSize: 12),
-                    ),
-                  ],
+                const SizedBox(height: 2),
+                Text(
+                  _riderName ?? 'Rider',
+                  style: GoogleFonts.inter(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    color: nameColor,
+                  ),
                 ),
               ],
             ),
           ),
-          // Masked call button
+          // Twilio masked call button
           GestureDetector(
             onTap: (_rideId != null)
                 ? () async {
@@ -2056,87 +2209,91 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final textColor = _isDarkMode
         ? Colors.white.withValues(alpha: 0.9)
         : Colors.black87;
-    final dividerCol = _isDarkMode ? Colors.white12 : Colors.grey[200];
+    final labelColor = _isDarkMode ? Colors.white60 : Colors.grey[600]!;
+    final isTrip = _rideStatus == 'in_progress';
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: cardBg,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: borderCol),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Column(
+          // Pickup row
+          Row(
             children: [
               Container(
-                width: 12,
-                height: 12,
+                width: 10,
+                height: 10,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF4CAF50),
+                  color: isTrip ? Colors.grey : const Color(0xFF2196F3),
                   shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF4CAF50).withValues(alpha: 0.3),
-                      blurRadius: 4,
-                    ),
-                  ],
                 ),
               ),
-              Container(
-                width: 2,
-                height: 30,
-                color: _isDarkMode ? Colors.grey[700] : Colors.grey[300],
-              ),
-              Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFE53935),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFFE53935).withValues(alpha: 0.3),
-                      blurRadius: 4,
-                    ),
-                  ],
+              const SizedBox(width: 8),
+              Text(
+                'PICKUP',
+                style: GoogleFonts.inter(
+                  color: isTrip ? Colors.grey : labelColor,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.8,
                 ),
               ),
             ],
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  pickupName,
-                  style: GoogleFonts.inter(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: textColor,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+          Padding(
+            padding: const EdgeInsets.only(left: 18, top: 2, bottom: 8),
+            child: Text(
+              pickupName,
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: isTrip ? Colors.grey : textColor,
+                decoration: isTrip ? TextDecoration.lineThrough : null,
+                decorationColor: Colors.grey,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          // Drop row
+          Row(
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4CAF50),
+                  shape: BoxShape.circle,
                 ),
-                Container(
-                  margin: const EdgeInsets.symmetric(vertical: 8),
-                  height: 1,
-                  color: dividerCol,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'DROP-OFF',
+                style: GoogleFonts.inter(
+                  color: labelColor,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.8,
                 ),
-                Text(
-                  dropName,
-                  style: GoogleFonts.inter(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: textColor,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
+              ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 18, top: 2),
+            child: Text(
+              dropName,
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: textColor,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ],
@@ -2146,47 +2303,35 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   Widget _buildFareCard(Map<dynamic, dynamic> ride) {
     final fare = ride['fare'];
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFFFFF8E1), Color(0xFFFFF3E0)],
-        ),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFFFE082)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
-            children: [
-              const Icon(
-                Icons.currency_rupee_rounded,
-                color: Color(0xFFF57C00),
-                size: 20,
+    final dividerCol = _isDarkMode ? Colors.white12 : Colors.grey[200]!;
+    final labelColor = _isDarkMode ? Colors.white60 : Colors.grey[600]!;
+
+    return Column(
+      children: [
+        Container(height: 1, color: dividerCol),
+        const SizedBox(height: 14),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Estimated Fare',
+              style: GoogleFonts.inter(
+                fontSize: 14,
+                color: labelColor,
+                fontWeight: FontWeight.w500,
               ),
-              const SizedBox(width: 6),
-              Text(
-                'Estimated Fare',
-                style: GoogleFonts.inter(
-                  fontSize: 13,
-                  color: const Color(0xFFF57C00),
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-          Text(
-            '\u20B9$fare',
-            style: GoogleFonts.inter(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: const Color(0xFFE65100),
             ),
-          ),
-        ],
-      ),
+            Text(
+              '₹$fare',
+              style: GoogleFonts.inter(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: const Color(0xFF4CAF50),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -2197,15 +2342,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final isUrgent = _otpTimeRemaining < 60;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: isUrgent
               ? [const Color(0xFFFDE0DC), const Color(0xFFFCE4EC)]
               : [const Color(0xFFE3F2FD), const Color(0xFFE8EAF6)],
         ),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: isUrgent ? const Color(0xFFEF9A9A) : const Color(0xFF90CAF9),
         ),
@@ -2213,17 +2358,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       child: Row(
         children: [
           SizedBox(
-            width: 56,
-            height: 56,
+            width: 44,
+            height: 44,
             child: Stack(
               alignment: Alignment.center,
               children: [
                 SizedBox(
-                  width: 56,
-                  height: 56,
+                  width: 44,
+                  height: 44,
                   child: CircularProgressIndicator(
                     value: progress,
-                    strokeWidth: 5,
+                    strokeWidth: 4,
                     backgroundColor: Colors.grey[300],
                     valueColor: AlwaysStoppedAnimation(
                       isUrgent ? Colors.red : const Color(0xFF1565C0),
@@ -2233,7 +2378,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 Text(
                   _formatTime(_otpTimeRemaining),
                   style: GoogleFonts.inter(
-                    fontSize: 14,
+                    fontSize: 12,
                     fontWeight: FontWeight.bold,
                     color: isUrgent ? Colors.red : const Color(0xFF1565C0),
                   ),
@@ -2241,7 +2386,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               ],
             ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -2250,15 +2395,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   isUrgent ? 'Hurry! Time running out' : 'Waiting for rider',
                   style: GoogleFonts.inter(
                     fontWeight: FontWeight.w600,
-                    fontSize: 14,
+                    fontSize: 13,
                     color: isUrgent ? Colors.red[700] : const Color(0xFF1565C0),
                   ),
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 1),
                 Text(
                   'Ride auto-cancels when timer expires',
                   style: GoogleFonts.inter(
-                    fontSize: 11,
+                    fontSize: 10,
                     color: Colors.grey[600],
                   ),
                 ),
@@ -2272,29 +2417,43 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   Widget _buildActionButtons() {
     if (_rideStatus == 'pending') {
+      // Image 1: Decline (red outline) + Accept Ride (green fill)
       return Row(
         children: [
           Expanded(
-            child: OutlinedButton.icon(
-              onPressed: _isDeclining ? null : _declineRide,
-              icon: _isDeclining
-                  ? const SizedBox(
-                      height: 18,
-                      width: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.close_rounded, size: 18),
-              label: Text(
-                'Decline',
-                style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                color: _isDarkMode
+                    ? Colors.red.withValues(alpha: 0.15)
+                    : Colors.red[50],
+                border: Border.all(color: Colors.red.withValues(alpha: 0.4)),
               ),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.red,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                side: const BorderSide(color: Colors.red, width: 1.5),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
+              child: TextButton(
+                onPressed: _isDeclining ? null : _declineRide,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                 ),
+                child: _isDeclining
+                    ? const SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.red,
+                        ),
+                      )
+                    : Text(
+                        'Decline',
+                        style: GoogleFonts.inter(
+                          color: Colors.red,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                        ),
+                      ),
               ),
             ),
           ),
@@ -2307,17 +2466,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 gradient: const LinearGradient(
                   colors: [Color(0xFF2E7D32), Color(0xFF43A047)],
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF2E7D32).withValues(alpha: 0.3),
-                    blurRadius: 8,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
               ),
-              child: ElevatedButton.icon(
+              child: TextButton(
                 onPressed: _isAccepting ? null : _acceptRide,
-                icon: _isAccepting
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                child: _isAccepting
                     ? const SizedBox(
                         height: 18,
                         width: 18,
@@ -2326,27 +2484,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                           strokeWidth: 2,
                         ),
                       )
-                    : const Icon(
-                        Icons.check_circle_rounded,
-                        color: Colors.white,
-                        size: 20,
+                    : Text(
+                        'Accept Ride',
+                        style: GoogleFonts.inter(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                        ),
                       ),
-                label: Text(
-                  'Accept Ride',
-                  style: GoogleFonts.inter(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
-                  ),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.transparent,
-                  shadowColor: Colors.transparent,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
               ),
             ),
           ),
@@ -2354,21 +2499,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       );
     }
     if (_rideStatus == 'matched') {
+      // Image 2: "Reached Rider Location" green button with checkmark
       return Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(14),
           gradient: const LinearGradient(
-            colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)],
+            colors: [Color(0xFF2E7D32), Color(0xFF43A047)],
           ),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF2E7D32).withValues(alpha: 0.3),
-              blurRadius: 8,
-              offset: const Offset(0, 4),
-            ),
-          ],
         ),
-        child: ElevatedButton.icon(
+        child: TextButton.icon(
           onPressed: _isArriving ? null : _handleArriveAtPickup,
           icon: _isArriving
               ? const SizedBox(
@@ -2379,19 +2518,21 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                     strokeWidth: 2,
                   ),
                 )
-              : const Icon(Icons.flag_rounded, color: Colors.white, size: 22),
+              : const Icon(
+                  Icons.check_circle_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
           label: Text(
-            'Arrived at Pickup',
+            'Reached Rider Location',
             style: GoogleFonts.inter(
               color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
             ),
           ),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.transparent,
-            shadowColor: Colors.transparent,
-            minimumSize: const Size(double.infinity, 56),
+          style: TextButton.styleFrom(
+            minimumSize: const Size(double.infinity, 48),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(14),
             ),
@@ -2400,35 +2541,27 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       );
     }
     if (_rideStatus == 'arrived') {
+      // OTP entry button
       return Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(14),
           gradient: const LinearGradient(
             colors: [Color(0xFF1B5E20), Color(0xFF43A047)],
           ),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF1B5E20).withValues(alpha: 0.3),
-              blurRadius: 8,
-              offset: const Offset(0, 4),
-            ),
-          ],
         ),
-        child: ElevatedButton.icon(
+        child: TextButton.icon(
           onPressed: _showOtpDialog,
-          icon: const Icon(Icons.pin_rounded, color: Colors.white, size: 22),
+          icon: const Icon(Icons.pin_rounded, color: Colors.white, size: 20),
           label: Text(
             'Enter OTP & Start Ride',
             style: GoogleFonts.inter(
               color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
             ),
           ),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.transparent,
-            shadowColor: Colors.transparent,
-            minimumSize: const Size(double.infinity, 56),
+          style: TextButton.styleFrom(
+            minimumSize: const Size(double.infinity, 48),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(14),
             ),
@@ -2437,39 +2570,27 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       );
     }
     if (_rideStatus == 'in_progress') {
+      // Image 4: "Complete Trip" green button
       return Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(14),
           gradient: const LinearGradient(
-            colors: [Color(0xFF2E7D32), Color(0xFF66BB6A)],
+            colors: [Color(0xFF2E7D32), Color(0xFF43A047)],
           ),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF2E7D32).withValues(alpha: 0.3),
-              blurRadius: 8,
-              offset: const Offset(0, 4),
-            ),
-          ],
         ),
-        child: ElevatedButton.icon(
+        child: TextButton.icon(
           onPressed: _handleCompleteRide,
-          icon: const Icon(
-            Icons.check_circle_outline_rounded,
-            color: Colors.white,
-            size: 22,
-          ),
+          icon: const Icon(Icons.flag_rounded, color: Colors.white, size: 20),
           label: Text(
-            'Complete Ride',
+            'Complete Trip',
             style: GoogleFonts.inter(
               color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
             ),
           ),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.transparent,
-            shadowColor: Colors.transparent,
-            minimumSize: const Size(double.infinity, 56),
+          style: TextButton.styleFrom(
+            minimumSize: const Size(double.infinity, 48),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(14),
             ),
@@ -2480,9 +2601,22 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     return const SizedBox.shrink();
   }
 
-  /// Show OTP dialog with premium bottom sheet styling
+  /// Show OTP dialog matching Image 3 dark theme
   void _showOtpDialog() {
     _otpController.clear();
+    final sheetBg = _isDarkMode ? const Color(0xFF1E293B) : Colors.white;
+    final titleColor = _isDarkMode ? Colors.white : Colors.black87;
+    final subtitleColor = _isDarkMode ? Colors.white60 : Colors.grey[600]!;
+    final inputBg = _isDarkMode ? const Color(0xFF0F172A) : Colors.grey[50]!;
+    final inputBorder = _isDarkMode
+        ? const Color(0xFF2196F3)
+        : const Color(0xFF1565C0);
+    final inputTextColor = _isDarkMode
+        ? Colors.white70
+        : const Color(0xFF1565C0);
+    final cancelBg = _isDarkMode ? Colors.white12 : Colors.grey[200]!;
+    final cancelTextColor = _isDarkMode ? Colors.white70 : Colors.grey[700]!;
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -2490,59 +2624,32 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       builder: (ctx) => Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
         child: Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          decoration: BoxDecoration(
+            color: sheetBg,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            border: _isDarkMode
+                ? const Border(top: BorderSide(color: Colors.white12))
+                : null,
           ),
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 20),
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF1565C0), Color(0xFF42A5F5)],
-                  ),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF1565C0).withValues(alpha: 0.3),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: const Icon(
-                  Icons.pin_rounded,
-                  color: Colors.white,
-                  size: 32,
-                ),
-              ),
-              const SizedBox(height: 16),
               Text(
-                'Enter Ride OTP',
+                'Enter OTP',
                 style: GoogleFonts.inter(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  color: titleColor,
                 ),
               ),
               const SizedBox(height: 6),
               Text(
-                'Ask the rider for their 4-digit verification code',
-                style: GoogleFonts.inter(fontSize: 13, color: Colors.grey[600]),
+                'Ask the rider for the 4-digit OTP to start the trip.',
+                style: GoogleFonts.inter(fontSize: 12, color: subtitleColor),
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
               TextField(
                 controller: _otpController,
                 keyboardType: TextInputType.number,
@@ -2550,57 +2657,62 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 textAlign: TextAlign.center,
                 autofocus: true,
                 style: GoogleFonts.inter(
-                  fontSize: 36,
+                  fontSize: 28,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 16,
-                  color: const Color(0xFF1565C0),
+                  color: inputTextColor,
                 ),
                 decoration: InputDecoration(
-                  hintText: '• • • •',
+                  hintText: '0 0 0 0',
                   hintStyle: GoogleFonts.inter(
-                    fontSize: 36,
-                    color: Colors.grey[300],
+                    fontSize: 28,
+                    color: _isDarkMode ? Colors.white24 : Colors.grey[300],
                     letterSpacing: 16,
                   ),
                   counterText: '',
                   filled: true,
-                  fillColor: Colors.grey[50],
+                  fillColor: inputBg,
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide(color: Colors.grey[300]!),
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: inputBorder),
                   ),
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide(color: Colors.grey[300]!),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(
-                      color: Color(0xFF1565C0),
-                      width: 2,
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(
+                      color: inputBorder.withValues(alpha: 0.5),
                     ),
                   ),
-                  contentPadding: const EdgeInsets.symmetric(vertical: 20),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: inputBorder, width: 2),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 14),
                 ),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
               Row(
                 children: [
                   Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        side: BorderSide(color: Colors.grey[400]!),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(14),
+                        color: cancelBg,
                       ),
-                      child: Text(
-                        'Cancel',
-                        style: GoogleFonts.inter(
-                          color: Colors.grey[600],
-                          fontWeight: FontWeight.w500,
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: Text(
+                          'Cancel',
+                          style: GoogleFonts.inter(
+                            color: cancelTextColor,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
                         ),
                       ),
                     ),
@@ -2614,17 +2726,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                         gradient: const LinearGradient(
                           colors: [Color(0xFF2E7D32), Color(0xFF43A047)],
                         ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(
-                              0xFF2E7D32,
-                            ).withValues(alpha: 0.3),
-                            blurRadius: 8,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
                       ),
-                      child: ElevatedButton.icon(
+                      child: TextButton(
                         onPressed: () async {
                           final otp = _otpController.text.trim();
                           if (otp.length != 4) {
@@ -2641,25 +2744,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                           Navigator.pop(ctx);
                           await _handleStartRide(otp);
                         },
-                        icon: const Icon(
-                          Icons.play_arrow_rounded,
-                          color: Colors.white,
-                          size: 22,
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
                         ),
-                        label: Text(
+                        child: Text(
                           'Start Trip',
                           style: GoogleFonts.inter(
                             color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15,
-                          ),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.transparent,
-                          shadowColor: Colors.transparent,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
                           ),
                         ),
                       ),

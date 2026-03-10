@@ -42,12 +42,13 @@ class _SignUpScreenState extends State<SignUpScreen>
     _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
     );
-    _slideAnimation = Tween<Offset>(
-      begin: const Offset(0, 0.2),
-      end: Offset.zero,
-    ).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeOutCubic),
-    );
+    _slideAnimation =
+        Tween<Offset>(begin: const Offset(0, 0.2), end: Offset.zero).animate(
+          CurvedAnimation(
+            parent: _animationController,
+            curve: Curves.easeOutCubic,
+          ),
+        );
     _animationController.forward();
   }
 
@@ -66,7 +67,11 @@ class _SignUpScreenState extends State<SignUpScreen>
     if (!_formKey.currentState!.validate()) return;
 
     if (!isFirebaseInitialized) {
-      _showSnackbar('Demo Mode: Firebase not configured.', icon: Icons.info_outline, color: AppColors.primary);
+      _showSnackbar(
+        'Demo Mode: Firebase not configured.',
+        icon: Icons.info_outline,
+        color: AppColors.primary,
+      );
       return;
     }
 
@@ -82,7 +87,11 @@ class _SignUpScreenState extends State<SignUpScreen>
       );
 
       if (mounted) {
-        _showSnackbar('Account created!', icon: Icons.check_circle_outline, color: AppColors.success);
+        _showSnackbar(
+          'Account created!',
+          icon: Icons.check_circle_outline,
+          color: AppColors.success,
+        );
         Navigator.of(context).pop();
       }
     } on AuthException catch (e) {
@@ -97,33 +106,65 @@ class _SignUpScreenState extends State<SignUpScreen>
           if (user != null) {
             final profile = await AuthService.instance.getUserData(user.uid);
             if (profile != null && profile.role != _selectedRole) {
-              await AuthService.instance.updateUserRole(user.uid, _selectedRole);
-              if (mounted) _showSnackbar('Welcome! Role updated to ${_selectedRole.displayName}.', icon: Icons.info_outline, color: AppColors.primary);
+              await AuthService.instance.updateUserRole(
+                user.uid,
+                _selectedRole,
+              );
+              if (mounted)
+                _showSnackbar(
+                  'Welcome! Role updated to ${_selectedRole.displayName}.',
+                  icon: Icons.info_outline,
+                  color: AppColors.primary,
+                );
             } else {
-              if (mounted) _showSnackbar('Welcome back!', icon: Icons.info_outline, color: AppColors.primary);
+              if (mounted)
+                _showSnackbar(
+                  'Welcome back!',
+                  icon: Icons.info_outline,
+                  color: AppColors.primary,
+                );
             }
           }
           return;
         } catch (signInError) {
-          if (mounted) _showSnackbar('Account exists. Please sign in.', icon: Icons.error_outline, color: AppColors.error);
+          if (mounted)
+            _showSnackbar(
+              'Account exists. Please sign in.',
+              icon: Icons.error_outline,
+              color: AppColors.error,
+            );
           return;
         }
       }
 
-      if (mounted) _showSnackbar(e.message, icon: Icons.error_outline, color: AppColors.error);
+      if (mounted)
+        _showSnackbar(
+          e.message,
+          icon: Icons.error_outline,
+          color: AppColors.error,
+        );
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  void _showSnackbar(String message, {required IconData icon, required Color color}) {
+  void _showSnackbar(
+    String message, {
+    required IconData icon,
+    required Color color,
+  }) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
           children: [
             Icon(icon, color: Colors.white, size: 20),
             const SizedBox(width: 12),
-            Expanded(child: Text(message, style: GoogleFonts.inter(fontWeight: FontWeight.w500))),
+            Expanded(
+              child: Text(
+                message,
+                style: GoogleFonts.inter(fontWeight: FontWeight.w500),
+              ),
+            ),
           ],
         ),
         backgroundColor: color,
@@ -159,7 +200,8 @@ class _SignUpScreenState extends State<SignUpScreen>
 
   String? _validateConfirmPassword(String? value) {
     if (value == null || value.isEmpty) return AppStrings.passwordRequired;
-    if (value != _passwordController.text) return AppStrings.passwordsDoNotMatch;
+    if (value != _passwordController.text)
+      return AppStrings.passwordsDoNotMatch;
     return null;
   }
 
@@ -218,7 +260,11 @@ class _SignUpScreenState extends State<SignUpScreen>
                           borderRadius: BorderRadius.circular(12),
                           boxShadow: AppShadows.soft,
                         ),
-                        child: const Icon(Icons.arrow_back_ios_new, size: 18, color: AppColors.textPrimary),
+                        child: const Icon(
+                          Icons.arrow_back_ios_new,
+                          size: 18,
+                          color: AppColors.textPrimary,
+                        ),
                       ),
                       onPressed: () => Navigator.of(context).pop(),
                     ),
@@ -269,7 +315,11 @@ class _SignUpScreenState extends State<SignUpScreen>
             borderRadius: BorderRadius.circular(20),
             boxShadow: AppShadows.glow,
           ),
-          child: const Icon(Icons.person_add_rounded, size: 36, color: AppColors.white),
+          child: const Icon(
+            Icons.person_add_rounded,
+            size: 36,
+            color: AppColors.white,
+          ),
         ),
         const SizedBox(height: 16),
         Text(
@@ -284,7 +334,10 @@ class _SignUpScreenState extends State<SignUpScreen>
         const SizedBox(height: 6),
         Text(
           'Join the green ride revolution',
-          style: GoogleFonts.inter(fontSize: 14, color: AppColors.textSecondary),
+          style: GoogleFonts.inter(
+            fontSize: 14,
+            color: AppColors.textSecondary,
+          ),
         ),
       ],
     );
@@ -300,7 +353,9 @@ class _SignUpScreenState extends State<SignUpScreen>
           decoration: BoxDecoration(
             color: AppColors.white.withValues(alpha: 0.85),
             borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: AppColors.lightGrey.withValues(alpha: 0.4)),
+            border: Border.all(
+              color: AppColors.lightGrey.withValues(alpha: 0.4),
+            ),
             boxShadow: AppShadows.card,
           ),
           child: Column(
@@ -309,7 +364,11 @@ class _SignUpScreenState extends State<SignUpScreen>
               // Role selector
               Text(
                 'I want to',
-                style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary,
+                ),
               ),
               const SizedBox(height: 10),
               Row(
@@ -394,14 +453,18 @@ class _SignUpScreenState extends State<SignUpScreen>
                               width: 24,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2.5,
-                                valueColor: AlwaysStoppedAnimation<Color>(AppColors.white),
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  AppColors.white,
+                                ),
                               ),
                             )
                           : Text(
                               AppStrings.signUp,
                               style: GoogleFonts.inter(
-                                fontSize: 16, fontWeight: FontWeight.w700,
-                                color: AppColors.white, letterSpacing: 0.5,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.white,
+                                letterSpacing: 0.5,
                               ),
                             ),
                     ),
@@ -460,14 +523,23 @@ class _SignUpScreenState extends State<SignUpScreen>
       children: [
         Text(
           AppStrings.haveAccount,
-          style: GoogleFonts.inter(fontSize: 14, color: AppColors.textSecondary),
+          style: GoogleFonts.inter(
+            fontSize: 14,
+            color: AppColors.textSecondary,
+          ),
         ),
         TextButton(
           onPressed: _isLoading ? null : () => Navigator.of(context).pop(),
-          style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 4)),
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+          ),
           child: Text(
             AppStrings.signIn,
-            style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.primary),
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: AppColors.primary,
+            ),
           ),
         ),
       ],

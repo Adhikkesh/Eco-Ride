@@ -1,21 +1,35 @@
 {
+  "project_info": {
+    "project_number": "657562697192",
+    "firebase_url": "https://eco-ride-07-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "eco-ride-07",
+    "storage_bucket": "eco-ride-07.firebasestorage.app"
+  },
   "client": [
     {
-      "api_key": [
-        {
-          "current_key": "AIzaSyDHoP8QsCN--bvJlWE7RDc5qh8lVU_wZ5Q"
-        }
-      ],
       "client_info": {
+        "mobilesdk_app_id": "1:657562697192:android:80ea68083821034a00f85d",
         "android_client_info": {
           "package_name": "com.ecoride.eco_ride_mobile"
-        },
-        "mobilesdk_app_id": "1:657562697192:android:80ea68083821034a00f85d"
+        }
       },
       "oauth_client": [
         {
+          "client_id": "657562697192-rtv44h5n233smh07a7qlihlp15if18vu.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.ecoride.eco_ride_mobile",
+            "certificate_hash": "130d6f8ef822a0794666636a0a3fb94898a680c0"
+          }
+        },
+        {
           "client_id": "657562697192-ukr9jkm19g5acfq039hirceqctmgg9a5.apps.googleusercontent.com",
           "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDHoP8QsCN--bvJlWE7RDc5qh8lVU_wZ5Q"
         }
       ],
       "services": {
@@ -37,11 +51,5 @@
       }
     }
   ],
-  "configuration_version": "1",
-  "project_info": {
-    "firebase_url": "https://eco-ride-07-default-rtdb.asia-southeast1.firebasedatabase.app",
-    "project_id": "eco-ride-07",
-    "project_number": "657562697192",
-    "storage_bucket": "eco-ride-07.firebasestorage.app"
-  }
+  "configuration_version": "1"
 }

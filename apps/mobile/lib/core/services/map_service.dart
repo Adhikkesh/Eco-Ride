@@ -698,6 +698,41 @@ class MapService {
     }
   }
 
+  /// Reverse geocode a lat/lng to a human-readable address
+  static Future<String?> reverseGeocode(double lat, double lng) async {
+    try {
+      final url =
+          'https://maps.googleapis.com/maps/api/geocode/json?latlng=$lat,$lng&key=${ApiConfig.googleMapsApiKey}';
+      final response = await _client
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'OK' &&
+            data['results'] != null &&
+            (data['results'] as List).isNotEmpty) {
+          // Try to find a short, meaningful name (locality or sublocality)
+          for (final result in data['results']) {
+            final types = List<String>.from(result['types'] ?? []);
+            if (types.contains('sublocality_level_1') ||
+                types.contains('sublocality') ||
+                types.contains('locality') ||
+                types.contains('neighborhood') ||
+                types.contains('point_of_interest') ||
+                types.contains('plus_code')) {
+              return result['formatted_address']?.toString();
+            }
+          }
+          // Fallback: return the first result's formatted address
+          return data['results'][0]['formatted_address']?.toString();
+        }
+      }
+    } catch (e) {
+      debugPrint('MapService: Reverse geocode error: $e');
+    }
+    return null;
+  }
+
   static List<LatLng> decodePolyline(String encoded) {
     return _decodePolyline(encoded);
   }
