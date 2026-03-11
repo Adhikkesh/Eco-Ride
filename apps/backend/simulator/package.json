@@ -12,7 +12,9 @@
     "@types/axios": "^0.14.4",
     "@types/express": "^5.0.6",
     "@types/node": "^22.19.5",
+    "@types/supertest": "^6.0.3",
     "@vitest/coverage-v8": "^3.0.0",
+    "supertest": "^7.2.2",
     "tsx": "^4.20.3",
     "typescript": "^5.7.3",
     "vitest": "^3.0.0"
@@ -21,10 +23,13 @@
   "private": true,
   "scripts": {
     "build": "tsc -b .",
+    "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "dev" : "tsx watch src/index.ts",
     "test:coverage": "vitest run --coverage",
+    "test:e2e": "vitest run --reporter=verbose tests/e2e/",
+    "test:e2e:agent": "vitest run --reporter=verbose tests/e2e/driver-agent.e2e.test.ts",
+    "test:e2e:engine": "vitest run --reporter=verbose tests/e2e/simulation-engine.e2e.test.ts",
     "test:watch": "vitest"
   },
   "type": "module",

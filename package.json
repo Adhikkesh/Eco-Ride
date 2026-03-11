@@ -29,6 +29,7 @@
     "lint:biome": "biome lint .",
     "lint:fix:biome": "biome lint --write .",
     "prepare": "husky",
-    "test": "turbo run test"
+    "test": "turbo run test",
+    "test:e2e": "turbo run test:e2e"
   }
 }
